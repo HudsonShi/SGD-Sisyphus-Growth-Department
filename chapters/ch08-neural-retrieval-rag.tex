@@ -1,0 +1,1516 @@
+\chapter{神经检索、重排与 RAG}
+\label{ch:rag}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 当「匹配」从词频统计变成向量内积之后，检索系统的\textbf{监督信号从哪里来}？
+        为什么负样本的设计比模型结构更能决定效果？
+  \item BM25 在长尾 query 上依然顽强，那么稀疏检索与稠密检索到底该融合、级联还是二选一？
+        融合时用什么公式，权重怎么定？
+  \item 向量索引把「精确最近邻」换成了「近似最近邻」，HNSW 的 $M$、\code{efConstruction}、\code{efSearch}
+        各自在换什么？IVF-PQ 省下的内存是从哪个指标上扣的？
+        当检索请求带过滤条件（按租户、时间、类目隔离）时，先过滤还是后过滤？
+  \item 重排（rerank）能拿到最大的相关性提升，但它也是最贵的一环：
+        如何在固定的延迟预算内，决定「召回多少条、重排多少条、用什么模型」？
+  \item 一个 RAG 系统上线后答错，究竟是\textbf{检索错了}、\textbf{检索对了但模型没用}、
+        \textbf{检索对了但上下文太长被忽略}，还是\textbf{问题本身就没法从知识库回答}？
+        如何用可观测的指标把四种情况分开？
+  \item 从 Naive RAG 到 Advanced RAG 再到 Modular RAG 与 Agentic RAG，
+        每一代多出来的组件各自解决前面哪一类失败？代价是什么？
+\end{enumerate}
+\end{insight}
+
+上一章（\cref{ch:search}）我们拆开了搜索引擎的物理结构：倒排索引、posting list、BM25 与 LTR 三阶段。
+那一套体系的核心假设是「\textbf{词项重叠即相关}」：query 与文档只要共享足够的词，就认为它们相关。
+
+这个假设在两类场景下会失效。第一类是\textbf{词汇鸿沟}（vocabulary mismatch）：
+用户搜「笔记本散热不好怎么办」，而一篇高质量文档写的是「轻薄本高负载降频原因分析」，
+两者几乎不共享词项，BM25 给不出分。
+第二类是\textbf{语义泛化}：用户搜「怎么让猫别抓沙发」，知识库里写的是「猫抓挠行为的成因与替代抓板引导」，
+字面重叠极低，但语义高度一致。
+
+神经检索（neural retrieval）的思路是把「匹配」换成「表示学习」：
+用编码器把 query 和文档都映射到一个共享的稠密向量空间，
+让\textbf{语义相近的向量在几何上靠近}，检索退化为向量空间中的最近邻搜索。
+而 RAG（Retrieval-Augmented Generation，检索增强生成）走得更远：
+它把「检索」从最终产品降级为\textbf{生成模型的一个前置步骤}，
+检索结果不再是给人看的排序列表，而是给大模型看的上下文（context）。
+
+这一章按「编码器、索引、重排、生成、评估」的顺序展开，
+每一层都回答同一个问题：\textbf{在这一层，我们用什么代价换到了什么}。
+
+\section{稠密检索：从稀疏匹配到双编码器}
+
+\subsection{双塔架构与打分函数}
+
+\term{双编码器}{Dual Encoder}（工程上通常叫\term{双塔}{Two-tower}）是稠密检索的基本结构：
+一个 query 编码器 $E_q$，一个文档编码器 $E_d$，参数可以不共享，
+两者输出同维度的向量，用内积或余弦相似度作为打分：
+
+\begin{equation}
+s(q, d) = \inner{E_q(q)}{E_d(d)} = \frac{f_q(q)\T f_d(d)}{\norm{f_q(q)}_2 \cdot \norm{f_d(d)}_2} .
+\label{eq:dual-encoder-score}
+\end{equation}
+
+双塔之所以是工业主流，唯一的原因是\textbf{可预计算}：
+文档向量与 query 无关，可以离线全量算好、建索引、一次算完用几个月；
+线上只需对 query 做一次前向，然后做一次近似最近邻（ANN）查询。
+复杂度从「query 与每个文档做一次交叉编码」的 $O(N)$ 次深度模型前向，
+降到「1 次 query 编码加 1 次 ANN 查询」。
+
+代价是表达能力的损失。交叉编码器（cross-encoder）可以让 query 与文档在注意力层里
+\textbf{逐 token 交互}，因此能建模否定、条件、比较级这类细粒度语义；
+双塔在编码阶段看不到对方，只能把全部语义压进一个固定维度的向量里。
+
+\begin{formulacard}[双塔的表达能力上限]
+双塔的打分函数可以写成 $s(q,d) = \inner{E_q(q)}{E_d(d)}$，
+它是\textbf{双线性形式}，因此只能表达「在共享空间中两个独立向量是否同向」这一种关系。
+凡是需要「看到 $q$ 之后才知道 $d$ 的哪一部分重要」的相关性判断，
+双塔在理论上就无法无损表达。这正是后期交互（late interaction）与重排存在的根本理由。
+\end{formulacard}
+
+\subsection{DPR：用对比学习训练双塔}
+
+\term{DPR}{Dense Passage Retrieval} 是稠密检索的经典范式（Karpukhin 等，2020，\cite{karpukhin2020dpr}）：
+用两个独立的 BERT 编码器分别编码问题与段落，取 \code{[CLS]} 位置的向量作为表示，
+在开放域问答语料上训练后，检索效果显著超过同期 BM25。
+
+它的训练目标是\term{批内负采样}{in-batch negatives} 的对比损失。
+给定一个 batch 内的 $B$ 个「query 配正例文档」对，
+把同一 batch 中其他 query 的正例文档当作当前 query 的负例，
+于是损失就是一个 $B \times B$ 的打分矩阵上的交叉熵：
+
+\begin{equation}
+\mathcal{L} = -\frac{1}{B} \sum_{i=1}^{B}
+\log \frac{\exp\big( s(q_i, d_i^{+}) / \tau \big)}
+{\exp\big( s(q_i, d_i^{+}) / \tau \big) + \sum_{j \ne i} \exp\big( s(q_i, d_j^{+}) / \tau \big)} ,
+\label{eq:inbatch-softmax}
+\end{equation}
+
+其中 $\tau$ 是\term{温度系数}{temperature}。它相当于把这个 batch 的 softmax 变得「更平」或「更尖」：
+$\tau$ 小则对难负例更敏感、梯度更集中于最难的那几个负例，但训练也更不稳定；
+$\tau$ 大则梯度被大量简单负例稀释，收敛慢但更稳。
+工程经验值是 $\tau$ 取 $0.01$ 到 $0.1$ 的量级（不同实现的默认值差异很大，必须以自己代码的默认值为准），
+调参时应当把它当作与学习率同等重要的超参，而不是随手写死的常数。
+
+批内负采样有一个隐含的统计性质：\textbf{负例数量为 $B-1$}，$B$ 越大，负例越多，效果越好。
+但显存限制了 $B$。这直接催生了后来的两条路线：
+加大 batch（用梯度缓存等方法把有效 batch 做到几千甚至上万），
+以及\textbf{主动挑选更难的负例}。
+
+\begin{table}[htbp]
+\centering
+\caption{负采样策略对比（同模型同数据下的相对效果取向）}
+\label{tab:negatives}
+\small
+\begin{tabularx}{\textwidth}{L{2.5cm} L{2.6cm} Y}
+\toprule
+\tabhead{策略} & \tabhead{负例来源} & \tabhead{特点与代价} \\
+\midrule
+随机负例 & 语料库随机抽取 &
+实现最简单、最稳定，但绝大多数是「猫对量子力学」这种一眼可分的简单负例，
+梯度信号弱，模型学到的是粗粒度主题区分 \\
+\addlinespace
+批内负例 & 同一 batch 内其他 query 的正例 &
+零额外计算成本（打分矩阵已经在算），是 DPR 的默认做法；
+受 batch size 限制，且训练后期大部分样本已不再有梯度 \\
+\addlinespace
+硬负例 & BM25 或上一版模型召回的 Top-$k$ 非正例 &
+梯度信号最强，能显著提升区分细粒度差异的能力；
+但噪声大（BM25 高分不等于不相关），且需要额外的离线挖掘流程 \\
+\addlinespace
+ANCE 异步更新 & 用\textbf{当前}模型在全库检索出的高分非正例 &
+负例分布随模型演化而持续变难，是「课程学习」的检索版；
+需要训练过程中周期性重建全库索引，工程成本最高 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{硬负例与 ANCE 的异步索引}
+
+\term{硬负例}{hard negatives} 的直觉很朴素：与其让模型区分「相关对完全不相关」，
+不如让它区分「相关对看起来很像但不相关」。
+DPR 论文中的做法是：用 BM25 对训练集里每个 query 检索，
+取排名靠前但不属于标注正例的段落作为硬负例，
+最终每个 query 配 1 个正例、若干 BM25 硬负例以及若干批内负例。
+
+硬负例的问题是\textbf{分布静态}。BM25 挖出来的硬负例在训练一开始确实难，
+但训练几个 epoch 之后模型早就能轻松分开它们，梯度重新变弱。
+更深一层的问题是\term{假负例}{false negative}：
+BM25 排在高位但未被标注的文档，很可能其实是正确答案，只是标注集没覆盖。
+强行把它们当作负例，等于在教模型「正确答案是错的」，会破坏表示空间的几何结构。
+
+\term{ANCE}{Approximate Nearest Neighbor Negative Contrastive Estimation}（Xiong 等，2020，\cite{xiong2020ance}）
+的解法是\textbf{让负例分布跟着模型走}：
+每隔若干训练步，用当前模型对全库做一次 ANN 检索，取每个 query 的 Top-$k$ 非正例作为新的硬负例，
+然后继续训练。这样负例始终处于模型「恰好分不清」的难度边界上，梯度信号最强。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  st/.style={draw=#1, fill=BoxBG, rounded corners=2pt, minimum height=8mm,
+             inner sep=4pt, text width=2.6cm},
+  arr/.style={-{Stealth[length=4pt]}, thick, SlateGray}
+]
+\node[st=NavyMid] (fwd) at (0,2.4) {前向与损失\\每步更新双塔};
+\node[st=TealDeep] (ann) at (5.0,2.4) {全库 ANN 检索\\用当前模型刷新};
+\node[st=AmberDeep] (hard) at (10.0,2.4) {取 Top-$k$ 非正例\\构成新硬负例};
+\node[st=CrimsonDeep] (risk) at (5.0,0.3) {噪声控制\\假负例过滤};
+\draw[arr] (fwd) -- (ann);
+\draw[arr] (ann) -- (hard);
+\draw[arr, dashed] (hard.south) to[out=-160, in=20] (risk.east);
+\draw[arr, dashed] (risk.west) to[out=200, in=-20] (fwd.south);
+\end{tikzpicture}
+\caption{ANCE 的异步索引循环：负例难度随模型演化，假负例需要单独过滤}
+\label{fig:ance-loop}
+\end{figure}
+
+ANCE 的工程代价很大：训练不再是纯前向与反向，而是「训练一段、停下、重建全库索引、继续」。
+当语料是千万级以上时，每次重建索引的耗时可能超过一个 epoch 的训练时间。
+实践中的折中方案有三类：
+用 FAISS 这类高效的向量索引库（\cite{johnson2019faiss}）把重建成本压到可接受范围；
+只对训练集涉及的子语料重建，而不是全库；
+或者用「缓存的 Top-$k$ 加上周期性刷新」的混合策略。
+
+\begin{pitfall}[硬负例不是越多越好]
+一个常见误解是把硬负例数量当成免费的午餐，配置里写 20 个、50 个硬负例。
+实际上有三个约束：
+\begin{enumerate}
+  \item \textbf{假负例污染随 $k$ 放大}。Top-$k$ 里的真相关文档比例随 $k$ 增长而上升，
+        当 $k$ 大到一定程度，硬负例里混进的正确答案会占相当比例，训练目标与业务目标直接冲突。
+  \item \textbf{难度失衡导致训练发散}。当一批样本里全是极难负例（分数已经很高），
+        损失曲面陡峭，需要更小的学习率与更长的 warmup，否则表示空间会退化。
+  \item \textbf{训练与推理不一致}。训练时假设负例是模型分数最高的那些，
+        但线上 ANN 索引本身是近似的、带量化误差的，实际召回的分数排序与训练时不同。
+\end{enumerate}
+排查方法：定期抽样人工检查硬负例的假负例率；
+观察训练损失与验证集 Recall@1 是否同步改善；
+把硬负例数量当作超参做小规模网格搜索，而不是直接抄一个最大值。
+\end{pitfall}
+
+下面给出一个最小可跑的双塔训练骨架。它把「批内负例」与「硬负例」放在同一个打分矩阵里，
+两个关键工程点值得注意：一是正确例在矩阵中的位置并不总在对角线上，
+因为一个 query 可能有多个正例，损失必须按「该行所有非正例」来定义；
+二是相似度要除以温度系数，且全部向量需要先做归一化，
+这样内积与余弦相似度等价，可以避免训练与检索两侧口径不一致。
+
+\begin{lstlisting}[style=growth, language=Python, caption={双塔检索的批内负例与硬负例训练骨架}]
+# Minimal dual-encoder training: in-batch negatives + hard negatives.
+# Shapes: q [B, d], d [B + H, d] where the first B rows are positives.
+import torch
+import torch.nn.functional as F
+
+def dual_encoder_loss(q, d, n_hard, tau=0.05):
+    q = F.normalize(q, dim=-1)
+    d = F.normalize(d, dim=-1)
+    logits = q @ d.t() / tau                 # [B, B + H]
+    labels = torch.arange(q.size(0), device=q.device)
+    return F.cross_entropy(logits, labels)
+
+def multi_positive_loss(q, d, pos_mask, tau=0.05):
+    # pos_mask[i, j] = 1.0 if j is a positive of query i (hard rows are 0).
+    q = F.normalize(q, dim=-1)
+    d = F.normalize(d, dim=-1)
+    logits = q @ d.t() / tau
+    log_prob = F.log_softmax(logits, dim=-1)      # normalize over all candidates
+    masked = log_prob * pos_mask
+    # Keep one positive row per query: divide by the number of positives in that row.
+    per_query = masked.sum(dim=-1) / pos_mask.sum(dim=-1).clamp(min=1.0)
+    return -per_query.mean()
+
+def mine_hard_negatives(index, queries, positives, top_k=8):
+    # index is an ANN index over normalized document vectors.
+    # Skip candidates that are already positives to limit false negatives.
+    hard = []
+    for qi, cand in zip(queries, index.search(queries, top_k + 16)):
+        keep = [c for c in cand if c not in positives[qi]][:top_k]
+        hard.append(keep)
+    return hard
+\end{lstlisting}
+
+\begin{pitfall}[多正例时的标签陷阱]
+上面第二段代码里的 \code{pos\_mask} 是这类实现最容易出错的地方。
+如果每个 query 只有唯一正例，可以用对角线的 \code{arange} 标签；
+但真实数据集里一个 query 常常对应多个相关文档（多正例），
+此时用 \code{arange} 会把「同行的另一个正例」当成负例来惩罚，
+模型会学到「同一问题的两个正确答案应当互相远离」这种自相矛盾的目标。
+排查信号是：训练损失下降正常，但人工查看向量相似度时发现同主题文档并不聚集。
+\end{pitfall}
+
+\subsection{批内负采样的规模效应与知识蒸馏}
+
+批内负采样的效果好，但显存是硬约束：batch 从 64 涨到 4096，
+打分矩阵从 $64 \times 64$ 涨到 $4096 \times 4096$，
+而且每个样本都要过一遍编码器，激活显存随之线性增长。
+
+工业上有三种突破显存限制的常用手段：
+
+\begin{itemize}
+  \item \textbf{梯度缓存与大 batch 训练}。用低精度、梯度累积、激活重计算把单卡 batch 撑大，
+        再配合跨卡负例共享，把有效负例数从「单卡 batch」扩到「全局 batch」。
+  \item \textbf{跨 batch 负例队列}。把过去若干个 batch 的文档向量存进一个队列，
+        当前 batch 的 query 与队列里的所有文档做对比。
+        队列让有效负例数远超 batch size，代价是向量滞后（stale），需要动量更新来缓解不一致。
+  \item \textbf{知识蒸馏进双塔}。先用昂贵但强大的交叉编码器（或更大的双塔教师）在
+        「query 与文档」对上打出软标签，再让学生双塔去拟合这个分数分布。
+        这样做的好处是：交叉编码器能看到的细粒度交互信息，
+        被以软标签的形式传给了「只能算内积」的学生。
+        蒸馏后双塔的召回率通常有明显提升，但提升幅度受限于学生模型的容量与向量维度：
+        把 768 维压到 128 维时，蒸馏也救不回丢掉的信息。
+\end{itemize}
+
+\begin{insight}[稠密检索的三个「不公平」]
+\begin{enumerate}
+  \item \textbf{对长尾 query 不公平}。稠密模型的语义泛化能力来自训练分布，
+        遇到训练时没见过的专有名词、型号、错误拼写时，反而不如 BM25 的字面匹配稳。
+  \item \textbf{对精确匹配需求不公平}。「订单号 A12345 的物流状态」这类 query，
+        正确的检索方式是精确匹配，向量化的唯一作用是把精确信息模糊掉。
+  \item \textbf{对可解释性不公平}。BM25 能明确告诉你命中了哪几个词、各贡献多少分，
+        稠密内积很难归因。这在电商搜推的坏例排查中是真实的效率损失。
+\end{enumerate}
+这三条合起来解释了为什么生产系统极少用纯稠密检索，而普遍采用混合架构。
+\end{insight}
+
+\section{后期交互与多向量检索}
+
+\subsection{ColBERT 的 MaxSim 与延迟交互}
+
+双塔的瓶颈是「把文档压成一个向量」。\term{ColBERT}{Contextualized Late Interaction over BERT}
+（Khattab 与 Zaharia，2020，\cite{khattab2020colbert}）提出一个折中：
+\textbf{不压缩成单向量，而是保留每个 token 的向量}，把交互推迟到检索阶段，
+用一次廉价的「最大相似度求和」代替昂贵的完整交叉注意力。
+
+设 query 的 token 向量集合为 $q_1$ 到 $q_m$，文档的 token 向量集合为 $d_1$ 到 $d_n$，
+则\term{最大相似度求和}{MaxSim} 定义为：
+
+\begin{equation}
+s(q, d) = \sum_{i=1}^{m} \max_{j=1}^{n} \; \inner{q_i}{d_j}
+= \sum_{i=1}^{m} \max_{j=1}^{n} \; \frac{q_i\T d_j}{\norm{q_i}_2 \norm{d_j}_2} .
+\label{eq:maxsim}
+\end{equation}
+
+直觉是：对 query 里的每个 token，在文档里找\textbf{最像它的那个 token}，
+把「最像的程度」加起来。这比「整段向量求内积」细粒度得多：
+文档里只要有一处精确对应 query 的某个词，就能贡献一个高分，
+不会被文档其余部分的语义平均掉。
+
+MaxSim 的代价是\textbf{存储与检索成本}。一个 128 token 的文档片段，
+如果每个 token 存 128 维 float16，就是 $128 \times 128 \times 2 = 32$\,KB；
+一亿个片段就是 3.2\,TB 量级（示范量级，实际取决于截断长度与维度）。
+对比之下，单向量方案一个片段只占 256 字节。这是两个数量级的差距。
+
+\begin{table}[htbp]
+\centering
+\caption{检索范式的能力与成本对比（同一语料规模下的相对量级）}
+\label{tab:retrieval-paradigms}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{2.2cm} L{2.2cm} Y}
+\toprule
+\tabhead{范式} & \tabhead{交互时机} & \tabhead{单片段存储} & \tabhead{特点} \\
+\midrule
+稀疏（BM25） & 查询时（词项匹配） &
+索引体积中等，posting list 可压缩 &
+精确匹配强、可解释、零训练成本；词汇鸿沟无法跨越 \\
+\addlinespace
+稀疏学习（SPLADE） & 查询时（学习到的词权重） &
+比 BM25 膨胀数倍（词表维度上的稀疏向量） &
+保留倒排索引的可检索性，同时获得语义扩展能力 \\
+\addlinespace
+单向量稠密（DPR） & 无（各自独立编码） &
+256 字节量级（768 维 float16） &
+存储最省、ANN 最快；细粒度语义与精确匹配弱 \\
+\addlinespace
+多向量（ColBERT） & 检索时（token 级 MaxSim） &
+数十 KB 量级（token 数乘维度） &
+细粒度、无需重排即接近交叉编码器效果；存储与 IO 是主要瓶颈 \\
+\addlinespace
+交叉编码器 & 编码时（完整注意力） &
+不适用（无法预计算） &
+效果上限最高；只能用于少量候选的重排 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{PLAID：让多向量检索跑进延迟预算}
+
+ColBERT 原始实现的检索流程是「先用粗筛拿到候选，再对候选逐个算 MaxSim」，
+问题是逐个算 MaxSim 需要把每个候选的 token 矩阵都从磁盘读进来，
+IO 成为瓶颈，单 query 延迟难以压到几十毫秒级。
+
+\term{PLAID}{Passage-Level Accelerated Interaction with Dimensions} 是一组工程优化的集合，
+核心思路是把「token 级交互」也变成「可以在压缩索引上完成的操作」：
+
+\begin{enumerate}
+  \item \textbf{质心交互}。对文档的 token 向量做聚类，
+        用质心代替原始 token 参与初步打分。质心数量远少于 token 数，
+        打分成本随之下降，同时保留了「文档中是否存在某个语义方向」的信息。
+  \item \textbf{残差压缩}。只对「被质心代表得不好」的残差部分保留更精细的表示，
+        在精度损失可控的前提下减少每片段的字节数。
+  \item \textbf{剪枝与提前终止}。先在质心层面做一轮粗排，只对可能进入 Top-$k$ 的片段
+        加载完整 token 矩阵做精确 MaxSim，其余直接跳过。
+  \item \textbf{列式存储与批量加载}。把 token 向量按维度列存，配合 SIMD 指令做批量内积，
+        把「随机读大量小矩阵」变成「顺序读少量大块」。
+\end{enumerate}
+
+优化后多向量检索的延迟可以进入单 query 数十毫秒的量级（公开论文报告的加速倍数在不同实现、
+不同硬件上差异很大，不应直接照搬成生产承诺），代价是索引构建流程复杂、
+超参（质心数量、剪枝阈值）需要针对语料调优。
+
+\begin{toolbox}[多向量检索的落地检查清单]
+\begin{enumerate}
+  \item \textbf{先问是否真的需要}。如果你的语料是产品文档、法规条文这类「一段话讲一件事」的结构，
+        单向量加交叉编码器重排往往就能达到接近多向量的效果，而工程复杂度低一个数量级。
+  \item \textbf{存储预算先算清楚}。片段数乘平均 token 数乘维度乘每元素字节数，
+        再乘以副本数与索引膨胀系数（经验上索引本身还要占 1.2 到 1.5 倍）。
+  \item \textbf{截断长度是效果的第一杠杆}。文档片段保留前 $L$ 个 token，
+        $L$ 从 128 降到 64 存储减半，但长片段尾部的信息会丢失，需要用验证集确认损失。
+  \item \textbf{把重排去掉再测一次}。多向量的价值在于省掉重排，如果重排还在，
+        要确认多向量带来的增量是否值得它的存储与运维成本。
+  \item \textbf{监控 IO 而非只监控算力}。多向量检索的瓶颈通常在磁盘随机读，
+        优化方向是索引布局与缓存，而不是换更强的 GPU。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{SPLADE 与稀疏-稠密互补}
+
+\term{SPLADE}{Sparse Lexical and Expansion}（Formal 等，2021，\cite{formal2021splade}）
+代表另一条路线：\textbf{保持稀疏表示与倒排索引的可检索性，但让词权重由模型学习得到}。
+它的关键机制是「扩展」：一个 query 中的「手机」，经过模型后可能在稀疏向量里
+同时激活「手机」「智能机」「智能手机」等多个词表维度，
+从而获得部分语义泛化的能力，而检索仍然走倒排索引，延迟与 BM25 同量级。
+
+稀疏与稠密的能力互补性非常明确：
+
+\begin{table}[htbp]
+\centering
+\caption{稀疏检索与稠密检索的互补性}
+\label{tab:sparse-dense}
+\small
+\begin{tabularx}{\textwidth}{L{2.6cm} L{4.6cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{稀疏（BM25 与 SPLADE）} & \tabhead{稠密（DPR 与双塔）} \\
+\midrule
+匹配依据 & 词项重叠与学习到的词权重 & 全局语义向量方向 \\
+\addlinespace
+优势场景 & 专有名词、型号、订单号、罕见词、长尾 query & 同义改写、跨语言、口语化提问 \\
+\addlinespace
+失败模式 & 词汇鸿沟：字面不重叠则完全召不回 & 精确匹配失效：稀有实体被语义平均掉 \\
+\addlinespace
+索引延迟 & 倒排索引，毫秒级，可增量更新 & 向量索引，需要重建或增量插入 \\
+\addlinespace
+可解释性 & 可归因到具体词项及权重 & 难以归因 \\
+\addlinespace
+冷启动 & 无需训练数据 & 需要大规模 query 与文档对训练 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+正因为两者的失败模式几乎正交，\textbf{混合检索}（hybrid retrieval）几乎是所有生产 RAG 系统的默认配置：
+两路并行召回，再用一个融合函数把两个有序列表合成一个。
+
+\subsection{融合策略：RRF、加权与级联}
+
+最稳健的融合是\term{倒数排名融合}{Reciprocal Rank Fusion, RRF}。
+它完全忽略两路的原始分数，只用排名：
+
+\begin{equation}
+\text{RRF}(d) = \sum_{r \in R} \frac{1}{k + \text{rank}_r(d)} ,
+\label{eq:rrf}
+\end{equation}
+
+其中 $R$ 是参与融合的检索器集合，$\text{rank}_r(d)$ 是文档 $d$ 在检索器 $r$ 中的排名（从 1 开始），
+$k$ 是平滑常数，经典取值 $k = 60$。
+$k$ 的作用是\textbf{压平头部差距}：没有 $k$ 时第 1 名与第 2 名的权重是 $1$ 与 $0.5$，差一倍；
+有了 $k = 60$ 之后是 $1/61$ 与 $1/62$，几乎相同。
+这使得 RRF 对「某一路的头部偏置」不敏感，鲁棒性远好于直接加权求和。
+
+RRF 的最大优点是\textbf{不需要分数校准}。
+BM25 的分数是无上界的实数、稠密内积落在 $[-1, 1]$、SPLADE 分数又是另一个量纲，
+直接加权求和必须先做归一化（min-max、z-score 或分位数映射），
+而归一化参数会随 query 分布漂移。
+
+融合策略的完整选择谱系大致是：
+
+\begin{enumerate}
+  \item \textbf{RRF}：零参数、零训练、鲁棒，默认首选。
+  \item \textbf{加权融合}：$\alpha \cdot \hat{s}_{\text{sparse}}(q,d) + (1-\alpha) \cdot \hat{s}_{\text{dense}}(q,d)$，
+        其中 $\hat{s}$ 是归一化后的分数。$\alpha$ 需要离线调，且不同 query 类型的最优值不同。
+  \item \textbf{学习式融合}：把两路分数、排名以及 query 特征（长度、是否含实体、类目）
+        喂给一个浅层模型或 LTR 模型学习融合权重。效果最好，但需要标注数据与额外延迟。
+  \item \textbf{级联}：不做分数融合，而是让一路做主力、另一路做补充
+        （例如稠密召回 Top-200，再用 BM25 只在稠密结果里重排；或两路各取 50 后合并再重排）。
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  bx/.style={draw=#1, fill=BoxBG, rounded corners=2pt, minimum height=7.5mm,
+             inner sep=3pt, text width=2.5cm},
+  sm/.style={draw=SlateGray, fill=white, rounded corners=2pt, minimum height=7.5mm,
+             inner sep=3pt, text width=2.9cm},
+  arr/.style={-{Stealth[length=4pt]}, thick, SlateGray}
+]
+\node[bx=NavyMid] (q) at (0,1.5) {用户 query\\改写与路由};
+\node[bx=TealDeep] (sp) at (4.4,3.0) {稀疏路\\BM25 / SPLADE};
+\node[bx=NavyMid] (dn) at (4.4,0.0) {稠密路双塔\\ANN 向量索引};
+\node[sm] (fu) at (8.6,1.5) {融合 RRF 或加权\\去重与截断};
+\node[bx=AmberDeep] (rk) at (12.6,1.5) {交叉编码器\\重排 Top-$n$};
+\node[bx=VioletDeep] (gn) at (12.6,-1.4) {上下文组装\\LLM 生成与引用};
+\draw[arr] (q) -- (sp);
+\draw[arr] (q) -- (dn);
+\draw[arr] (sp) -- (fu);
+\draw[arr] (dn) -- (fu);
+\draw[arr] (fu) -- (rk);
+\draw[arr] (rk) -- (gn);
+\node[font=\sffamily\tiny, text=SlateGray] at (6.5,-1.3) {候选十万级降到百级};
+\node[font=\sffamily\tiny, text=SlateGray] at (10.6,-1.3) {百级降到十级};
+\end{tikzpicture}
+\caption{混合检索级联架构：两路并行召回、融合、重排、组装生成}
+\label{fig:hybrid-cascade}
+\end{figure}
+
+\begin{casebox}[案例：企业知识库换用纯稠密检索后的线上回退（公开经验类示范）]
+某团队把内部的文档问答系统从「BM25 加交叉编码器重排」整体换成「稠密双塔加重排」，
+离线排序指标上升，但上线后用户投诉集中在几类 query 上：
+产品版本号（例如某个 SDK 的 2.3.1 版本）、错误码、内部系统的英文缩写。
+根因是双塔训练语料以自然语言问答为主，这类「标识符型 query」在训练集中占比极低，
+向量表示没有学会「一字不差」的重要性。
+修复方式不是换更大的模型，而是\textbf{加回稀疏通道}：
+BM25 召回 Top-100 与稠密召回 Top-100 做 RRF 融合后再重排，
+标识符类 query 由 BM25 兜底，语义类 query 由稠密通道负责。
+这个案例的通用教训是：\textbf{离线平均指标的提升，可能掩盖某一类 query 上的灾难性退化}，
+评估必须按 query 类型分层。
+\end{casebox}
+
+两路召回与 RRF 融合的最小实现如下。注意两个细节：
+RRF 只需要排名，因此不需要分数校准；
+而加权融合必须先归一化，且 min-max 归一化对单条 query 的分数分布非常敏感
+（某一条分数特别高的文档会把其余文档全部压到接近 0），
+所以归一化前通常要多取一些候选，或改用分位数映射。
+
+\begin{lstlisting}[style=growth, language=Python, caption={稀疏与稠密双路召回，RRF 与加权两种融合方式}]
+# Hybrid retrieval skeleton: sparse (BM25) + dense (two-tower), then fuse.
+def rrf_fuse(rank_lists, k=60.0):
+    # rank_lists: list of ranked id lists, each ordered from best to worst.
+    scores = {}
+    for ranks in rank_lists:
+        for pos, doc_id in enumerate(ranks, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + pos)
+    return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+
+def minmax(scores):
+    lo, hi = min(scores), max(scores)
+    if hi - lo < 1e-9:
+        return [0.0 for _ in scores]
+    return [(s - lo) / (hi - lo) for s in scores]
+
+def weighted_fuse(sparse_pairs, dense_pairs, alpha=0.5):
+    # sparse_pairs / dense_pairs: [(doc_id, raw_score), ...]
+    s_norm = dict(zip([d for d, _ in sparse_pairs],
+                      minmax([s for _, s in sparse_pairs])))
+    d_norm = dict(zip([d for d, _ in dense_pairs],
+                      minmax([s for _, s in dense_pairs])))
+    fused = {}
+    for doc_id in set(s_norm) | set(d_norm):
+        fused[doc_id] = alpha * s_norm.get(doc_id, 0.0) \
+                        + (1.0 - alpha) * d_norm.get(doc_id, 0.0)
+    return sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
+
+# Retrieval: over-fetch on both sides, then fuse and hand off to the reranker.
+sparse_pairs = bm25_search(query, top_k=100)
+dense_pairs = ann_search(encode_query(query), top_k=100)
+fused = rrf_fuse([[d for d, _ in sparse_pairs], [d for d, _ in dense_pairs]])
+candidates = fused[:100]
+\end{lstlisting}
+
+\section{向量索引工程：近似最近邻的取舍}
+
+有了向量，还需要能「在亿级向量里用毫秒找到最相似的 $k$ 个」。
+穷举计算需要 $O(N d)$ 次浮点运算，$N = 10^8$、$d = 768$ 时单次查询就要做
+约 $7.7 \times 10^{10}$ 次乘加，完全不可行。
+\term{近似最近邻}{Approximate Nearest Neighbor, ANN} 是唯一的出路，
+它的契约是：\textbf{用一点点召回率损失，换数量级的延迟与内存收益}。
+
+\subsection{HNSW 的分层可导航小世界}
+
+\term{HNSW}{Hierarchical Navigable Small World}（Malkov 与 Yashunin，2020，\cite{malkov2020hnsw}）
+是目前工业上最常用的图索引。它的结构是「跳表思想加近邻图」：
+把所有向量按指数衰减的概率分配到不同层，顶层最稀疏，底层最稠密，每一层内部是一张近邻图。
+查询从顶层入口点开始贪心搜索，找到局部最近点后下降到下一层，逐层精细化。
+
+在「可导航小世界」图的假设下，HNSW 的期望复杂度为：
+
+\begin{equation}
+\mathcal{O}\big(\log N\big) \quad \text{查询跳数}, \qquad
+\mathcal{O}\big(N \cdot M\big) \quad \text{索引内存} ,
+\label{eq:hnsw-complexity}
+\end{equation}
+
+更精细的期望跳数估计与邻居数 $M$ 的关系为：
+
+\begin{equation}
+H \;\approx\; \frac{\log N}{\log M} \;\propto\; \frac{\ln N}{\ln M} ,
+\label{eq:hnsw-hops}
+\end{equation}
+
+这条公式解释了 $M$ 的作用：\textbf{$M$ 增大，每跳能探索的邻居更多，所需跳数按对数下降，
+但每跳的比较成本线性上升，内存也线性上升}。
+所以 $M$ 存在一个收益递减点，经验上 $M$ 取 16 到 64，
+小维度、高召回要求的场景取大值，高维、内存敏感的场景取小值。
+
+三个核心参数的语义必须分清：
+
+\begin{table}[htbp]
+\centering
+\caption{HNSW 参数：各自换什么}
+\label{tab:hnsw-params}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{1.7cm} L{4.3cm} Y}
+\toprule
+\tabhead{参数} & \tabhead{典型取值} & \tabhead{影响} & \tabhead{调整方向} \\
+\midrule
+$M$ & 16 到 64 &
+每层最大出边数。决定图连通性与内存（每元素内存约正比于 $M$），
+也决定跳数（见 \cref{eq:hnsw-hops}） &
+召回不足且内存充裕：调大；内存吃紧：调到 16 并接受轻微召回损失 \\
+\addlinespace
+\code{efConstruction} & 100 到 500 &
+建图时每层的候选池大小。越大则图质量越高（邻居更接近真实最近邻），
+建索引越慢，但\textbf{不影响查询时的延迟与内存} &
+离线建索引可以取大值（400 以上）；增量写入频繁时取小值 \\
+\addlinespace
+\code{efSearch} & 50 到 500 &
+查询时候选池大小。是\textbf{在线唯一可以动态调整的召回与延迟旋钮} &
+线上按 SLA 反推：先定 P99 延迟上限，再取满足该上限的最大值 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keypoint}[\code{efSearch} 是运维友好性的关键]
+$M$ 与 \code{efConstruction} 决定了索引的「上限质量」，一旦建好就固定了；
+\code{efSearch} 决定「这次查询愿意花多少算力去逼近这个上限」。
+这意味着\textbf{召回率与延迟的权衡可以在运行时按请求动态调整}：
+对延迟敏感的实时接口用 \code{efSearch=64}，
+对延迟不敏感的离线批处理用 \code{efSearch=512}。
+HNSW 之所以在工业界长期占主导，很大程度归功于这个特性。
+\end{keypoint}
+
+\subsection{IVF-PQ：用倒排桶加乘积量化换内存}
+
+\term{倒排文件}{Inverted File, IVF} 的思路是空间划分：
+先用 $k$-means 把所有向量聚成 $n_{\text{list}}$ 个簇（称为 Voronoi 单元），
+每个向量归属最近的簇；查询时只访问距离 query 最近的 $n_{\text{probe}}$ 个簇。
+这把搜索空间从 $N$ 降到约 $N \cdot n_{\text{probe}} / n_{\text{list}}$。
+
+\term{乘积量化}{Product Quantization, PQ} 解决内存问题：
+把一个 $d$ 维向量切成 $m$ 段，每段 $d/m$ 维，对每段分别做 $k$-means 聚类，
+每段只需存储「属于哪个质心」的编号。若每个子空间用 256 个质心，
+则每个编号恰好 1 字节，一个向量的存储从 $4d$ 字节降到 $m$ 字节：
+
+\begin{equation}
+\text{Mem}_{\text{PQ}} \;\approx\; n \cdot m \;\; \text{bytes}
+\;+\; \underbrace{m \cdot 256 \cdot \frac{d}{m} \cdot 4}_{\text{码本质}} \;\; \text{bytes},
+\label{eq:ivfpq-memory}
+\end{equation}
+\begin{equation}
+\text{Mem}_{\text{flat}} = n \cdot d \cdot 4 \;\; \text{bytes} \quad (\text{float32 原始向量}).
+\label{eq:flat-memory}
+\end{equation}
+
+代入一组示范量级：$n = 10^8$、$d = 768$、$m = 64$，
+则 PQ 码占 $6.4$\,GB，码本仅约 $0.2$\,MB；
+而 float32 原始向量需要 $10^8 \times 768 \times 4 \approx 307$\,GB，
+即使换成 float16 也要 $154$\,GB。压缩比在数十倍量级。
+
+代价是\textbf{量化误差直接损失召回率}：
+PQ 用「子空间质心的拼接」近似原向量，两个真实距离很近的向量可能被量化到不同质心而距离变大，
+反之亦然。$m$ 越大（每段越短）精度越高但存储越大；$n_{\text{probe}}$ 越大召回越高但延迟越大。
+这两个参数与 HNSW 的 \code{efSearch} 地位相同，是 IVF-PQ 的运行期旋钮。
+
+\begin{table}[htbp]
+\centering
+\caption{向量索引方案对比（同等硬件与数据规模下的定性取向）}
+\label{tab:index-compare}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{1.7cm} L{1.9cm} L{2.1cm} Y}
+\toprule
+\tabhead{方案} & \tabhead{召回率} & \tabhead{延迟} & \tabhead{内存} & \tabhead{适用场景与限制} \\
+\midrule
+Flat（暴力） & 精确 100\% & 最慢，随 $N$ 线性 & 最大（$4Nd$ 字节） &
+小规模（百万级以下）或作为召回率基准线；不适合亿级 \\
+\addlinespace
+HNSW & 高（可到 95\% 以上） & 最快，对数级 & 大（原始向量加图结构，约 1.2 到 1.5 倍膨胀） &
+在线低延迟首选；不支持高效的动态删除（删除通常靠标记加周期性重建） \\
+\addlinespace
+IVF-Flat & 高（依赖 $n_{\text{probe}}$） & 中等 & 大（同 Flat） &
+内存充裕但要控制搜索范围；$n_{\text{list}}$ 需随 $N$ 增长 \\
+\addlinespace
+IVF-PQ & 中（量化损失） & 快 & 最小（$nm$ 字节量级） &
+亿级以上、内存受限的首选；需要接受召回损失或加大 $n_{\text{probe}}$ 补回来 \\
+\addlinespace
+HNSW 加 PQ & 中高 & 快 & 中 &
+图索引与量化叠加，常见于二级索引；建索引调参复杂 \\
+\addlinespace
+磁盘索引 & 中高 & 较慢（受 IO 限制） & 最小（内存只放导航结构） &
+语料极大或访问稀疏时；必须把 P99 延迟目标建立在磁盘 IOPS 上而非算力上 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{过滤：pre-filter 与 post-filter}
+
+真实的 RAG 系统几乎从不做「全库任意检索」。
+查询总是带条件：这个用户的租户 ID、这个类目的商品、这个时间之后的文档、
+这个权限级别的员工可见的资料。这就把问题变成了\term{带过滤的向量检索}{filtered ANN}。
+
+两种策略的差别是根本性的：
+
+\begin{table}[htbp]
+\centering
+\caption{pre-filter 与 post-filter 的取舍}
+\label{tab:filter-strategies}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{4.2cm} L{4.2cm} Y}
+\toprule
+\tabhead{策略} & \tabhead{做法} & \tabhead{风险} & \tabhead{适用条件} \\
+\midrule
+pre-filter & 先按条件筛出候选子集，再在这个子集上做 ANN 检索 &
+若筛出的子集过小或分布极偏（例如只占全库 0.01\%），
+ANN 索引的图结构在该子集上不再连通，召回率会急剧下降 &
+过滤后子集仍占全库较大比例（经验上远大于 1\%），
+或索引支持分区与按分区的独立索引 \\
+\addlinespace
+post-filter & 先做 ANN 取 Top-$K$，再对结果做条件过滤 &
+若过滤条件的选择性很强，Top-$K$ 里可能一条都不满足，
+最终返回空结果；必须靠放大 $K$ 来补偿，成本随选择性恶化 &
+过滤条件弱（能保留绝大多数候选），或需要跨分区统一排序 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+工程上的实用解法有三类：
+\textbf{分区索引}（按租户或类目把向量拆到不同的索引，各分区独立检索）；
+\textbf{过滤感知的图遍历}（在图的遍历中直接跳过不满足条件的节点）；
+以及\textbf{接受放大 $K$}（post-filter 的暴力补偿，实现最简单但延迟不稳定）。
+选择依据是「过滤后子集大小的分布」，而不是「过滤条件的复杂度」，
+这一点经常被搞反。
+
+\subsection{召回率、延迟与内存的三角}
+
+向量索引的调参本质上是在三维空间里选一个点，而这三者不能同时最优：
+
+\begin{keypoint}[三角关系与旋钮映射]
+\begin{itemize}
+  \item \textbf{要更高的召回率}：提高 \code{efSearch}（延迟上升）、
+        提高 $n_{\text{probe}}$（延迟上升）、提高 $M$（内存上升、建索引变慢）、
+        或放弃 PQ 改用 Flat（内存大幅上升）。
+  \item \textbf{要更低的延迟}：降低 \code{efSearch} 与 $n_{\text{probe}}$、
+        用更强的量化、把索引放进内存而不是磁盘、减少每 query 访问的分片数。
+  \item \textbf{要更小的内存}：引入 PQ、降低 $M$、降维（768 降到 256）、
+        或用磁盘索引。每一条都会扣召回率。
+\end{itemize}
+所以正确的做法不是「把参数调到最好」，而是
+\textbf{先固定 SLA（例如 P99 延迟 80\,ms）与内存预算，再在约束内最大化召回率}，
+并且用「在实际返回 $k$ 下的召回率」作为唯一的验收指标，而不是孤立的延迟数字。
+\end{keypoint}
+
+\begin{pitfall}[向量索引的四个常见误判]
+\begin{enumerate}
+  \item \textbf{用 recall@10 验收 HNSW，却上线了 recall@100 的场景}。
+        召回率随 $k$ 变化显著，验收指标必须与被消费的 $k$ 一致。
+  \item \textbf{只测平均延迟}。ANN 检索的延迟分布是长尾的：
+        query 落在稀疏区域时跳数和比较次数都会增加。
+        P99 延迟可能是 P50 的三到五倍，容量规划必须用 P99。
+  \item \textbf{把「索引构建快」当成「适合动态更新」}。
+        HNSW 的插入是增量可行的，但删除通常只能标记；
+        高频更新的语料（例如每天新增大量文档的知识库）需要
+        「主索引加增量小索引加周期性合并」的方案，而不是单索引长期增量写。
+  \item \textbf{忽略归一化的一致性}。索引里的向量是归一化过的，
+        查询时忘了归一化，或者训练时用了余弦、检索时用了内积，
+        会让召回率整体劣化且很难从日志里看出来。这类 bug 必须用单元测试锁死。
+\end{enumerate}
+\end{pitfall}
+
+下面这段脚本演示「先定 P99 延迟约束、再最大化召回率」的验收流程。
+这里有一个必须写进规范的口径：\code{efSearch} 不能小于返回条数 $k$，
+否则候选池比要返回的结果还小，召回率会被结构性压低，
+而这个问题在只看延迟的监控里完全看不出来。
+
+\begin{lstlisting}[style=growth, language=Python, caption={HNSW 参数验收：在延迟约束下最大化召回率}]
+# Tune efSearch under a P99 latency SLA. Never let efSearch fall below top_k.
+import time
+
+def recall_at_k(approx_ids, exact_ids, k):
+    hit = len(set(approx_ids[:k]) & set(exact_ids[:k]))
+    return hit / float(k)
+
+def p99(values):
+    values = sorted(values)
+    return values[min(len(values) - 1, int(0.99 * len(values)))]
+
+def tune_ef_search(index, queries, ground_truth, top_k=50,
+                   candidates=(64, 128, 256, 512), p99_budget_ms=25.0):
+    report = []
+    for ef in candidates:
+        ef = max(ef, top_k)          # efSearch must be >= top_k
+        recalls, latencies = [], []
+        for query, truth in zip(queries, ground_truth):
+            start = time.perf_counter()
+            approx = index.search(query, top_k, ef_search=ef)
+            latencies.append((time.perf_counter() - start) * 1e3)
+            recalls.append(recall_at_k(approx, truth, top_k))
+        report.append({
+            "ef_search": ef,
+            "recall": sum(recalls) / len(recalls),
+            "p99_ms": p99(latencies),
+        })
+    feasible = [r for r in report if r["p99_ms"] <= p99_budget_ms]
+    best = max(feasible, key=lambda r: r["recall"]) if feasible else None
+    return best, report
+\end{lstlisting}
+
+\begin{remark}[这段脚本故意没有做的事]
+它没有测并发。单线程测出的 P99 与在线多并发下的 P99 是两个不同的量：
+并发时查询会竞争内存带宽与 CPU 缓存，图遍历这类访存密集的操作退化尤其明显。
+生产验收必须在与线上一致并发度下压测，
+并且把「索引构建完成后的冷启动第一次查询」（缓存全空）单独记录一次。
+\end{remark}
+
+\section{重排：把相关性做到最后一公里}
+
+\subsection{交叉编码器与 MonoT5}
+
+\term{交叉编码器}{cross-encoder} 把 query 和文档拼成一个序列
+（例如 \code{[CLS] query [SEP] doc [SEP]}）送进 Transformer，
+让两者在每一层注意力里充分交互，最后输出一个相关性分数。
+它没有双塔的表达能力上限，因此在相同数据上通常能带来可观的相关性提升：
+Nogueira 与 Cho 的工作表明，用 BERT 做段落重排，
+相比纯 BM25 在公开问答数据集上有大幅提升（\cite{nogueira2019monobert}）。
+
+\term{MonoT5}{MonoT5} 把重排建模成\textbf{文本生成}：
+输入「Query 加 Document 加 Relevant」的模板，
+让 T5 类模型生成「true」或「false」这一个 token，
+用两个 token 的 log 概率之比作为相关性分数（\cite{raffel2020t5}）。
+它的好处是可以直接复用已有的生成式预训练模型，且判定语义明确；
+坏处是生成式解码比分类头慢，且需要处理候选标签的概率校准。
+
+计算成本是交叉编码器的死穴。一个候选要一次完整前向，
+$n$ 个候选就是 $n$ 次前向，且\textbf{无法预计算、无法批内复用}。
+所以交叉编码器的角色只有一个：\textbf{对少量候选做最终精排}。
+
+\begin{equation}
+\underbrace{10^6 \sim 10^7}_{\text{全库}}
+\;\xrightarrow[\text{双路 ANN}]{\text{召回}}\;
+\underbrace{10^2 \sim 10^3}_{\text{融合后候选}}
+\;\xrightarrow[\text{交叉编码器}]{\text{重排}}\;
+\underbrace{10 \sim 50}_{\text{上下文片段}}
+\;\xrightarrow{\text{LLM 生成}}\;
+\underbrace{1}_{\text{答案}} .
+\label{eq:cascade-funnel}
+\end{equation}
+
+其中三层候选规模分别是 $10^6 \sim 10^7$（全库）、$10^2 \sim 10^3$（融合后候选）、
+$10 \sim 50$（最终上下文片段）。
+这条漏斗的每一级都在\textbf{用「更贵的模型加更少的候选」换取更高的精度}，
+与推荐系统的四级漏斗（见 \cref{ch:recall}）是同一种设计哲学。
+
+\subsection{列表式重排与 LLM 重排}
+
+\term{列表式重排}{listwise reranking} 的思路是：让模型一次看到多个候选，
+利用候选之间的\textbf{比较信息}做排序，而不是给每个候选独立打分。
+经典方法是使用排序损失（例如 LambdaMART 的 lambda 梯度，\cite{wu2010lambdamart}），
+而大模型时代的实现方式更直接：把 $k$ 个候选片段（通常是标题加摘要，带编号）
+放进 prompt，让 LLM 直接输出「按相关性从高到低的编号排列」。
+
+列表式 LLM 重排的优势：
+\begin{itemize}
+  \item 能利用候选间的相对关系，减少「分数不可比」的问题；
+  \item 能理解复杂约束（时效性、权威性、是否直接回答而非仅提及）；
+  \item 零样本可用，不需要标注数据训练交叉编码器。
+\end{itemize}
+
+劣势同样明确：
+\begin{itemize}
+  \item \textbf{注意力瓶颈}。一次能放进 prompt 的候选数受上下文长度限制，
+        超过窗口后必须滑动窗口分段重排再合并，而分段之间的分数不可比，
+        合并规则会引入新的偏差。
+  \item \textbf{位置偏差}。候选在 prompt 中的位置会影响模型判断，
+        同一组候选换一个顺序可能得到不同的排序结果，需要做双向或多次随机打乱取平均。
+  \item \textbf{延迟与成本}。一次重排 prompt 可能包含数千 token，
+        在请求量大的场景下成本不可忽略，通常只用于最贵的 Top-20 到 Top-50。
+  \item \textbf{协议脆弱}。让模型输出编号列表，模型可能输出不存在的编号、
+        漏掉部分编号或改变格式，必须有校验与回退逻辑（回退到交叉编码器分数）。
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{重排模型方案对比}
+\label{tab:rerank-compare}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{2.0cm} L{2.4cm} L{1.9cm} Y}
+\toprule
+\tabhead{方案} & \tabhead{每候选成本} & \tabhead{延迟量级} & \tabhead{需要训练} & \tabhead{适用位置} \\
+\midrule
+双塔（无重排） & 1 次内积 & 微秒 & 是 & 召回级；不能承担精排 \\
+\addlinespace
+交叉编码器 & 1 次前向 & 每候选 1 到 10\,ms（视模型与硬件） & 是（或用开源权重） &
+主力重排，Top-50 到 Top-200 \\
+\addlinespace
+MonoT5 等生成式 & 1 次生成 & 高于同规模分类模型 & 是 & 需要明确的「相关与不相关」判定语义时 \\
+\addlinespace
+列表式 LLM & 一次处理 $k$ 个 & 秒级 & 否（零样本） & 最贵的一小段候选，或离线评估与标注辅助 \\
+\addlinespace
+学习式融合 & 极低 & 微秒 & 是 & 融合多路分数，作为重排前的预排序 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{级联重排与延迟预算}
+
+重排不是「加一个模型」这么简单，它必须塞进一个已经排满的延迟预算。
+一份可用的\term{检索延迟预算}{latency budget} 分解大致如下（数值为示范量级，
+实际取决于模型大小、硬件、索引结构与并发压力）：
+
+\begin{align}
+T_{\text{total}} &= T_{\text{rewrite}} + T_{\text{embed}} + T_{\text{ann}} + T_{\text{fuse}}
++ T_{\text{rerank}} + T_{\text{assemble}} + T_{\text{gen}} , \label{eq:latency-budget} \\[2pt]
+T_{\text{rewrite}} &\approx 0 \sim 300\ \text{ms} \quad (\text{LLM 改写则秒级，需与小模型或缓存配合}), \nonumber \\
+T_{\text{embed}} &\approx 3 \sim 15\ \text{ms} \quad (\text{单条 query 的编码前向}), \nonumber \\
+T_{\text{ann}} &\approx 5 \sim 50\ \text{ms} \quad (\text{取决于索引类型、} \code{efSearch} \text{、分片数}), \nonumber \\
+T_{\text{fuse}} &\approx 1 \sim 5\ \text{ms} \quad (\text{RRF 或加权，几乎可忽略}), \nonumber \\
+T_{\text{rerank}} &\approx n \cdot t_{\text{per-cand}} \quad (\text{线性于候选数，是最容易失控的一项}), \nonumber \\
+T_{\text{assemble}} &\approx 1 \sim 10\ \text{ms} \quad (\text{截断、去重、格式化、加引用标记}), \nonumber \\
+T_{\text{gen}} &\approx 0.5 \sim 5\ \text{s} \quad (\text{随输出 token 数线性增长，通常是总延迟的主项}). \nonumber
+\end{align}
+
+这张分解表最重要的用途是\textbf{定位预算冲突}：
+当总预算固定在 3 秒，而生成已经占了 2 秒时，
+重排只能拿到几十毫秒，这意味着最多重排 30 到 50 个候选（用小型交叉编码器），
+或者改用「先重排 Top-20、其余按融合分数保留」的\term{级联重排}{cascaded reranking}。
+
+级联重排的典型三层结构：
+第一层用极廉价的模型（双塔分数，或小到可以在 CPU 上批跑的交叉编码器）把千级压到百级；
+第二层用标准交叉编码器把百级压到十级；
+第三层只在需要极高精度的场景（例如法律、医疗问答）用列表式 LLM 重排对十级做最终排序。
+
+\begin{insight}[重排的边际收益递减，且被召回率封顶]
+重排只能在「已经召回的候选」里重新排序。
+如果正确答案根本没被召回，再强的重排模型也无能为力。
+因此\textbf{重排的收益上限就是召回阶段的 Recall@K}。
+这带来一个反直觉的工程结论：
+当 Recall@100 只有 70\% 时，把预算投在改进召回（更好的负采样、混合检索、query 改写）
+的回报，通常远高于换一个更大的重排模型。
+先看召回，再看重排；顺序搞反了会浪费大量算力。
+\end{insight}
+
+\section{RAG 全景：从检索到生成}
+
+\subsection{Naive、Advanced 与 Modular RAG}
+
+\term{RAG}{Retrieval-Augmented Generation} 由 Lewis 等人在 2020 年提出（\cite{lewis2021rag}），
+原始形态是把一个稠密检索器与一个生成模型端到端联合训练，
+检索到的文档作为生成的条件。工程界广泛采用的版本更简单也更实用：
+「检索、拼进 prompt、生成」，检索器与生成器分别独立。
+
+按演进阶段划分，通常分为三代（\cite{gao2023ragsurvey}）：
+
+\begin{table}[htbp]
+\centering
+\caption{三代 RAG 架构的组件与解决的问题}
+\label{tab:rag-generations}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{4.2cm} L{4.0cm} Y}
+\toprule
+\tabhead{阶段} & \tabhead{新增组件} & \tabhead{解决的核心问题} & \tabhead{新增代价} \\
+\midrule
+Naive RAG & 固定切块加向量检索加拼 prompt &
+让模型能引用私有知识，缓解「训练数据过时」与「编造事实」 &
+实现极简；但检索质量、上下文质量、生成质量全都不可控 \\
+\addlinespace
+Advanced RAG & query 改写、混合检索、重排、上下文压缩、
+元数据过滤、父子块 &
+在检索前与检索后两端精细化：提升召回率与信噪比，
+缓解「召回了错的」与「召回了但太长」 &
+新增多个模型与组件，延迟与成本上升，链路可观测性变复杂 \\
+\addlinespace
+Modular RAG & 可插拔检索模块、路由、记忆、
+工具调用、多跳迭代、图结构检索 &
+把 RAG 从固定流水线变成\textbf{可编排的模块系统}，
+支持多源、多跳、有状态的复杂任务 &
+架构复杂、评测困难、失败归因链条长；容易出现「组件很多但端到端没变好」 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  band/.style={draw=#1, fill=BoxBG, rounded corners=3pt, minimum width=15.0cm,
+               minimum height=9mm, inner sep=5pt, text width=14.6cm},
+  bit/.style={draw=#1, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm,
+              inner sep=3pt, text width=4.2cm},
+  arr/.style={-{Stealth[length=4pt]}, thick, SlateGray}
+]
+\node[band=NavyMid] (off) at (0,0) {\textbf{离线索引}：文档采集 $\to$ 解析与清洗 $\to$ 分块与元数据抽取 $\to$ 双塔编码 $\to$ 建向量索引与倒排索引};
+\node[band=TealDeep] (pre) at (0,-1.2) {\textbf{检索前}：query 改写与 HyDE $\to$ 多查询扩展 $\to$ 意图路由 $\to$ 过滤条件构造};
+\node[band=AmberDeep] (ret) at (0,-2.4) {\textbf{检索中}：稀疏与稠密双路召回 $\to$ RRF 融合 $\to$ 交叉编码器重排 $\to$ 上下文压缩};
+\node[band=VioletDeep] (gen) at (0,-3.6) {\textbf{生成}：上下文组装与排序 $\to$ 引用标记 $\to$ LLM 生成 $\to$ 忠实性校验与降级回退};
+\node[bit=CrimsonDeep, anchor=west] (fb) at (-9.9,-5.2) {反馈闭环：点击、采纳率、人工标注 $\to$ 回归测试集与调参};
+\draw[arr] (off) -- (pre);
+\draw[arr] (pre) -- (ret);
+\draw[arr] (ret) -- (gen);
+\draw[arr] (gen.south) -- (fb.north);
+\draw[arr, dashed] (fb.west) to[out=180, in=180, looseness=0.7] (off.west);
+\end{tikzpicture}
+\caption{RAG 系统数据流：离线索引链路与在线检索生成链路，以及反馈闭环}
+\label{fig:rag-dataflow}
+\end{figure}
+
+\subsection{切块策略与父子块}
+
+\term{切块}{chunking} 是 RAG 里最容易被低估、却对效果影响极大的环节。
+根本矛盾是：\textbf{块太小则语义不完整，块太大则检索精度下降、上下文噪声增加}。
+
+\begin{table}[htbp]
+\centering
+\caption{chunking 策略对比}
+\label{tab:chunking}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{4.0cm} L{3.6cm} Y}
+\toprule
+\tabhead{策略} & \tabhead{做法} & \tabhead{优点} & \tabhead{缺点与适用} \\
+\midrule
+固定窗口 & 按固定字符或 token 数切分，块间保留 overlap &
+实现最简单、块大小可控、便于批处理 & 会从句子中间切断，
+overlap 造成冗余存储与重复召回；适合快速原型 \\
+\addlinespace
+按结构切 & 按标题层级、段落、列表项、表格边界切分 &
+保留原始语义单元完整性，元数据自然（章节路径可作过滤条件） &
+依赖文档结构质量；PDF 解析失败时退化为固定窗口 \\
+\addlinespace
+语义切分 & 计算相邻句子的嵌入相似度，在相似度低谷处断开 &
+块内主题一致性高，检索精度通常最好 & 需要额外编码开销；
+阈值难定，块大小方差大，索引不规整 \\
+\addlinespace
+递归切分 & 依次尝试段落、句子、字符的分隔符，直到满足大小限制 &
+兼顾结构与大小约束，是工程上最常用的折中 & 需要为不同文档类型配置分隔符优先级 \\
+\addlinespace
+父子块 & 用小块（子块）建索引做检索，命中后\textbf{回填其父块}送入 LLM &
+同时获得小块的检索精度与大块的上下文完整性，通常提升最明显 &
+需要维护块层级映射；父块过大时仍会引入噪声，需要按父块大小上限裁剪 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keypoint}[chunk 大小没有普适最优值]
+常见宣传里的「512 token 最佳」并不成立。合理区间取决于三件事：
+\textbf{(1) 问题粒度}：问「某个字段的取值范围」需要小块，问「某流程的整体步骤」需要大块；
+\textbf{(2) 文档结构}：条款型文档天然是短块，技术手册的章节天然是长块；
+\textbf{(3) 嵌入模型的有效长度}：很多嵌入模型在超过训练长度后效果急剧下降，
+把 2000 token 塞进一个有效长度 512 的模型，末尾信息基本被丢弃。
+正确做法是在自己的验证集上对 256、512、1024 三档做对比实验，
+并同时观察召回率与最终答案质量，而不是抄一个数字。
+\end{keypoint}
+
+\subsection{检索前：改写、HyDE、多查询与路由}
+
+用户原始 query 往往不适合直接检索：它可能太短（「报错了」）、
+太口语（「那个东西怎么弄」）、包含指代（「它的参数是多少」），
+或者包含多个子问题（「A 和 B 有什么区别，哪个更便宜」）。
+\textbf{检索前处理}就是把这些 query 改造成「更容易被检索到」的形式。
+
+\begin{itemize}
+  \item \textbf{query 改写}：用 LLM 把 query 改写成完整、自包含、含关键词的检索式。
+        处理指代消解（把「它」替换成上一轮对话中的实体）、
+        补全省略（「多少钱」补成「某产品在某地区的价格」）、
+        以及术语规范化（口语词替换为知识库中的术语）。
+  \item \textbf{多查询扩展}：一次生成 3 到 5 个不同角度的改写，
+        分别检索后合并去重再用 RRF 融合。
+        这能显著提升召回率，代价是检索次数成倍增加；
+        实践中通常用较小的模型做改写，并与原 query 一起构成并行检索组。
+  \item \textbf{HyDE}（Hypothetical Document Embeddings）：
+        先让 LLM 针对 query \textbf{凭空写一段假想的答案文档}，
+        再对这段假文档做嵌入并用它检索。
+        原理是「答案与答案的向量更接近，问题与答案的向量未必接近」，
+        用假答案当作检索代理，绕过了问句与陈述句之间的表达差异。
+        代价是引入一次生成延迟，且当 LLM 对领域完全不了解时，
+        假文档可能把检索带偏（这在专有名词密集的领域很常见）。
+  \item \textbf{意图路由}：先判断 query 该走哪条链路。
+        闲聊与常识问题直接交给 LLM（不需要检索）；
+        涉及私有数据的问题走知识库检索；
+        涉及结构化统计的问题走 SQL 查询工具；
+        涉及最新信息的问题走 Web 搜索。
+        路由错误是 RAG 系统的隐性灾难：把「今天天气」路由到知识库，
+        会稳定地召回一堆无关文档，并让模型基于噪声作答。
+\end{itemize}
+
+\begin{casebox}[案例：企业知识库 RAG 的失败复盘（示范案例）]
+某公司为内部 3 万篇文档（产品手册、标准作业流程、会议纪要、工单）搭建了一个 RAG 问答系统。
+第一版上线两周，用户采纳率不足 40\%。复盘按链路逐段排查，得到四个结论。
+
+\textbf{(1) 分块与文档类型不匹配。} 全部文档统一按 512 字符切块，
+导致产品手册的表格被切碎（表格行散落在多个块里），
+会议纪要的一段结论被切成两半。修复：按文档类型分别配置切块器，
+表格整体保留为一块并在元数据中标记类型。
+
+\textbf{(2) 缺少元数据过滤。} 知识库混着大量已废止的旧版流程文档与草稿状态的纪要。
+用户问「现在的流程是什么」时，检索会把旧版和草稿一并召回，
+模型看到互相矛盾的内容后会「折中回答」，看起来通顺但完全错误。
+修复：为每篇文档补充 \code{status}（生效、废止、草稿）、\code{version}、\code{effective\_date} 字段，
+检索时强制过滤，并在 prompt 中明确「若发现版本冲突，指出冲突并优先采用生效版本」。
+
+\textbf{(3) top-$k$ 设得过大且没有重排。} 初版直接取向量 Top-20 全部塞进上下文，
+其中大量是弱相关片段。加入交叉编码器重排，只保留 Top-6 后，
+回答准确率与可读性同时改善，上下文 token 数下降约一半，生成延迟也随之下降。
+
+\textbf{(4) 引用无法追溯，用户不信任。} 初版答案没有出处，
+用户无法验证，遇到错误答案时也无法反馈。
+加入「每句话末尾标注来源块的编号与文档标题」后，
+用户采纳率显著回升。值得注意的是，准确率提升有限，
+但\textbf{可验证性带来的信任}本身就对采纳率有直接贡献。
+
+这个案例的通用教训：\textbf{RAG 的效果瓶颈通常在数据治理与流程设计，而不在生成模型}。
+团队在复盘后把工作重心从「换更大的模型」转向「文档状态治理加分块策略加重排」，
+这是投入产出比高得多的方向。
+\end{casebox}
+
+\subsection{GraphRAG：把知识组织成图}
+
+当问题需要\textbf{跨文档聚合}时，向量检索会系统性失败。
+典型提问是「这批文档整体上提到的三大风险是什么」，
+它的答案不在任何一个块里，而是分布在几十个块中，需要先聚合再归纳。
+Top-$k$ 检索只能返回最相似的 $k$ 个块，天然无法覆盖全局。
+
+\term{GraphRAG}{Graph-based RAG} 的做法是在索引阶段构建知识图：
+用 LLM 从每个块中抽取实体与关系，形成「实体、关系、实体」三元组，
+再对紧密相连的实体群做社区检测，为每个社区生成一段摘要。
+查询时既可以用局部检索（沿实体邻域扩展），
+也可以用全局检索（读取社区摘要做归纳）。
+
+它的价值与代价都很明确：
+价值在于能回答「整体主题、风险、趋势」这一类全局问题，
+并且支持多跳推理（A 与 B 是同一实体，B 与 C 有冲突，从而推出 A 与 C 的冲突）；
+代价是索引构建成本高（需要对全语料做 LLM 抽取）、
+图谱质量依赖抽取准确率、增量更新困难。
+
+实用建议：\textbf{不要一开始就上 GraphRAG}。
+先用普通的向量检索加元数据过滤解决大部分问题，
+当明确观测到「全局聚合类问题」占比可观且持续失败时，再引入图结构，
+并且优先对高价值的那部分语料（而不是全量）建图。
+
+\subsection{检索后：压缩、上下文组装与引用}
+
+拿到重排后的候选，还有两件事必须在送进 LLM 之前完成。
+
+\textbf{上下文压缩}（contextual compression）解决「块里有相关信息但也有大量无关内容」的问题。
+做法包括：抽取式压缩（用一个小模型或规则从块中只挑出与 query 相关的句子）、
+摘要式压缩（用 LLM 把块压缩成要点，成本高但压缩比大）、
+以及\textbf{按句重排}（把块内的句子按与 query 的相似度排序，只保留最相关的若干句）。
+压缩的收益不只是省 token：上下文越干净，模型被噪声干扰的概率越低。
+
+\textbf{上下文组装}（context assembly）则决定「把候选以什么顺序、什么形式放进 prompt」。
+这里有一个被反复验证的现象：\textbf{模型对上下文中间部分的信息利用率最低}
+（常被称为 \en{lost in the middle}）。
+因此组装策略有明确的工程含义：
+
+\begin{itemize}
+  \item 把最相关的片段放在\textbf{开头和结尾}，把较弱的放在中间；
+  \item 给每个片段加编号与来源标题，让模型能引用（例如 \code{[1]}、\code{[2]}）；
+  \item 显式声明「只依据给定资料回答，资料不足时明确说不知道」，
+        并要求「每个事实性陈述后标注来源编号」；
+  \item 对片段做去重（不同块可能包含重叠内容，重复上下文会浪费窗口并放大该段的影响）；
+  \item 在 prompt 中定义冲突处理规则（例如「若两份资料矛盾，优先采信版本更新的」）。
+\end{itemize}
+
+下面是一个上下文组装函数的骨架。它把前面几节的经验固化成代码：
+按重排分数做「两端强、中间弱」的交错排列、去重、超长裁剪、
+以及带编号与来源的片段格式化。倒数第三行用观测到的引用编号做一次轻量校验，
+这是在没有额外 LLM 调用的情况下也能发现「编造引用」的最廉价手段。
+
+\begin{lstlisting}[style=growth, language=Python, caption={RAG 上下文组装：去重、交错排序、裁剪与引用格式化}]
+# Context assembly: dedupe, reorder (strongest at both ends), truncate, cite.
+import hashlib
+import re
+
+def content_hash(text):
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+def interleave_by_score(chunks):
+    # chunks must be sorted by descending rerank score.
+    out, lo, hi = [], 0, len(chunks) - 1
+    while lo <= hi:
+        out.append(chunks[lo])
+        lo += 1
+        if lo <= hi:
+            out.append(chunks[hi])
+            hi -= 1
+    return out
+
+def estimate_tokens(text):
+    # Rough proxy: CJK characters count about one token each.
+    return len(text)
+
+def assemble_context(chunks, token_budget=3000):
+    seen, kept, used = set(), [], 0
+    for chunk in interleave_by_score(chunks):
+        h = content_hash(chunk["text"])
+        if h in seen:                 # drop near-duplicate blocks
+            continue
+        cost = estimate_tokens(chunk["text"])
+        if used + cost > token_budget:  # truncate instead of dropping the tail
+            break
+        seen.add(h)
+        kept.append(chunk)
+        used += cost
+    blocks = []
+    for i, chunk in enumerate(kept, start=1):
+        header = "[%d] source=%s section=%s" % (
+            i, chunk["doc_title"], chunk.get("section_path", "-"))
+        blocks.append(header + "\n" + chunk["text"].strip())
+    return "\n\n".join(blocks), kept
+
+def check_citations(answer, allowed_ids):
+    used = {int(n) for n in re.findall(r"\[(\d+)\]", answer)}
+    return sorted(used - allowed_ids), sorted(allowed_ids - used)
+\end{lstlisting}
+
+\textbf{引用与忠实性}是 RAG 相对纯生成模型最大的产品价值之一：
+它把「不可验证的生成」变成「可验证的、带出处的回答」。
+但引用本身也可能出错，而且有两类完全不同的错误：
+\term{引用错配}{citation misattribution}（答案正确但标错了来源）
+与\term{无依据生成}{unsupported generation}（答案根本没有被任何来源支持）。
+前者损害可验证性，后者就是幻觉。二者必须分开度量，因为修复手段完全不同。
+
+\begin{pitfall}[top-$k$ 越大越好？chunk 越大越好？]
+这两个「直觉上更保险」的做法，在实测中经常同时伤害效果。
+
+\textbf{(1) top-$k$ 越大，噪声与干扰越多。}
+检索的边际收益随 $k$ 递减，而噪声近似线性增加。
+当 $k$ 从 5 涨到 50，召回率可能从 80\% 提升到 88\%，
+但上下文里混入了大量弱相关片段，
+模型被误导的概率、以及被无关内容分散注意力的概率显著上升。
+更隐蔽的问题是\term{稀释效应}{dilution}：
+正确的证据被淹没在噪声里，模型看到的是「大多数资料都在讲另一件事」，
+于是给出一个统计意义上更常见但并不针对问题的答案。
+
+\textbf{(2) chunk 越大，检索精度越低。}
+块越大，块向量越是多主题的平均，与任何单一具体问题的相似度都下降；
+同时一个块里只要有一句话相关，就可能被召回，但送进上下文的却是整块内容。
+真正有效的做法是\textbf{解耦「检索单元」与「生成单元」}：
+用小单元检索（保证精度），用大单元生成（保证完整性），这正是父子块的核心思想。
+
+\textbf{(3) 排查方法。}
+固定其他变量，对 $k$ 取 3、5、10、20 与块大小取 256、512、1024 做二维网格实验，
+同时记录「召回率」「上下文精确率」「最终答案准确率」三个指标。
+如果召回率上升而答案准确率下降或持平，
+说明当前瓶颈在上下文信噪比，应该做重排与压缩，而不是继续放大 $k$。
+\end{pitfall}
+
+\section{RAG 评估：把「答得好不好」拆成可测的量}
+
+RAG 的评估难点在于它是\textbf{两段式系统}：检索与生成。
+端到端指标（例如「答案对不对」）只能告诉你结果好坏，
+无法告诉你该修哪一段。因此必须分层度量。
+
+\subsection{检索侧指标}
+
+\term{Recall@K}{Recall at K} 衡量「正确答案是否被召回」，
+是检索侧最重要的指标，也是最应该优先优化的指标（因为它封顶了端到端效果）：
+
+\begin{equation}
+\Recall@K = \frac{1}{|\mathcal{Q}|} \sum_{q \in \mathcal{Q}}
+\mathbb{I}\Big[ \mathcal{G}_q \cap \text{TopK}(q) \ne \varnothing \Big] ,
+\label{eq:recall-at-k}
+\end{equation}
+
+其中 $\mathcal{G}_q$ 是 query $q$ 的标注相关文档集合。
+注意 \textbf{Recall@K 的定义随「每个 query 有几个正确答案」而变}：
+对于只有一个标准答案的问答数据集，它就是命中率（hit rate）；
+对于有多个相关文档的场景，也可以定义为「召回的相关文档数除以总相关文档数」。
+两种口径的数值不可直接比较，报告时必须注明。
+
+\term{MRR}{Mean Reciprocal Rank} 关注「第一个正确结果排在第几」：
+
+\begin{equation}
+\MRR = \frac{1}{|\mathcal{Q}|} \sum_{q \in \mathcal{Q}} \frac{1}{\text{rank}_q^{\text{first}}} ,
+\label{eq:mrr}
+\end{equation}
+
+它适合「只要一条正确就够」的场景（事实型问答），
+但对「需要综合多个来源」的场景不敏感：
+第一个命中了，后面全是噪声，MRR 依然很高。
+
+更完整的排序质量指标是 \metric{nDCG@K}：它同时考虑相关性等级（不只 0 与 1）
+与位置折扣，适合有分级标注的评估集。三者的选用建议：
+\textbf{Recall@K 用于验收召回是否够，MRR 用于监控头部是否够准，
+nDCG@K 用于对比排序模型的整体优劣}。
+
+\subsection{生成侧指标与 RAGAS 框架}
+
+生成侧的核心问题不是「答案像不像参考答案」（那用 BLEU 或 ROUGE 就够了），
+而是\textbf{「答案是否被给定上下文支持」}。
+这正是 RAGAS 一类框架的出发点，它把 RAG 质量拆成三个可度量的维度。
+
+\textbf{(1) 忠实性（Faithfulness）}：答案中的事实性陈述有多少能从上下文中找到依据。
+形式化地，把答案拆成原子陈述集合 $c_1$ 到 $c_J$，
+逐条判断是否被上下文 $\mathcal{C}$ 蕴含（entail），则
+
+\begin{equation}
+\text{Faithfulness} = \frac{\big| \{ c_j : \mathcal{C} \models c_j \} \big|}{J} ,
+\label{eq:faithfulness}
+\end{equation}
+
+其中 $\models$ 表示「由上下文蕴含」，$J$ 是答案中可核查的原子陈述数。
+分母只计可核查陈述，这一点很关键：一个「我不知道」的回答，
+其忠实性在定义上无从计算，通常约定为缺省值而不是 1。
+
+\textbf{(2) 答案相关性（Answer Relevancy）}：答案是否切题，
+即「如果只看答案，反推出的问题是否与原问题一致」。
+RAGAS 的实现方式是让 LLM 从答案反生成若干问题，
+再计算这些问题与原问题的嵌入相似度均值。
+这个设计很巧妙：它绕开了「与参考答案比对」，
+因为在开放域问答里参考答案本身就不唯一。
+
+\textbf{(3) 上下文精确率（Context Precision）}：被召回的上下文中，
+真正相关的部分排在前面吗。它把「相关性」与「排序位置」结合起来：
+
+\begin{equation}
+\text{ContextPrecision@K} =
+\frac{\sum_{i=1}^{K} \big( \text{Precision@}i \times \text{rel}_i \big)}
+{\sum_{i=1}^{K} \text{rel}_i} ,
+\label{eq:context-precision}
+\end{equation}
+
+其中 $\text{rel}_i$ 取 0 或 1，表示第 $i$ 个召回片段是否相关。
+如果相关片段都排在前面，分子与分母接近，指标趋近 1；
+如果第一个相关片段排在第 10 位，
+前 9 名的精度贡献全是 0，指标会显著下降。
+
+\begin{table}[htbp]
+\centering
+\caption{生成侧三个指标的口径与误用}
+\label{tab:rag-metrics}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.5cm} L{3.4cm} Y}
+\toprule
+\tabhead{指标} & \tabhead{度量什么} & \tabhead{高分的含义} & \tabhead{常见误用} \\
+\midrule
+Faithfulness & 答案是否被上下文支持 &
+没有编造，答案有据可查 &
+上下文本身是错的时，答案可以既忠实又错误；
+忠实性不等于正确性 \\
+\addlinespace
+Answer Relevancy & 答案是否切题 &
+没有答非所问、没有跑题 &
+答案切题但信息量极低（「这取决于具体情况」）也可能得高分 \\
+\addlinespace
+Context Precision & 相关片段是否排在前面 &
+上下文信噪比高，噪声少 &
+只反映排序质量，不反映是否召回全了；
+需要与召回率一起看 \\
+\addlinespace
+Context Recall & 参考答案的信息是否都在上下文里 &
+召回覆盖了回答问题所需的全部信息 &
+需要参考答案作为输入，开放域场景难构造 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{四象限诊断法}
+
+把检索与生成两个阶段各自分成「好」与「坏」，就得到四个象限。
+这是排查 RAG 系统最有效的工具，因为它把「答案错了」这个模糊抱怨
+直接映射到一个具体的修复方向：
+
+\begin{table}[htbp]
+\centering
+\caption{RAG 失败模式诊断表（四象限）}
+\label{tab:rag-diagnosis}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{1.5cm} L{1.5cm} Y}
+\toprule
+\tabhead{象限} & \tabhead{检索} & \tabhead{生成} & \tabhead{症状、根因与修复方向} \\
+\midrule
+I 正常 & 对 & 对 & 无问题。但要注意：如果评估集只覆盖这一类，
+说明评估集没有区分度，必须补充难样本 \\
+\addlinespace
+II 检索对、答错 & 对 & 错 &
+\textbf{根因}：上下文噪声过大、中间信息被忽略、prompt 冲突处理规则缺失、
+模型过度保守或过度自信。
+\textbf{修复}：重排加压缩（提高信噪比）、调整片段顺序（关键内容放两端）、
+显式要求引用与「资料不足时说不知道」、降低温度 \\
+\addlinespace
+III 检索错、蒙对 & 错 & 对 &
+\textbf{根因}：模型参数里本来就有这个知识，或从噪声中猜中。
+这是\textbf{最危险的象限}，因为离线指标看起来很好，一旦知识更新或问题变难就会崩。
+\textbf{修复}：构造「模型一定不知道」的评估集（内部专有信息、最新变更），
+在这类样本上单独度量，暴露真实依赖 \\
+\addlinespace
+IV 检索错、答错 & 错 & 错 &
+\textbf{根因}：召回率不足（词汇鸿沟、分块不当、过滤条件过严）、
+query 改写跑偏、知识库里根本没有该信息。
+\textbf{修复}：先确认知识库是否包含答案：
+若不含，正确行为是拒答并提示，而不是优化检索；
+若含，则按「混合检索、更好的嵌入模型、分块策略、query 改写」
+的顺序逐项排查 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[RAG 系统调参清单]
+以下清单按「改动成本从低到高」排序，建议严格按顺序验证，每次只改一项。
+
+\textbf{第 1 组：零成本，先查这些}
+\begin{enumerate}
+  \item 确认知识库里\textbf{确实包含}答案（人工检索原文档）。不含就是数据问题，不是 RAG 问题。
+  \item 检查文档状态过滤：是否有已废止文档被召回并压过了现行版本。
+  \item 检查嵌入模型与检索时的归一化、维度、距离度量（cosine、IP、L2）是否一致。
+  \item 人工查看 Top-5 召回片段的原文，判断是否相关，不要只看分数。
+\end{enumerate}
+
+\textbf{第 2 组：prompt 与组装（低成本，高回报）}
+\begin{enumerate}
+  \item 上下文顺序：最相关的放开头与结尾。
+  \item 明确指令：只依据资料回答；资料不足时说明缺什么；每个事实标注来源编号。
+  \item 冲突处理规则：版本冲突时优先最新生效版本，并显式说明存在冲突。
+  \item 温度：事实型问答设 0 到 0.2；需要归纳总结时可略高，但不要超过 0.5。
+\end{enumerate}
+
+\textbf{第 3 组：检索参数（中等成本，需要实验）}
+\begin{enumerate}
+  \item top-$k$ 与重排后保留数 $n$：常用起点是召回 50 到 100、重排后保留 5 到 10。
+  \item 网格实验：$k$ 取 3、5、10、20，块大小取 256、512、1024。
+  \item 引入 RRF 混合检索，平滑常数取 60，两路各召回 100。
+  \item 引入交叉编码器重排，先测 Top-50 重排与 Top-100 重排的收益差。
+  \item \code{efSearch}：在 P99 延迟约束下取最大值，并记录召回率随它的变化曲线。
+\end{enumerate}
+
+\textbf{第 4 组：结构改造（高成本，最后做）}
+\begin{enumerate}
+  \item 父子块：小块检索、父块生成，注意父块也要有大小上限。
+  \item query 改写与多查询融合（注意延迟翻倍）。
+  \item 元数据过滤与分区索引。
+  \item 领域微调嵌入模型（需要构造领域内的 query 与文档对）。
+  \item 图结构索引（仅在全局聚合类问题占比高时才做）。
+\end{enumerate}
+\end{toolbox}
+
+\section{Agentic RAG 与多跳问答}
+
+单轮 RAG 的隐含假设是「一次检索就能拿到全部所需信息」。
+这个假设在三类问题上失效：
+\textbf{多跳问题}（「A 公司的首席技术官毕业于哪所大学」需要先查他是谁，再查他的教育背景）；
+\textbf{比较类问题}（「X 和 Y 哪个更便宜」需要对两个实体分别检索再比较）；
+以及\textbf{需要计算或实时数据的问题}。
+
+\term{Agentic RAG}{Agentic Retrieval-Augmented Generation} 把这些任务建模成
+\textbf{「规划、检索、反思、再检索」的循环}：
+模型不只是消费检索结果，还能\textbf{决定检索什么、是否需要再检索、是否调用其他工具}。
+
+一个典型的 Agentic RAG 循环包含：
+\begin{itemize}
+  \item \textbf{规划}（plan）：把复杂问题分解成子问题序列，或生成一份检索计划；
+  \item \textbf{工具选择}（tool use）：在向量检索、关键词检索、SQL 查询、
+        Web 搜索、代码执行之间选择，并构造调用参数；
+  \item \textbf{反思}（reflection）：判断当前证据是否足以回答，
+        不足则改写 query 再检索（self-ask、思维链式检索这类思路）；
+  \item \textbf{终止条件}：达到最大轮数、证据充分、或明确判定「知识库无法回答」。
+\end{itemize}
+
+Agentic RAG 的成本结构与传统 RAG 完全不同：
+传统 RAG 是「1 次 LLM 生成加 1 次检索」，
+Agentic RAG 是「$R$ 轮检索与生成」，$R$ 可能到 3 到 10，
+延迟与 token 成本成倍增长。因此它只应该用在
+\textbf{确实多跳、且单轮 RAG 已明确失败}的场景，并且必须设置硬性终止条件，
+否则会出现「无限反思循环」：模型反复认为证据不足，持续检索却无法收敛。
+
+\begin{insight}[RAG、长上下文与微调的分工]
+近年模型上下文窗口从 4K 涨到 100K 以上，
+一个自然的问题是「上下文够长，是不是就不需要 RAG 了」。答案是否定的，原因有三个：
+\begin{enumerate}
+  \item \textbf{成本与延迟}。把 20 万 token 全塞进去，每次请求的输入成本与首 token 延迟
+        都远高于「检索 3K token」。即使模型支持，经济上也不成立。
+  \item \textbf{中间信息利用不足}。长上下文并不等于均匀利用，
+        位于中间的内容被忽略的概率显著更高，这削弱了「全塞进去」的效果。
+  \item \textbf{知识更新与权限}。RAG 可以在不重训模型的前提下更新知识、
+        并实现按用户权限的检索隔离；把知识烧进权重做不到这些。
+\end{enumerate}
+三者的正确分工是：\textbf{微调负责「行为与格式」（语气、输出结构、领域推理方式），
+RAG 负责「事实与知识」（可更新、可引用、可鉴权），
+长上下文负责「单次任务内的完整材料」（例如把整份合同放进上下文做条款分析）}。
+\end{insight}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 稠密检索用双塔把「匹配」变成「表示学习」，
+        换来可预计算与 ANN 检索的工程可行性，
+        代价是表达能力的上限（内积形式无法建模细粒度交互）。
+  \item 双塔的效果主要由\textbf{负样本设计}决定：
+        批内负例（零成本、规模受显存限制）、硬负例（信号强、需防假负例污染）、
+        ANCE 异步更新（负例跟随模型演化、工程成本最高）；
+        温度系数 $\tau$ 与 batch size 是与模型结构同等重要的超参。
+  \item 稀疏与稠密的失败模式几乎正交：稠密强在语义泛化，
+        稀疏强在精确匹配与长尾标识符。生产系统默认走\textbf{混合检索加 RRF 融合}，
+        RRF 的关键优势是无需分数校准。
+  \item 向量索引的本质是「用召回率换延迟与内存」：
+        HNSW 的 $M$ 与 \code{efConstruction} 决定索引质量上限，
+        \code{efSearch} 是运行时可调的召回与延迟旋钮；
+        IVF-PQ 把每向量存储从 $4d$ 字节压到 $m$ 字节，代价是量化误差。
+        带过滤的检索必须先判断「过滤后子集占比」再决定 pre-filter 还是 post-filter。
+  \item 重排（交叉编码器、MonoT5、列表式 LLM 重排）能显著提升相关性，
+        但它\textbf{只能在已召回的候选里重排}，收益被召回率封顶；
+        延迟预算分解的用途是让「重排多少条、用什么模型」有据可依。
+  \item RAG 的工程重点是\textbf{切块策略、检索前改写、检索后压缩与组装}三处；
+        「top-$k$ 越大越好」「chunk 越大越好」都是错的，
+        正确做法是解耦检索单元（小块）与生成单元（大块）。
+  \item RAG 评估必须分层：检索侧看 Recall@K、MRR、nDCG，
+        生成侧看 Faithfulness、Answer Relevancy、Context Precision，
+        并用\textbf{四象限诊断}把「答错了」映射到具体修复方向。
+        尤其要警惕「检索错但蒙对」的象限，它会让离线指标虚高。
+  \item Agentic RAG 用多轮「规划、检索、反思」解决多跳问题，
+        但它把成本从 1 轮变成 $R$ 轮，必须设置硬性终止条件，
+        并且只用在单轮 RAG 已确认失败的场景。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item DPR 的负采样是怎么设计的？批内负例、BM25 硬负例与 ANCE 的异步更新各解决什么问题，
+        又各自引入什么新问题？温度系数 $\tau$ 调小或调大会发生什么？
+  \item ColBERT 的 MaxSim 相比双塔的内积，表达能力强在哪里？代价是什么？
+        PLAID 做了哪些优化才让多向量检索进入可用的延迟范围？
+  \item 你的知识库是 1 亿条片段，要求 P99 延迟 50\,ms、内存 64\,GB，
+        你会选 HNSW 还是 IVF-PQ？$M$、\code{efSearch}、$n_{\text{probe}}$、$m$ 怎么定？怎么验收？
+  \item 检索请求带强选择性过滤（只查某个租户的几百条文档），
+        pre-filter 和 post-filter 分别会发生什么问题？你怎么设计索引？
+  \item RAG 系统答错了，你如何判断是「检索错了」还是「生成错了」？
+        请描述你的指标与排查步骤。
+  \item 把 top-$k$ 从 5 提高到 50，召回率上升了但用户满意度下降了，可能的解释是什么？
+        你会怎么验证并修复？
+  \item RAGAS 的 Faithfulness、Answer Relevancy、Context Precision 分别在度量什么？
+        它们各自在什么情况下会给出误导性的高分？
+  \item 什么情况下你会从单轮 RAG 升级到 Agentic RAG？升级后如何控制成本与避免死循环？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+到这里，我们已经走完了「检索」这条线：从倒排索引（\cref{ch:search}）到稠密向量，
+再到把检索嵌入生成流程的 RAG。整条链路里反复出现的三个角色是
+\textbf{编码器、索引、上下文组装}，而它们共享同一套底层技术：
+Transformer 表示的语义、注意力机制的计算代价、以及表示学习中的对比目标。
+
+下一章（\cref{ch:nlp}）我们把镜头拉回到这些组件本身：
+文本表示如何从 one-hot 演进到上下文相关表示，
+Transformer 的自注意力为什么能取代循环网络，
+预训练范式（自回归、自编码、编码解码）各自适合什么任务，
+以及 LoRA、量化、KV Cache 这些让大模型\textbf{跑得起、跑得快}的工程手段。
+理解了那一章，你就能解释本章里很多「经验做法」背后的原因：
+为什么嵌入模型的有效长度有限、为什么交叉编码器这么贵、
+为什么 LLM 的列表式重排会有位置偏差。
+后面 \cref{ch:nlpapp} 还会把 RAG 放回具体的业务场景里，
+讨论分类、抽取、摘要、对话等任务如何选型与落地。

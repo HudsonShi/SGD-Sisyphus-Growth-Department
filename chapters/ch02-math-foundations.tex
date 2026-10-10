@@ -1,0 +1,1395 @@
+\chapter{数学、统计与工程基础}
+\label{ch:math}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 一个算法工程师每天真正用到的数学，到底是哪几块？哪些必须背下来，哪些可以「用到再查」？
+  \item 内积、余弦、欧氏距离之间是什么关系？双塔模型为什么几乎都用内积？归一化与否会带来什么后果？
+  \item AUC 的物理意义是什么？为什么工业界更看 \metric{GAUC}？离线 AUC 涨了、线上却不涨，问题出在哪一环？
+  \item FTRL 为什么能在保证精度的同时产生稀疏解？它的更新式和普通在线梯度下降差在哪里？
+  \item 一张卡到底能装下多大的 Embedding 表？给定 QPS 与延迟预算，系统该怎么配？
+  \item 离线、近线、实时三条链路的特征如何保证一致性？特征穿越的五种典型形态是什么？
+\end{enumerate}
+\end{insight}
+
+\section{算法工程师真正每天用到的数学}
+
+\subsection{四类高频数学与它们的真实出场率}
+
+网上关于「算法工程师需要什么数学」的答案往往是「微积分、线性代数、概率论、凸优化全都要」，
+这对备考是成立的，对日常工作是不成立的。真实的工程场景里，数学工具的使用频率极度不均：
+有的工具一周用十次，有的工具一年用一次，而后者往往只需要知道「它存在、什么时候该调用它」。
+
+\begin{table}[htbp]
+\centering
+\caption{四类数学工具在算法工程中的真实出场率与掌握深度要求}
+\label{tab:math-tools}
+\small
+\begin{tabularx}{\textwidth}{L{2.5cm} L{1.6cm} L{4.6cm} Y}
+\toprule
+\tabhead{数学模块} & \tabhead{出场率} & \tabhead{典型出场场景} & \tabhead{掌握深度要求} \\
+\midrule
+线性代数 & 极高 & 向量检索、双塔、矩阵分解、SVD/PCA、量化、注意力矩阵运算 &
+能徒手推导内积与余弦的等价条件、写出 SVD 的低秩近似、估算一次矩阵乘的 FLOPs \\
+\addlinespace
+概率与统计 & 极高 & A/B 实验、置信区间、显著性判断、校准、贝叶斯平滑、冷启动先验 &
+能算样本量、能解释 p 值与置信区间的口径、能在多重比较下正确做 FDR 控制 \\
+\addlinespace
+最优化 & 高 & 训练调参、FTRL、正则化、预算约束下的分配、出价 &
+能说清 Adam 与 SGD 的行为差异、能写出 KKT 条件并用它解释预算平滑 \\
+\addlinespace
+泛函/测度/信息论 & 低 & 散度分析、变分推断、理论论文阅读 &
+知道 KL 散度、互信息、熵的定义与直觉即可，不必推导 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+上表的「出场率」是经验判断，不是统计结果，但它和大多数一线团队的体感一致。
+排序学习、树模型、Embedding 这三件事几乎占据了推荐/搜索/广告工程 80\% 的日常工作量，
+而它们背后的数学集中在\kw{线性代数 + 概率统计 + 一阶优化}这三块。
+
+\begin{keypoint}[先建立「调用关系」而不是「知识清单」]
+\textbf{数学不是先学完再用，而是先用起来再回头补。}
+正确的姿势是：先记住每个工具的\kw{输入输出与代价}，在遇到具体问题时知道该调用哪一个，
+再在需要调参、需要解释异常、需要写论文时补推导。
+例如你不需要每天推导 SVD，但你必须知道「SVD 的低秩近似在 Frobenius 范数下是最优的」，
+因为这决定了「用前 $k$ 个奇异向量做召回索引，损失的理论下界在哪里」。
+\end{keypoint}
+
+\subsection{本章的知识地图}
+
+本章的内容不是并列的六块，而是有依赖关系的：线性代数提供\kw{表示空间}，
+概率统计提供\kw{推断与决策依据}，优化提供\kw{从数据到参数的手段}，
+三者共同支撑起\kw{机器学习模型}；而模型要跑起来，就必须落到\kw{工程}与\kw{数据}上。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  root/.style={draw=NavyDeep, fill=BoxBG, rounded corners=2pt, minimum height=7mm, inner sep=5pt, text width=3.0cm},
+  leaf/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm, inner sep=4pt, text width=2.4cm},
+  base/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=7mm, inner sep=4pt, text width=2.4cm}
+]
+\node[root] (m) {数学与工程基础};
+\node[leaf, below left=9mm and 26mm of m] (a) {线性代数\\内积 / SVD / 量化};
+\node[leaf, below=9mm of m] (b) {概率统计\\贝叶斯 / 检验 / FDR};
+\node[leaf, below right=9mm and 26mm of m] (c) {最优化\\SGD / Adam / FTRL};
+\node[base, below=27mm of a] (d) {评估指标\\AUC / GAUC / NDCG};
+\node[base, below=27mm of b] (e) {工程实现\\并行 / 显存 / 延迟};
+\node[base, below=27mm of c] (f) {数据基础\\数仓 / 实时 / 一致性};
+\foreach \x in {a,b,c} \draw[-{Stealth}, SlateGray] (m) -- (\x);
+\foreach \x/\y in {a/d,b/e,c/f} \draw[-{Stealth}, SlateGray] (\x) -- (\y);
+\draw[-{Stealth}, dashed, CrimsonDeep] (d.south) -- ++(0,-4mm) -| (e.south);
+\end{tikzpicture}
+\caption{本章知识地图：三个数学支柱支撑起指标、工程与数据三条落地链路}
+\label{fig:math-map}
+\end{figure}
+
+下面按「线性代数 $\to$ 概率统计 $\to$ 优化 $\to$ 机器学习 $\to$ 评估指标 $\to$ 工程 $\to$ 数据」的顺序展开。
+每一节都会尽量给出：公式、直觉、代价，以及在真实系统里它长什么样。
+
+\section{线性代数与向量检索基础}
+
+\subsection{内积、余弦与欧氏距离：三者只差一个范数}
+
+设用户向量为 $\bm{u} \in \R^d$，物品向量为 $\bm{v} \in \R^d$，则
+
+\begin{equation}
+\inner{\bm{u}}{\bm{v}} = \sum_{j=1}^{d} u_j v_j = \norm{\bm{u}} \norm{\bm{v}} \cos\theta ,
+\qquad
+\cos\theta = \frac{\inner{\bm{u}}{\bm{v}}}{\norm{\bm{u}}\norm{\bm{v}}} ,
+\qquad
+\norm{\bm{u} - \bm{v}}^2 = \norm{\bm{u}}^2 + \norm{\bm{v}}^2 - 2\inner{\bm{u}}{\bm{v}} .
+\label{eq:cosine-euclid}
+\end{equation}
+
+\cref{eq:cosine-euclid} 的第三个等式是全篇最重要的恒等式之一：它说明\kw{欧氏距离、内积、范数三者可以互相换算}。
+由此可以立刻得到三个工程结论：
+
+\begin{itemize}
+  \item 当所有向量都\kw{归一化}到单位长度（$\norm{\bm{u}} = \norm{\bm{v}} = 1$）时，
+        欧氏距离与内积是单调等价的：$\norm{\bm{u}-\bm{v}}^2 = 2 - 2\inner{\bm{u}}{\bm{v}}$。
+        此时「最大内积检索」和「最小欧氏距离检索」返回完全相同的结果，
+        所以用 L2 索引还是 IP 索引，只取决于你是否做了归一化，而不是取决于模型对错。
+  \item 当向量\kw{未归一化}时，内积同时编码了方向相似度与\kw{模长}（magnitude）。
+        模长大致对应「热度」「活跃度」「置信度」。因此内积检索天然带一点 popularity bias，
+        这在推荐里有时是好事（热门内容更容易被召回），有时是坏事（冷启动内容被压制）。
+  \item 余弦相似度对模长完全免疫，代价是丢掉了置信度信息。
+        实践中常见的折中是 \kw{使用 $L_2$ 归一化后再乘一个温度系数 $1/\tau$}，
+        用 $\tau$ 显式控制分布的锐度（这也是对比学习里 temperature 的由来）。
+\end{itemize}
+
+\begin{insight}[「归一化」是在选择模型，不是在做数据清洗]
+很多团队把归一化当成一个预处理细节，这是误解。
+归一化相当于对模型加了一个\kw{强先验}：所有物品的「重要性」相同。
+如果你的业务里头部内容确实应该获得更多曝光（例如新闻、电商爆款），
+强行归一化会直接抹掉这部分信号，而你在离线指标上很可能看不出来——
+因为 AUC 只关心排序，而 popularity 的影响往往体现在「首屏质量」这种分组内的指标上。
+判断方法很简单：分别用归一化与不归一化的双塔跑一次离线评估，
+看 \metric{GAUC} 与 top-10 的类目分布是否变化。如果变化明显，就必须显式建模模长。
+\end{insight}
+
+\subsection{矩阵分解的几何直觉与 SVD}
+
+\term{奇异值分解}{Singular Value Decomposition, SVD} 是几乎所有「隐向量」方法的数学源头：
+
+\begin{equation}
+\bm{X} = \bm{U}\bm{\Sigma}\bm{V}\T = \sum_{j=1}^{\min(m,n)} \sigma_j \bm{u}_j \bm{v}_j\T ,
+\qquad \sigma_1 \ge \sigma_2 \ge \cdots \ge 0 .
+\label{eq:svd}
+\end{equation}
+
+其中 $\bm{u}_j$、$\bm{v}_j$ 是正交单位向量，$\sigma_j$ 是奇异值。
+\term{Eckart--Young 定理}{Eckart--Young Theorem} 告诉我们：在所有秩不超过 $k$ 的矩阵中，
+
+\begin{equation}
+\bm{X}_k = \sum_{j=1}^{k} \sigma_j \bm{u}_j \bm{v}_j\T
+= \argmin_{\text{rank}(\bm{Y}) \le k} \norm{\bm{X} - \bm{Y}}_F
+\label{eq:svd-lowrank}
+\end{equation}
+
+即在 Frobenius 范数下，\kw{截断 SVD 是最优的低秩近似}。这句话是整个召回索引的理论地基：
+你用一个 64 维向量的内积去近似原始的 100 万维共现矩阵，损失的下界由被丢弃的奇异值平方和给出，
+即 $\norm{\bm{X} - \bm{X}_k}_F^2 = \sum_{j>k}\sigma_j^2$。
+
+\term{主成分分析}{Principal Component Analysis, PCA} 与 SVD 的关系是：把数据中心化后做 SVD，
+右奇异向量的前 $k$ 个即为前 $k$ 个主成分方向，投影后的方差由 $\sigma_j^2/(N-1)$ 给出。
+PCA 在特征工程里最常见的用途是\kw{降维与去相关}，但要注意它的两个前提：
+数据近似线性结构、各维尺度可比。对稀疏高维的行为特征，PCA 的实际收益往往不如直接用 Embedding。
+
+\begin{formulacard}[矩阵分解的两种读法]
+\begin{enumerate}
+  \item \textbf{代数读法}：把稀疏的用户--物品矩阵补全为低秩矩阵。经典的
+        \term{矩阵分解}{Matrix Factorization, MF} 用 $\hat{r}_{ui} = \bm{p}_u\T \bm{q}_i + b_u + b_i + \mu$
+        拟合评分，再用正则化的平方误差或 \term{BPR}{Bayesian Personalized Ranking} 的成对损失训练
+        \cite{koren2009mf,rendle2009bpr}。
+  \item \textbf{几何读法}：把每个用户、每个物品映射到同一个 $d$ 维球面附近的点，
+        相似度由夹角给出。「用户喜欢的物品方向」在训练中被拉近，
+        「未交互的物品方向」被推远或保持不变（取决于损失是否用了负采样）。
+\end{enumerate}
+几何读法更工程：它直接告诉你，召回质量的瓶颈通常不是维度 $d$ 太小，
+而是\textbf{负样本的采样方式}决定了空间被塑造成什么形状。
+\end{formulacard}
+
+\subsection{双塔模型为什么用内积}
+
+\term{双塔模型}{Two-tower Model} 把打分函数约束成内积形式 $s(u,i) = \inner{f(u)}{g(i)}$，
+这个约束的代价是\kw{表达能力受限}（不能建模任意的用户--物品交互），
+换来的是\kw{可预计算}：物品塔的输出 $\{g(i)\}$ 可以离线算好并建索引，
+线上只需算一次用户塔的前向 + 一次近似最近邻检索。
+
+这是本领域最典型的取舍：\textbf{用表达能力换 O(1) 级检索复杂度}。
+作为对比，\term{DIN}{Deep Interest Network} \cite{zhou2018din} 这类模型允许用户表示随候选物品变化，
+表达能力强得多，但必须对每个候选都跑一次前向，无法做索引，因此只能用在精排。
+
+\begin{table}[htbp]
+\centering
+\caption{向量量化：从精确检索到近似检索的三级代价}
+\label{tab:quantization}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.0cm} L{1.9cm} L{1.6cm} Y}
+\toprule
+\tabhead{方案} & \tabhead{核心思想} & \tabhead{压缩比} & \tabhead{精度损失} & \tabhead{适用场景与代价} \\
+\midrule
+原始 fp32 & 直接存浮点向量 & $1\times$ & 无 & 召回与重排；显存是主要瓶颈 \\
+\addlinespace
+标量量化 SQ & 每维独立线性/非线性量化到 8 bit & $4\times$ & 很小（通常 $<1\%$ Recall@10） & 几乎无脑可用；实现简单，可作为第一选择 \\
+\addlinespace
+乘积量化 PQ & 把 $d$ 维切成 $M$ 段，每段用 $2^{b}$ 个聚类中心编码 & $32d/(Mb)\times$ & 中等，随 $M$ 增大而减小 & 大规模索引（IVF-PQ）；需要离线训练码本 \\
+\addlinespace
+二值化/汉明 & 符号函数取 0/1，用汉明距离 & $32\times$ & 较大 & 超大规模粗筛；通常只作为第一级过滤 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\term{乘积量化}{Product Quantization, PQ} 的数学形式是：把向量切分成 $M$ 个子空间，
+第 $m$ 个子空间用码本 $\mathcal{C}_m = \{\bm{c}_{m,1},\dots,\bm{c}_{m,K}\}$（通常 $K = 2^8 = 256$），则
+
+\begin{equation}
+\bm{x} \approx \big(\bm{c}_{1,k_1}, \bm{c}_{2,k_2}, \dots, \bm{c}_{M,k_M}\big),
+\qquad
+\norm{\bm{x} - \bm{y}}^2 \approx \sum_{m=1}^{M} \norm{\bm{x}_m - \bm{c}_{m,k_m(\bm{y})}}^2 .
+\label{eq:pq}
+\end{equation}
+
+\cref{eq:pq} 的关键在于\kw{距离可以用查表法累加}：预先算好每个子空间上「查询向量 vs 256 个中心」的距离表，
+则对每条库向量只需 $M$ 次查表加法即可得到近似距离，把一次距离计算的代价从 $O(d)$ 降到 $O(M)$，
+同时把存储从 $4d$ 字节降到 $M$ 字节。
+
+\begin{pitfall}[归一化与量化一起用时的两个坑]
+\textbf{现象一}：向量做了 $L_2$ 归一化后做 PQ，检索精度比预期差很多。
+根因是归一化把数据压到了一个球面上，每个子空间的方差骤降，PQ 的码本利用率下降。
+解法：要么不归一化（用内积索引），要么做\kw{球面量化}（对方向编码、对模长单独标量量化）。
+\textbf{现象二}：查询向量与库向量用了不同的量化参数（一个 fp32、一个 int8），
+导致内积估计出现系统性偏移。必须保证查询侧与库侧使用同一套量化参数，
+或使用\kw{查询侧重打分}：先用量化索引取 top-$N$，再用 fp32 重算 top-$K$。
+工业界的通行做法是 $N \approx 10K \sim 50K$。
+\end{pitfall}
+
+\begin{toolbox}[向量检索的实操参数起点]
+以下是公开资料与工程实践中较常见的\kw{起点值}（示范量级，非普适最优）：
+\begin{itemize}
+  \item \textbf{索引类型}：候选量 $< 10^6$ 用 HNSW（\code{M=32, efConstruction=200, efSearch=64$\sim$256}）；
+        $> 10^8$ 用 IVF-PQ（\code{nlist=$\sqrt{N}$ 到 $4\sqrt{N}$}，\code{nprobe=16$\sim$64}） \cite{malkov2020hnsw,johnson2019faiss}。
+  \item \textbf{维度}：召回双塔常用 32--128 维；维度超过 256 后收益递减而索引成本线性上升。
+  \item \textbf{重打分}：量化索引取 top-200，用精确内积重排取 top-20。
+  \item \textbf{分片}：单分片控制在 1 亿条以内，按类目/地域/语言分片可以同时提升精度与吞吐。
+  \item \textbf{评估}：必须同时报 \metric{Recall@K} 与「相对暴力检索的召回率」，后者才是索引本身的损失。
+\end{itemize}
+\end{toolbox}
+
+\section{概率与统计}
+
+\subsection{条件概率、贝叶斯与极大似然}
+
+贝叶斯公式是所有「先验 + 证据 $\to$ 后验」推理的原型：
+
+\begin{equation}
+\Prob(\theta \given \mathcal{D}) = \frac{\Prob(\mathcal{D} \given \theta)\,\Prob(\theta)}{\Prob(\mathcal{D})}
+\;\propto\; \underbrace{\Prob(\mathcal{D} \given \theta)}_{\text{似然}}\;\underbrace{\Prob(\theta)}_{\text{先验}} .
+\label{eq:bayes}
+\end{equation}
+
+在推荐与广告里，\cref{eq:bayes} 最实用的形态是\term{贝叶斯平滑}{Bayesian Smoothing}：
+某个新物品曝光 3 次、点击 1 次，直接算 CTR 得到 33\%，显然是噪声。
+引入 Beta 先验 $\text{Beta}(\alpha, \beta)$ 后，后验均值为
+
+\begin{equation}
+\hat{p} = \frac{c + \alpha}{n + \alpha + \beta} ,
+\label{eq:beta-smoothing}
+\end{equation}
+
+$\alpha,\beta$ 可以按全站 CTR 均值与「等效样本量」设定（例如全站 CTR 为 3\%、等效样本 100，
+则令 $\alpha/(\alpha+\beta) = 0.03$ 且 $\alpha+\beta = 100$）。
+这就是「小样本不吭声、大样本说话」的数学实现。
+
+\term{极大似然估计}{Maximum Likelihood Estimation, MLE} 是反过来的一步：
+固定数据、把似然看成参数的函数，取 $\hat{\theta} = \argmax_\theta \log \Prob(\mathcal{D}\given\theta)$。
+在独立同分布假设下，最大化对数似然等价于最小化\kw{交叉熵}，
+这就是为什么所有分类模型的默认损失是 logloss——它不是「约定」，而是 MLE 的直接结果。
+
+\begin{insight}[「为什么是交叉熵」这个问题的标准答案]
+设标签 $y \in \{0,1\}$，模型输出 $p = \sigmoid(f(x))$。
+单个样本的似然是 $p^{y}(1-p)^{1-y}$，取负对数得 $-[y\log p + (1-y)\log(1-p)]$。
+因此\textbf{交叉熵 = 负对数似然}。当你听到「用交叉熵损失」时，
+等价的说法是「用最大似然估计参数」。而当业务需要「对负样本降权」时，
+本质上是把似然改成加权似然 $\prod p^{w y}(1-p)^{w(1-y)}$，
+这会影响模型的校准度（见 \cref{sec:calibration}），必须配合后处理校准。
+\end{insight}
+
+\subsection{从指数族到 logistic：sigmoid 是推出来的，不是拍出来的}
+
+\term{指数族}{Exponential Family} 的标准形式为
+
+\begin{equation}
+p(y \given \eta) = h(y)\, g(\eta)\, \exp\!\big(\eta\T T(y)\big),
+\qquad
+\eta = \bm{\theta}\T \bm{x} .
+\label{eq:expfamily}
+\end{equation}
+
+对二值 $y \in \{0,1\}$ 取 $T(y)=y$、$h(y)=1$，并令 $\phi = \Prob(y=1)$，可以推出
+
+\begin{equation}
+\Prob(y=1 \given \bm{x}) = \frac{1}{1 + \exp(-\bm{\theta}\T\bm{x})} = \sigmoid(\bm{\theta}\T\bm{x}),
+\qquad
+\log\frac{\phi}{1-\phi} = \bm{\theta}\T\bm{x} .
+\label{eq:logistic}
+\end{equation}
+
+也就是说，\kw{logistic 回归 = 假设对数几率（log-odds）是特征的线性函数}。
+这个结论有两个非常实用的推论：
+
+\begin{itemize}
+  \item \textbf{系数可解释}：$\theta_j$ 表示特征 $x_j$ 每增加 1 个单位，几率变为原来的 $e^{\theta_j}$ 倍。
+        在风控、定价、广告质量分这类需要解释的场景，这是树模型给不了的。
+  \item \textbf{calibration 的天然土壤}：因为模型输出的是 log-odds，
+        \term{Platt 缩放}{Platt Scaling} 只需要在 logit 上做一次一维线性变换，
+        参数极少、几乎不会过拟合。这一点在 \cref{sec:calibration} 会再次用到。
+\end{itemize}
+
+\subsection{偏差--方差分解：过拟合与欠拟合的数学定义}
+
+对平方损失，期望泛化误差可以精确分解为三项：
+
+\begin{equation}
+\E_{\mathcal{D}}\Big[\big(y - \hat{f}_{\mathcal{D}}(x)\big)^2\Big]
+= \underbrace{\big(\E[\hat{f}] - f(x)\big)^2}_{\text{偏差}^2}
++ \underbrace{\E\big[(\hat{f} - \E[\hat{f}])^2\big]}_{\text{方差}}
++ \underbrace{\sigma^2_{\varepsilon}}_{\text{不可约噪声}} .
+\label{eq:bias-variance}
+\end{equation}
+
+这个分解的价值不在于计算（实践中算不出来），而在于它给出了\kw{诊断语言}：
+\begin{itemize}
+  \item 训练集与验证集误差都高且接近 $\to$ 高偏差 $\to$ 模型太简单、特征不足、正则过强；
+  \item 训练误差低、验证误差高 $\to$ 高方差 $\to$ 模型太复杂、样本太少、特征穿越或泄漏；
+  \item 两者都高且差距大 $\to$ 样本分布不一致（离线与线上不一致），这是推荐系统最常见的一种。
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{偏差--方差视角下的常见手段（以推荐精排为例）}
+\label{tab:bias-variance}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{2.6cm} L{2.4cm} Y}
+\toprule
+\tabhead{手段} & \tabhead{主要影响} & \tabhead{代价} & \tabhead{使用时的判断信号} \\
+\midrule
+增加特征交叉 & 降低偏差 & 增加方差与线上特征成本 & 验证集误差与训练集同步下降 \\
+\addlinespace
+加 L2 / Dropout & 降低方差 & 提高偏差 & 训练误差上升但验证误差下降 \\
+\addlinespace
+增加训练样本 & 降低方差 & 数据与训练成本 & 学习曲线仍在下降，未饱和 \\
+\addlinespace
+增大模型容量 & 降低偏差 & 方差上升、延迟上升 & 训练误差已明显低于验证误差时慎用 \\
+\addlinespace
+特征穿越修复 & 同时改变二者（通常验证误差上升） & 离线指标「变差」的心理成本 & 修复后离线指标下降但线上提升，这是健康信号 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{假设检验、置信区间与 bootstrap}
+
+A/B 实验的基本问题：两组均值差 $\hat{\Delta} = \bar{X}_T - \bar{X}_C$ 是否显著异于 0？
+在方差未知、样本量足够时用 Welch $t$ 检验：
+
+\begin{equation}
+t = \frac{\bar{X}_T - \bar{X}_C}{\sqrt{\dfrac{s_T^2}{n_T} + \dfrac{s_C^2}{n_C}}},
+\qquad
+\text{CI}_{1-\alpha} = \hat{\Delta} \pm z_{1-\alpha/2}\sqrt{\frac{s_T^2}{n_T} + \frac{s_C^2}{n_C}} .
+\label{eq:tstat}
+\end{equation}
+
+当指标是比率（CTR、CVR、留存率）时，用两比例 $z$ 检验；当分布严重偏斜
+（人均 GMV、人均时长、分享次数这类「少数人贡献大部分」的指标）时，
+$t$ 检验的正态假设不成立，应该用 \term{Bootstrap}{自助法}：
+有放回地重采样 $B$ 次（$B$ 取 1000--10000），每次重算指标差，得到经验分布，
+再取 2.5\% 与 97.5\% 分位数作为置信区间。
+
+Bootstrap 的工程优势是不需要任何分布假设，且能直接给出「任意统计量」的区间
+（中位数、分位数、转化率之比都能算）。代价是计算量 $O(Bn)$，
+在日均上亿曝光的实验里必须用\kw{分层 Bootstrap 或 Delta 方法近似}。
+关于实验设计的系统性讨论，参见 \cite{kohavi2020trustworthy}。
+
+\subsection{多重比较、FDR 与「实验太多了」}
+
+一个实验看 20 个指标，每个指标单独取 $\alpha = 0.05$，那么至少出现一个假阳性的概率是
+$1 - 0.95^{20} \approx 64\%$。这就是\term{多重比较问题}{Multiple Comparisons}。
+
+两种主流控制方法：
+
+\begin{itemize}
+  \item \term{族错误率}{Family-Wise Error Rate, FWER} 控制：Bonferroni 校正把阈值改成 $\alpha/m$。
+        简单但过于保守，指标多时几乎什么都检不出来。
+  \item \term{错误发现率}{False Discovery Rate, FDR} 控制：Benjamini--Hochberg 过程。
+        把 $p$ 值升序排列为 $p_{(1)} \le \cdots \le p_{(m)}$，找到最大的 $k$ 使得
+        $p_{(k)} \le \frac{k}{m}\alpha$，拒绝前 $k$ 个假设。
+        FDR 允许一定比例的假阳性，换取高得多的检验功效，是互联网实验平台的主流选择。
+\end{itemize}
+
+\begin{pitfall}[p 值的五种典型误用]
+\begin{enumerate}
+  \item \textbf{把 $p<0.05$ 当成「效应大」}：p 值同时受效应量与样本量影响，
+        样本足够大时 0.01\% 的提升也能显著。必须同时报\kw{效应量与置信区间}。
+  \item \textbf{偷看数据（peeking）}：每天看一次、显著就停，会把实际 $\alpha$ 抬高数倍。
+        正确做法是固定样本量/固定时长，或用\term{序贯检验}{Sequential Test}（如 always-valid p-value、Alpha Spending）。
+  \item \textbf{忽略方差齐性与样本比例失衡}：分流不均（如 50.2\% vs 49.8\%）会引入偏差，
+        必须做\term{样本比例失配检验}{Sample Ratio Mismatch, SRM}，SRM 命中时实验结论直接作废。
+  \item \textbf{把统计显著当成因果显著}：显著只说明「有差异」，不排除选择偏差与外部事件。
+        因果结论需要 \cite{pearl2009causality} 一类的框架，或用增量实验（geo 实验、PSA）验证。
+  \item \textbf{对同一实验反复做子群分析}：按性别、城市、机型切十几个子群去找显著，
+        必然找到假阳性。正确做法是\kw{预先注册子群假设}。
+\end{enumerate}
+\end{pitfall}
+
+\subsection{功效分析与样本量：实验开始前必须回答的问题}
+
+在指标为连续量时，两组等样本量设计的最小样本量近似为
+
+\begin{equation}
+n \;\approx\; \frac{2\,(z_{1-\alpha/2} + z_{1-\beta})^2 \sigma^2}{\delta^2},
+\qquad
+n \;\approx\; \frac{(z_{1-\alpha/2}+z_{1-\beta})^2\,\big[p_1(1-p_1)+p_2(1-p_2)\big]}{(p_1-p_2)^2} \;\;(\text{比率指标}) .
+\label{eq:samplesize}
+\end{equation}
+
+其中 $\delta$ 是你要能检出的最小效应（\term{最小可检测效应}{Minimum Detectable Effect, MDE}），
+$1-\beta$ 是功效（通常取 0.8）。式 \cref{eq:samplesize} 有一个残酷但必须记住的性质：
+\textbf{样本量随 $\delta^2$ 反比增长}。想检出 1\% 的相对提升，需要的样本量是想检出 10\% 的约 100 倍。
+
+\begin{toolbox}[A/B 实验最小样本量估算速查]
+以日活 100 万、核心指标 CTR（基准 5\%）为例（示范量级，实际需按分群方差重算）：
+\begin{itemize}
+  \item 目标：检出相对提升 5\%（即 5.0\% $\to$ 5.25\%，绝对差 $\delta = 0.0025$）；
+        取 $\alpha=0.05$、功效 0.8，代入 \cref{eq:samplesize} 的比率形式，
+        得到每组约需 $6\times 10^4$ 量级的\kw{转化数}，折算曝光约百万级，单组 1 天左右可跑完。
+  \item 目标：检出相对提升 1\%（$\delta = 0.0005$），样本量约放大 25 倍，单组需要 3--5 周，
+        此时必须考虑\kw{新奇效应（novelty effect）与季节漂移}，建议改用\kw{方差缩减}（CUPED）
+        把实验周期压回 1--2 周。
+  \item 若核心指标是人均 GMV（方差极大），通常需要数倍于 CTR 的样本量；
+        优先做\kw{对数变换或 winsorize}，再考虑 CUPED 与分层抽样。
+\end{itemize}
+\textbf{口诀}：先定 MDE，再算样本量，最后才决定实验时长；顺序反了实验必然报废。
+\end{toolbox}
+
+\section{最优化}
+
+\subsection{凸与非凸：我们真正在乎的是「能不能稳定下降」}
+
+\term{凸函数}{Convex Function} 的定义是
+$f(\lambda \bm{x} + (1-\lambda)\bm{y}) \le \lambda f(\bm{x}) + (1-\lambda) f(\bm{y})$。
+凸问题的价值在于：\kw{局部最优即全局最优}，且有一阶最优性条件
+$\nabla f(\bm{x}^\star) = 0$ 可验证。
+
+logistic 回归、线性 SVM、Lasso 都是凸的；而所有含隐层或 Embedding 的深度学习模型都是非凸的。
+现实中非凸优化之所以「能用」，靠的是三个经验事实：
+（1）过参数化模型的损失曲面几乎没有坏的局部极小，鞍点才是主要障碍；
+（2）随机梯度带来的噪声自身具备逃离鞍点的能力；
+（3）我们并不需要全局最优，只需要验证集上的泛化表现。
+
+\begin{pitfall}[「调不动」时的排查顺序]
+模型 loss 下降缓慢或震荡时，按以下顺序排查，而不是先换优化器：
+\begin{enumerate}
+  \item \textbf{数据}：标签是否错位、特征是否有 NaN/常量列、样本是否严重失衡；
+  \item \textbf{尺度}：特征未标准化会导致不同参数的学习率需求差几个数量级，
+        这是 Embedding + 连续特征混合模型最常见的隐形 bug；
+  \item \textbf{学习率}：先做 lr range test（从 $10^{-6}$ 线性升到 $10^{-1}$，看 loss 曲线拐点），
+        再用余弦退火或 one-cycle；
+  \item \textbf{初始化}：深层网络的方差缩放初始化（Xavier/He）\cite{he2016resnet}；
+  \item 最后才是换优化器与调 $\beta_1,\beta_2,\epsilon$。
+\end{enumerate}
+\end{pitfall}
+
+\subsection{梯度下降家族：从 SGD 到 Adam}
+
+一阶方法的核心都是同一个模板：
+
+\begin{equation}
+\bm{\theta}_{t+1} = \bm{\theta}_t - \eta_t\, \bm{d}_t ,
+\label{eq:gd-template}
+\end{equation}
+
+差别全在方向 $\bm{d}_t$ 与步长 $\eta_t$ 上。
+
+\begin{itemize}
+  \item \term{随机梯度下降}{Stochastic Gradient Descent, SGD}：$\bm{d}_t = \bm{g}_t$，$\bm{g}_t = \nabla L(\bm{\theta}_t;\mathcal{B}_t)$。
+  \item \term{动量法}{Momentum}：累积历史梯度形成惯性，$\bm{m}_t = \mu \bm{m}_{t-1} + \bm{g}_t$，$\bm{d}_t = \bm{m}_t$。
+        在狭长峡谷的损失面上能抑制震荡、加速方向一致的分量。
+  \item \term{AdaGrad}{Adaptive Gradient}：按历史梯度平方和缩放，
+        $\bm{d}_t = \bm{g}_t / \sqrt{\sum_{\tau\le t}\bm{g}_\tau^2}$。
+        对稀疏特征非常友好（低频特征获得大学习率），但累积分母单调递增，步长会衰减到 0。
+  \item \term{RMSProp}{Root Mean Square Propagation}（以及 AdaDelta）：把累积换成指数滑动平均，解决 AdaGrad 步长归零问题。
+  \item \term{Adam}{Adaptive Moment Estimation} \cite{kingma2015adam}：
+        同时估计一阶矩与二阶矩，并做偏差校正：
+\end{itemize}
+
+\begin{equation}
+\begin{aligned}
+\bm{m}_t &= \beta_1 \bm{m}_{t-1} + (1-\beta_1)\bm{g}_t, &\quad
+\bm{v}_t &= \beta_2 \bm{v}_{t-1} + (1-\beta_2)\bm{g}_t^{\odot 2}, \\
+\hat{\bm{m}}_t &= \frac{\bm{m}_t}{1-\beta_1^{t}}, &\quad
+\hat{\bm{v}}_t &= \frac{\bm{v}_t}{1-\beta_2^{t}}, \\
+\bm{\theta}_{t+1} &= \bm{\theta}_t - \eta\, \frac{\hat{\bm{m}}_t}{\sqrt{\hat{\bm{v}}_t} + \epsilon} .
+\end{aligned}
+\label{eq:adam}
+\end{equation}
+
+默认超参 $\beta_1 = 0.9$、$\beta_2 = 0.999$、$\epsilon = 10^{-8}$。
+偏差校正的作用在训练最初几步尤其明显：$t=1$ 时 $\bm{m}_1 = 0.1\bm{g}_1$，
+若不校正则第一步的实际步长只有预期的 1/10。
+
+\begin{table}[htbp]
+\centering
+\caption{优化器对比：推荐/搜索/广告场景下的选择建议}
+\label{tab:optimizers}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{2.4cm} L{3.0cm} Y}
+\toprule
+\tabhead{优化器} & \tabhead{稀疏友好度} & \tabhead{收敛特征} & \tabhead{典型使用场景与注意事项} \\
+\midrule
+SGD / SGD-M & 中（需手调 lr） & 慢但泛化好 & 图像类任务常用；大规模稀疏 ID 特征上不占优 \\
+\addlinespace
+AdaGrad & 高 & 后期步长趋零 & 稀疏文本特征的老牌选择；长期训练需配 lr 衰减策略 \\
+\addlinespace
+Adam / AdamW & 中 & 快、对 lr 不敏感 & 深度学习默认起点；Embedding 上要注意 L2 正则需换成解耦的 weight decay \\
+\addlinespace
+FTRL-Proximal & 极高 & 在线、可稀疏 & 流式 CTR 预估的工业标配 \cite{mcmahan2013ftrl}；天然输出稀疏权重 \\
+\addlinespace
+LAMB / LARS & 中 & 支持超大 batch & 超大 batch 分布式训练；需要信任比（trust ratio）修正 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[Adam 的 L2 正则为什么必须换成 weight decay]
+在 Adam 里直接加 L2 惩罚，等价于在梯度上加 $\lambda\bm{\theta}$。
+但这个惩罚项会被二阶矩 $\sqrt{\hat{v}}$ 一起缩放——对于梯度一直很小的参数，
+自适应分母会把 L2 的效果放大，导致「本来该保留的参数被过度收缩」。
+\term{AdamW}{Adam with Decoupled Weight Decay} 的做法是把衰减项从梯度中拿出来：
+$\bm{\theta}_{t+1} = (1-\eta\lambda)\bm{\theta}_t - \eta \hat{\bm{m}}_t/(\sqrt{\hat{\bm{v}}_t}+\epsilon)$。
+在 Embedding 表上，这个区别会显著影响稀疏 ID 的学习效果，是很多「换了优化器就涨点」案例的真实原因。
+\end{insight}
+
+\subsection{牛顿法与拟牛顿：为什么深度模型不用二阶方法}
+
+牛顿法用 Hessian 修正方向：$\bm{\theta}_{t+1} = \bm{\theta}_t - \bm{H}^{-1}\bm{g}_t$，
+在二次函数上一步收敛。但 Hessian 是 $d \times d$ 的，存储 $O(d^2)$、求逆 $O(d^3)$，
+对 $d = 10^8$ 级别的 Embedding 完全不可行。
+\term{L-BFGS}{Limited-memory BFGS} 用最近 $m$ 步的梯度差近似 $\bm{H}^{-1}\bm{g}$，
+把存储降到 $O(md)$，在中小规模凸问题（如 logistic 回归、CRF \cite{lafferty2001crf}）上仍是首选；
+但在随机小批量、非凸、上亿参数的场景下，二阶信息本身噪声太大，收益不如一阶 + 好的调度。
+
+结论：\kw{二阶方法属于「中小规模凸优化 + 需要高精度解」的场合；深度学习的默认答案是一阶自适应方法。}
+
+\subsection{正则化：L1、L2 与弹性网}
+
+\begin{equation}
+\Omega_{\text{L1}}(\bm{\theta}) = \lambda\norm{\bm{\theta}}_1,
+\qquad
+\Omega_{\text{L2}}(\bm{\theta}) = \frac{\lambda}{2}\norm{\bm{\theta}}_2^2,
+\qquad
+\Omega_{\text{EN}}(\bm{\theta}) = \lambda_1\norm{\bm{\theta}}_1 + \frac{\lambda_2}{2}\norm{\bm{\theta}}_2^2 .
+\label{eq:reg}
+\end{equation}
+
+L2 的几何解释是高斯先验下的 MAP 估计，作用是把权重整体压小、缓解共线性；
+L1 是拉普拉斯先验，作用是把不重要的权重\kw{精确压到 0}，产生稀疏解。
+L1 之所以能产生零，是因为它在 0 点的次梯度是一个区间 $[-1,1]$，
+当梯度落入这个区间时，最优解就停在 0 上（软阈值算子
+$S_\lambda(z) = \text{sign}(z)\max(|z|-\lambda, 0)$）。
+
+\term{弹性网}{Elastic Net} 同时包含两项：L1 做特征选择，L2 处理「相关特征组」——
+纯 L1 在遇到高度相关的特征组时会随机保留一个、丢弃其余，弹性网倾向\kw{成组保留}，
+在行为特征高度相关的推荐场景下通常更稳。
+
+\subsection{拉格朗日乘子与 KKT：预算约束下的分配}
+
+带约束的优化在广告与推荐里无处不在：预算平滑、频控、多样性配额、坑位数限制。
+以「预算约束下最大化总价值」为例：
+
+\begin{equation}
+\max_{\bm{x}} \sum_{i=1}^{n} v_i x_i
+\quad \text{s.t.} \quad
+\sum_{i=1}^{n} c_i x_i \le B, \;\; 0 \le x_i \le 1 .
+\label{eq:budget-primal}
+\end{equation}
+
+构造拉格朗日函数 $\mathcal{L}(\bm{x},\lambda,\bm{\mu},\bm{\nu}) = \sum_i v_i x_i
+- \lambda\big(\sum_i c_i x_i - B\big) + \sum_i \mu_i x_i - \sum_i \nu_i (x_i - 1)$，
+\term{KKT 条件}{Karush--Kuhn--Tucker Conditions} 给出：
+
+\begin{equation}
+\begin{cases}
+\nabla_{x_i}\mathcal{L} = v_i - \lambda c_i + \mu_i - \nu_i = 0, & \forall i, \\
+\lambda \ge 0, \;\; \lambda\Big(\sum_i c_i x_i - B\Big) = 0, & \text{(互补松弛)} \\
+\mu_i \ge 0,\; \mu_i x_i = 0, \;\; \nu_i \ge 0,\; \nu_i(x_i-1) = 0, & \forall i .
+\end{cases}
+\label{eq:kkt}
+\end{equation}
+
+互补松弛条件给出了最实用的解读：\kw{当预算没花完时 $\lambda = 0$，最优策略是「谁的价值密度高就给谁」；
+当预算花完时 $\lambda > 0$，此时 $x_i = 1$ 的条件是 $v_i/c_i \ge \lambda$}。
+换句话说，\textbf{$\lambda$ 就是「单位成本的边际价值」，也是整个系统的影子价格}。
+广告里广泛使用的预算平滑（pacing）算法，本质上就是在线估计这个 $\lambda$
+并用它把「全天预算」摊平到每个流量机会上。
+
+\begin{insight}[影子价格是一个可以复用的思维模型]
+当你看到业务方说「这个位置必须给品牌客户留 20\% 坑位」时，
+正确的算法回应不是「好」或「不好」，而是：\textbf{这会抬高系统的 $\lambda$，等于给所有流量加了一道影子成本}。
+把它写进目标函数、让分配器去算代价，比在业务规则里硬编码要健康得多。
+这套「约束 $\to$ 拉格朗日 $\to$ 影子价格 $\to$ 在线学习 $\lambda$」的链路，
+在广告、推荐多样性、库存分配、物流装载率里是同一个数学。
+\end{insight}
+
+\subsection{FTRL-Proximal：工业 CTR 预估的标配}
+
+\term{FTRL}{Follow The Regularized Leader} 的出发点是：在线学习中，
+不只用当前梯度，而是累积历史梯度来决定方向。Proximal 版本加上「不要离上一步太远」的约束，
+得到 Google 在 \cite{mcmahan2013ftrl} 中推广的更新式（逐维 $i$ 独立）：
+
+\begin{equation}
+\begin{aligned}
+\bm{z}_t &= \bm{z}_{t-1} + \bm{g}_t
+- \Big(\frac{1}{\eta_t} - \frac{1}{\eta_{t-1}}\Big)\bm{w}_t, &\quad
+\bm{n}_t &= \bm{n}_{t-1} + \bm{g}_t^{\odot 2}, \\
+\bm{w}_{t+1,i} &=
+\begin{cases}
+0, & \abs{z_{t,i}} \le \lambda_1, \\[2pt]
+-\dfrac{z_{t,i} - \text{sign}(z_{t,i})\,\lambda_1}{\dfrac{\beta + \sqrt{n_{t,i}}}{\alpha} + \lambda_2}, & \text{otherwise},
+\end{cases}
+\end{aligned}
+\label{eq:ftrl}
+\end{equation}
+
+其中 $\eta_t = \alpha / (\beta + \sqrt{n_t})$ 是自适应学习率，$\bm{g}_t$ 抓取到的特征之外的分量不做更新。
+
+\begin{insight}[FTRL 为什么稀疏：两个机制叠加]
+\textbf{机制一：L1 的软阈值}。\cref{eq:ftrl} 的第一个分支直接把 $\abs{z_i} \le \lambda_1$ 的维度置零，
+这是 L1 正则的标准后果。
+\textbf{机制二：累积梯度 $z$ 的「遗忘」效应}。只有当某个特征持续出现并贡献同向梯度时，
+$z_i$ 才能积累到超过 $\lambda_1$；偶尔出现、方向随机（正负抵消）的特征永远停在 0 上。
+这两者叠加，使得 FTRL 训练出来的模型里\textbf{大量低频 ID 的权重精确为零}，
+离线模型体积可以小一个数量级，线上加载与打分都因此受益。
+另一个不太被提及的好处是：置零本身就抑制了低频特征的过拟合——
+在 CTR 预估里，「只出现过 3 次的特征」几乎必然是噪声。
+\end{insight}
+
+与 FTRL 相配的还有工程细节：\kw{特征哈希}（把百万级字符串 ID 映射到 $2^{20} \sim 2^{24}$ 维定长数组）、
+\kw{特征筛选}（按出现次数与信息增益做离线过滤）、\kw{每日全量重训 + 实时增量}。
+\cite{he2014practical} 给出的经验是，在这类系统里\kw{特征工程与样本质量的收益通常大于模型结构本身}。
+
+\subsection{采样 softmax 与负采样}
+
+当类别数 $N$ 达到百万级（下一个视频、下一个商品），精确 softmax 的分母
+$\sum_{j=1}^{N}\exp(s_j)$ 无法承受，于是有两条路。
+
+\textbf{路径一：采样 softmax（sampled softmax）}。从某个提议分布 $q$ 中抽 $K$ 个负样本，
+并对 logits 做重要性校正：
+
+\begin{equation}
+\Prob(i \given c) \approx
+\frac{\exp\big(s_i - \log q_i\big)}
+{\exp\big(s_i - \log q_i\big) + \sum_{j \in \mathcal{S}} \exp\big(s_j - \log q_j\big)} .
+\label{eq:sampled-softmax}
+\end{equation}
+
+减去 $\log q_i$ 是关键：如果负样本是按热度采样的（热门物品被采到的概率高），
+不校正会让模型系统性低估热门物品。YouTube 的候选生成就采用了这一思路 \cite{covington2016youtube}。
+
+\textbf{路径二：负采样 + 二元分类}。把 $N$ 分类拆成「正样本 vs 噪声」的二分类，
+word2vec 的 \term{负采样}{Negative Sampling} \cite{mikolov2013word2vec} 与
+BPR \cite{rendle2009bpr} 都属于这一类。采样分布常用
+$q(j) \propto \text{count}(j)^{3/4}$（word2vec 的经验指数），
+在推荐里也可以按热度平滑 $\text{count}(j)^{\alpha}$，$\alpha \in [0.5, 0.75]$。
+
+\begin{pitfall}[负采样比例的三个误区]
+\begin{enumerate}
+  \item \textbf{「负样本越多越好」}：采样数从 100 提到 1000，训练时间线性上升，
+        但收益通常在几百之后饱和；更高效的做法是\kw{提高负样本难度}（hard negative：
+        用当前模型召回的相似但未交互物品）。
+  \item \textbf{忽略采样分布带来的偏差}：训练时的负样本分布不等于服务时的候选分布，
+        直接用训练 logit 做概率解释会严重高估 CTR。
+        这是 \cite{chapelle2014simple} 讨论的核心问题之一：\kw{采样会破坏校准}。
+  \item \textbf{负样本中混入未来正样本}：如果从「全量未交互」里采样，
+        很容易采到「用户后来会喜欢、只是当时没曝光」的物品，把真正的正样本当负样本训练。
+        必须严格按曝光日志构造负样本。
+\end{enumerate}
+\end{pitfall}
+
+\section{机器学习基础}
+
+\subsection{树模型：GBDT 及其两个主流实现}
+
+\term{梯度提升决策树}{Gradient Boosting Decision Tree, GBDT} 的思想是\kw{在函数空间做梯度下降}：
+每一轮训练一棵新树去拟合当前模型的负梯度（伪残差），再以学习率 $\nu$ 叠加。
+
+\begin{equation}
+F_m(\bm{x}) = F_{m-1}(\bm{x}) + \nu\, h_m(\bm{x}),
+\qquad
+h_m = \argmin_{h \in \mathcal{H}} \sum_{i=1}^{n} \Big(\underbrace{-\frac{\partial L(y_i, F(\bm{x}_i))}{\partial F}}_{r_{im}}\Big)^2 .
+\label{eq:gbdt}
+\end{equation}
+
+XGBoost 的关键改进是使用二阶泰勒展开，并同时优化正则项：
+
+\begin{equation}
+\mathcal{O}^{(t)} \approx \sum_{i=1}^{n}\Big[g_i f_t(\bm{x}_i) + \tfrac{1}{2}h_i f_t^2(\bm{x}_i)\Big]
++ \gamma T + \frac{\lambda}{2}\sum_{j=1}^{T} w_j^2,
+\qquad
+w_j^\star = -\frac{G_j}{H_j + \lambda},
+\label{eq:xgboost}
+\end{equation}
+
+其中 $G_j = \sum_{i \in I_j} g_i$、$H_j = \sum_{i \in I_j} h_i$。
+由此可以得到分裂增益 $\text{Gain} = \frac{1}{2}\big[\frac{G_L^2}{H_L+\lambda} + \frac{G_R^2}{H_R+\lambda}
+- \frac{(G_L+G_R)^2}{H_L+H_R+\lambda}\big] - \gamma$。
+$\lambda$ 收缩叶权重、$\gamma$ 控制叶子数、再加上行/列采样，
+这套正则化组合是 XGBoost 能在小样本上依然稳健的原因。
+
+LightGBM 的两项工程创新直接决定了它在大规模场景的统治地位：
+\kw{直方图算法}（把连续特征离散到 255 个桶，分裂点搜索从 $O(n\log n)$ 降到 $O(n)$）
+与\term{leaf-wise 生长}{Leaf-wise Growth}（每次选增益最大的叶子分裂，同叶子数下损失更低，
+但要靠 \code{max\_depth} / \code{num\_leaves} 防止过拟合）。
+推荐与广告的特征体系里，有效信息常常集中在少数强特征上，
+leaf-wise 的生长方式能更快把它们切出来，这也是 LightGBM 在排序任务上常用作强 baseline 的原因。
+排序场景下，LambdaMART \cite{wu2010lambdamart} 把 NDCG 这类不可微指标通过 $\lambda_{ij}$ 梯度化，
+是 GBDT 与学习排序的经典结合。
+
+\subsection{特征重要性与 SHAP}
+
+树模型自带的 \code{gain}/\code{split} 重要性有两个已知缺陷：
+一是偏向高基数特征（ID 类特征容易刷高 gain），二是只在训练集上度量、无法反映方向性。
+\term{SHAP}{SHapley Additive exPlanations} 用合作博弈的 Shapley 值 \cite{shapley1953value} 定义特征贡献：
+
+\begin{equation}
+\phi_i(f, \bm{x}) = \sum_{\mathcal{S} \subseteq \mathcal{F} \setminus \{i\}}
+\frac{\abs{\mathcal{S}}!\,\big(\abs{\mathcal{F}} - \abs{\mathcal{S}} - 1\big)!}{\abs{\mathcal{F}}!}
+\Big[f\big(\bm{x}_{\mathcal{S} \cup \{i\}}\big) - f\big(\bm{x}_{\mathcal{S}}\big)\Big] .
+\label{eq:shapley}
+\end{equation}
+
+它满足\kw{局部准确性}（$\sum_i \phi_i = f(\bm{x}) - \E[f]$）、\kw{对称性}与\kw{一致性}，
+因此可以做「单个样本为什么被打了高分」这种归因。
+精确计算需要指数级枚举，实践中用 TreeSHAP（树模型上 $O(TLD^2)$ 的多项式算法）或 KernelSHAP 采样近似。
+
+\begin{pitfall}[SHAP 最常见的三种误读]
+(1) 把 SHAP 值当成因果效应——它只是模型的局部线性近似，
+特征相关时贡献会在相关特征间被「分摊」，与干预效应无关；
+(2) 用全局平均 $\abs{\phi}$ 排序做特征筛选，忽略方向与非线性；
+(3) 用训练集算 SHAP 并据此做业务决策，忽略了分布外样本的解释不可靠。
+正确用法是把 SHAP 当作\kw{调试工具}：解释异常样本、发现穿越特征、验证业务假设。
+\end{pitfall}
+
+\subsection{类别特征处理：四种方案的取舍}
+
+\begin{table}[htbp]
+\centering
+\caption{类别特征四种编码方案的对比}
+\label{tab:categorical}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{1.9cm} L{2.0cm} L{1.5cm} Y}
+\toprule
+\tabhead{方案} & \tabhead{维度} & \tabhead{表达能力} & \tabhead{主要风险} & \tabhead{适用条件} \\
+\midrule
+One-hot & 基数 $K$ & 无泛化（线性模型上） & 高基数爆炸 & 基数 $< 10^3$、线性模型或树模型 \\
+\addlinespace
+Target/均值编码 & 1 & 强，直接利用标签 & 标签泄漏、过拟合 & 必须用\kw{交叉折（out-of-fold）}统计并做平滑 \\
+\addlinespace
+Embedding & $d$（常取 8--64） & 最强，可学习相似性 & 显存、冷启动 & 深度学习模型；高频 ID 才有足够样本 \\
+\addlinespace
+哈希（Hashing） & 固定 $2^b$ & 中，有冲突 & 冲突带来噪声 & 特征空间无界、在线学习、FTRL 场景 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Target encoding 是泄漏重灾区，必须遵守三条纪律：
+统计量只能来自\kw{训练折}（用 K 折 out-of-fold 生成），
+必须做\kw{平滑}（$\bar{y}_{\text{te}} = \frac{n\bar{y} + m\bar{y}_{\text{prior}}}{n+m}$，
+$m$ 常取 10--100），并且\kw{时间上只能使用标签发生之前的数据}（这一点与 \cref{eq:bayes} 的先验思想一致）。
+\cite{juan2017ffm} 中 FFM 对高基数特征的处理、\cite{he2014practical} 中对哈希与特征筛选的讨论，
+都是这一环节的经典参考。
+
+\begin{pitfall}[Target encoding 的泄漏是「离线看不出来」的]
+用全量数据算均值编码，模型能通过该特征直接读到标签信息，
+离线 AUC 会明显偏高而线上直接崩掉。识别方法：
+（1）看该特征的重要性是否异常靠前；
+（2）把该特征单独拿出来做单特征模型，若 AUC 高得离谱即可疑；
+（3）做\kw{时间切分验证}，用上周数据编码、本周数据评估，如果 AUC 掉很多就说明有泄漏。
+修复后离线指标会「变差」，但线上会变好——这是健康信号，不要试图把它调回去。
+\end{pitfall}
+
+\subsection{特征穿越与时间旅行}
+
+\term{特征穿越}{Feature Leakage / Label Leakage} 指训练时用到了\kw{预测时刻不可获得}的信息。
+它的形态远比「不小心用了标签」更隐蔽，至少有以下五种典型形态：
+
+\begin{pitfall}[特征穿越的五种典型形态]
+\begin{enumerate}
+  \item \textbf{标签直接派生特征}：如「是否为高价值用户」由「订单金额」计算，
+        而订单金额又来自未来的成交。
+  \item \textbf{全量统计窗口}：特征用「过去 30 天」聚合，但样本时间点在窗口中间，
+        等于看到了未来。正确做法是\kw{滚动窗口 + 严格截止到样本时刻}（point-in-time join）。
+  \item \textbf{未来行为入特征}：把「用户次日是否活跃」「商品次日 GMV」这类
+        在预测时点后才产生的量放进特征表，通常源于离线任务用 T+1 全量覆盖。
+  \item \textbf{样本构造泄漏}：负样本从「全量未交互」采样，
+        采到了实际上后来被用户喜欢的物品；或正样本按曝光后点击构造，
+        但特征里带了曝光位置信息而服务时拿不到。
+  \item \textbf{特征回填回滚不一致}：离线用修正后（晚到）的埋点重算特征，
+        线上只能拿到即时值，二者口径不同，模型学到了离线版本的「特权信息」。
+\end{enumerate}
+\textbf{排查手段}：离线\kw{重放（replay）}——用当时的线上特征快照复现打分，
+对比离线 AUC 与线上 AUC；若离线高出一大截，几乎可以确定存在穿越。
+\end{pitfall}
+
+\subsection{样本权重与概率校准}
+\label{sec:calibration}
+
+工业模型的原始输出很少直接可用：负采样会改变先验，多目标融合会改变尺度，
+不同场景的 CTR 基准差几个数量级。校准就是把这些输出映射回「真实概率」。
+
+\textbf{Platt 缩放}：在 logit 上做一维 logistic 回归，
+$p_{\text{cal}} = \sigma\big(A\, z + B\big)$，其中 $z$ 是原始 logit。
+参数只有两个，用少量数据即可拟合，缺点是只做单调仿射、无法修正非单调的校准偏差。
+
+\textbf{等渗回归（isotonic regression）}：求单调且最小化平方误差的分段常数函数，
+用 PAV（Pool Adjacent Violators）算法 $O(n\log n)$ 求解，
+表达能力强但需要更多数据，且容易在小样本上过拟合，通常要限制分段数。
+
+校准的度量用\term{期望校准误差}{Expected Calibration Error, ECE}：
+
+\begin{equation}
+\text{ECE} = \sum_{b=1}^{B}\frac{n_b}{N}\Big|\text{acc}(b) - \text{conf}(b)\Big| ,
+\qquad
+\text{LogLoss} = -\frac{1}{N}\sum_{i=1}^{N}\Big[y_i\log p_i + (1-y_i)\log(1-p_i)\Big] .
+\label{eq:calibration}
+\end{equation}
+
+\begin{insight}[AUC 不看校准，但业务看]
+AUC 只依赖排序，任何单调变换都不改变它；而\kw{广告出价、预算分配、GMV 预估}都要用概率的绝对值。
+一支 AUC 提升但校准变差的模型，在广告系统里可能是负收益：
+pCTR 系统性高估 20\% 会让广告主超投、平台收入短期上升但长期流失。
+因此模型上线必须同时看三件事：\textbf{排序指标（AUC/GAUC）、校准指标（ECE/校准曲线）、业务指标（ROI/ROAS）}。
+在线校准的工业做法是\kw{分场景分时段的分桶校准表}，按 pCTR 桶与流量类型维护，
+定时用当日数据更新；oCPC/oCPM 场景下这一步直接决定赔付与效果承诺是否成立 \cite{zhang2016ocpc}。
+\end{insight}
+
+\section{评估指标大全}
+
+\subsection{AUC 的概率解释}
+
+\term{AUC}{Area Under the ROC Curve} 有一个极其干净的概率含义：
+\kw{随机取一个正样本、一个负样本，模型给正样本打分更高的概率}。
+
+\begin{equation}
+\AUC = \Prob\big(s(\bm{x}^{+}) > s(\bm{x}^{-})\big) + \tfrac{1}{2}\Prob\big(s(\bm{x}^{+}) = s(\bm{x}^{-})\big)
+= \frac{1}{n_+ n_-}\sum_{i \in \mathcal{P}}\sum_{j \in \mathcal{N}}
+\Big[\mathbf{1}(s_i > s_j) + \tfrac{1}{2}\mathbf{1}(s_i = s_j)\Big] .
+\label{eq:auc}
+\end{equation}
+
+这个解释直接给出三条工程结论：
+\begin{itemize}
+  \item AUC 是\kw{成对（pairwise）}指标，衡量的是全局排序能力，与阈值无关，因此对正负样本比例不敏感；
+  \item 它也意味着 AUC 对「样本容易区分」的那部分不敏感——当正负样本极度不平衡时，
+        绝大多数负样本都是「显然的负」，AUC 被这些简单对刷高，掩盖了头部排序的问题；
+  \item 计算复杂度是 $O(n\log n)$（排序后按秩求和，即 Mann--Whitney $U$ 统计量），
+        这也是离线评估几十亿样本仍然可行的原因。
+\end{itemize}
+
+\begin{formulacard}[AUC 的两种等价算法]
+\textbf{秩和法}（$O(n\log n)$，工程首选）：
+$\AUC = \dfrac{\sum_{i \in \mathcal{P}} r_i - n_+(n_++1)/2}{n_+ n_-}$，$r_i$ 是正样本按分数升序的秩。
+\textbf{ROC 面积法}（$O(n\log n)$ 排序 + $O(n)$ 扫描）：按分数降序扫描，
+以 FPR 为横轴、TPR 为纵轴做梯形积分。
+两者数值等价，但秩和法在分布式（Spark/MapReduce）里更容易并行：每个分片算局部秩与计数，
+再合并即可。注意\textbf{折线法（梯形积分）与秩和法在存在并列分数时结果略有差异}，
+线上监控必须固定一种口径，否则指标会莫名其妙地「漂移」。
+\end{formulacard}
+
+\subsection{GAUC：分组 AUC 及其分组含义}
+
+\term{GAUC}{Grouped AUC} 先按用户（或 session、query）分组算 AUC，再按组权重加权平均：
+
+\begin{equation}
+\text{GAUC} = \frac{\sum_{u=1}^{U} w_u \cdot \AUC_u}{\sum_{u=1}^{U} w_u},
+\qquad
+w_u \in \{\text{impression}_u,\; \text{click}_u,\; 1\},
+\label{eq:gauc}
+\end{equation}
+
+其中 $\AUC_u$ 只在该组内部的样本对上计算，$w_u$ 通常取该组的曝光数或点击数。
+
+下面给出一个可直接复用的 GAUC 计算实现，注意它显式跳过了单类分组：
+
+\begin{lstlisting}[style=growth, language=Python, caption={GAUC 的分组加权实现（跳过单类分组，权重取曝光数）}]
+import numpy as np
+from collections import defaultdict
+
+def auc_pairwise(y, s):
+    # y: 0/1 labels, s: scores; O(n log n) rank-sum form with tie handling
+    order = np.argsort(s, kind="mergesort")
+    ranks = np.empty(len(s), dtype=np.float64)
+    ranks[order] = np.arange(1, len(s) + 1, dtype=np.float64)
+    # average ranks for ties so that ties contribute 0.5
+    df = np.argsort(s, kind="mergesort")
+    i = 0
+    while i < len(df):
+        j = i
+        while j + 1 < len(df) and s[df[j + 1]] == s[df[i]]:
+            j += 1
+        if j > i:
+            ranks[df[i:j + 1]] = ranks[df[i:j + 1]].mean()
+        i = j + 1
+    pos = ranks[y == 1]
+    n_pos, n_neg = len(pos), len(s) - len(pos)
+    if n_pos == 0 or n_neg == 0:
+        return None  # undefined for a single-class group
+    return (pos.sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
+def gauc(group_ids, y, s, weight="impression"):
+    buckets = defaultdict(list)
+    for g, yi, si in zip(group_ids, y, s):
+        buckets[g].append((yi, si))
+    num, den = 0.0, 0.0
+    for g, rows in buckets.items():
+        yy = np.array([r[0] for r in rows])
+        ss = np.array([r[1] for r in rows])
+        a = auc_pairwise(yy, ss)
+        if a is None:
+            continue
+        w = float(len(rows)) if weight == "impression" else float(yy.sum())
+        num += w * a
+        den += w
+    return num / den if den > 0 else float("nan")
+\end{lstlisting}
+
+为什么需要 GAUC？因为线上排序是\kw{组内排序}：用户只会看到同一屏内的相对顺序，
+跨用户的分数高低不构成任何体验差异。全局 AUC 允许「A 用户所有物品都排在 B 用户所有物品之前」
+这种对线上毫无意义的模式贡献分数。GAUC 把评估限制在「同一屏内」，
+因此与线上收益的相关性通常明显高于全局 AUC。
+
+三个必须注意的口径细节：
+（1）$w_u$ 选曝光数还是点击数会显著改变结果，点击数加权更贴近「点击样本上的排序质量」，
+但方差更大、对长尾用户更敏感；
+（2）单组只有正样本或只有负样本时 $\AUC_u$ 未定义，标准做法是\kw{跳过该组}，
+这会让 GAUC 在样本极稀疏时（如全部样本只有 5 个用户）不稳定；
+（3）GAUC 与 AUC 不可直接比较大小，必须固定权重的定义并回溯监控。
+
+\subsection{LogLoss、PR-AUC 与校准度}
+
+\begin{itemize}
+  \item \term{对数损失}{LogLoss}：见 \cref{eq:calibration}，同时惩罚排序错误与校准错误，
+        是训练目标与监控指标之间的桥梁；它的缺点是对「过度自信的错误」惩罚极大，
+        单个 $p=0.99$ 的错样本就能贡献 4.6 的损失。
+  \item \term{PR-AUC}{Precision--Recall AUC}：正类极度稀少时（转化率 $10^{-4}$ 量级）
+        比 ROC-AUC 更敏感，因为它的基线是正类先验而不是 0.5。
+        CTR/CVR 场景下建议\kw{同时报 AUC 与 PR-AUC}。
+  \item \textbf{校准度}：用 ECE 与校准曲线衡量，见 \cref{eq:calibration}。
+        工程上还会看\kw{分桶偏差}（predicted vs actual 的比值），
+        因为广告计费只关心「预测概率的绝对值是否可信」。
+\end{itemize}
+
+\subsection{排序指标：NDCG、MAP、MRR、Recall@K、HitRate}
+
+\begin{equation}
+\text{DCG@}K = \sum_{i=1}^{K}\frac{2^{rel_i} - 1}{\log_2(i+1)},
+\qquad
+\NDCG@K = \frac{\text{DCG@}K}{\text{IDCG@}K} ,
+\label{eq:ndcg}
+\end{equation}
+
+\begin{equation}
+\MAP = \frac{1}{\abs{\mathcal{U}}}\sum_{u \in \mathcal{U}}\frac{1}{\abs{\mathcal{R}_u}}
+\sum_{k=1}^{\abs{\mathcal{R}_u}} \text{rel}_u(k)\cdot \Precision@k ,
+\qquad
+\MRR = \frac{1}{\abs{\mathcal{U}}}\sum_{u \in \mathcal{U}} \frac{1}{\text{rank}_u} .
+\label{eq:map-mrr}
+\end{equation}
+
+\begin{table}[htbp]
+\centering
+\caption{排序与召回指标速查（含典型使用位置与误读）}
+\label{tab:rank-metrics}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{1.9cm} L{2.6cm} Y}
+\toprule
+\tabhead{指标} & \tabhead{关注范围} & \tabhead{典型使用位置} & \tabhead{常见误读} \\
+\midrule
+Recall@K & 前 $K$ 是否覆盖 & 召回层主指标 & 只报 Recall 不看 K：$K$ 放大到 1000 时人人都是 99\% \\
+\addlinespace
+HitRate@K & 前 $K$ 是否命中 & 召回层、Top-N 推荐 & 与 Recall 混淆；单目标场景下两者接近，多目标下差异大 \\
+\addlinespace
+NDCG@K & 位置敏感的分级相关性 & 精排、搜索排序 & 相关性分级靠人工标注，标注口径变了指标就不可比 \\
+\addlinespace
+MAP & 全部相关项的平均精度 & 搜索、多目标推荐 & 对「相关项总数」敏感，相关项多的 query 权重被放大 \\
+\addlinespace
+MRR & 第一个相关项的位置 & 问答、导航类搜索 & 只关心第一个命中，忽略后续质量 \\
+\addlinespace
+GAUC & 组内排序质量 & 精排（推荐） & 与全局 AUC 直接比大小；忽略权重定义 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\textbf{离线评估与线上收益的关系}：排序类离线指标（NDCG、GAUC）与线上收益的相关性
+通常高于分类指标（AUC），但它们仍然无法反映\kw{级联效应、位置偏置与长期生态影响}。
+这就是为什么工业界普遍采用三层验证：离线指标 $\to$ 离线重放 / 反事实评估
+\cite{dudik2011ee,swaminathan2015counterfactual,saito2020doubly} $\to$ 在线 A/B。
+
+\subsection{回归与业务指标}
+
+回归指标：$\text{RMSE} = \sqrt{\frac{1}{N}\sum(y_i - \hat{y}_i)^2}$，
+$\text{MAE} = \frac{1}{N}\sum\abs{y_i - \hat{y}_i}$，
+$\text{MAPE} = \frac{1}{N}\sum\abs{\frac{y_i - \hat{y}_i}{y_i}}$。
+RMSE 对大误差更敏感（平方放大），MAE 更稳健，MAPE 的问题是 $y_i \to 0$ 时爆炸，
+在销量预测、LTV 预测（大量零值）场景下要用 \term{sMAPE}{Symmetric MAPE} 或
+\term{WAPE}{Weighted Absolute Percentage Error}。
+
+业务指标的核心恒等式：
+
+\begin{equation}
+\text{ROI} = \frac{\text{利润}}{\text{投入}} = \frac{\text{收入} - \text{成本}}{\text{广告花费}},
+\qquad
+\text{ROAS} = \frac{\text{广告带来的收入}}{\text{广告花费}},
+\qquad
+\text{LTV}/\text{CAC} > 3 \;\; (\text{经验阈值}),
+\label{eq:ltv-cac}
+\end{equation}
+
+\begin{equation}
+\text{ARPU} = \frac{\text{总收入}}{\text{活跃用户数}},
+\qquad
+\text{留存}_t = \frac{\text{第 } t \text{ 天仍活跃的用户数}}{\text{首日新增用户数}} .
+\label{eq:arpu}
+\end{equation}
+
+\begin{pitfall}[业务指标口径不一致是最大的成本来源]
+同一个「ROI」，投放团队按平台报表的\kw{归因转化}算，财务按\kw{实际到账}算，
+两者可能差 30\%--50\%，差额来自：跨设备归因窗口、退货与拒付、税与汇率、渠道重复归因、
+平台口径的「加购」与内部口径的「支付」不同。
+\textbf{处理原则}：以财务口径为准绳，平台上的一切优化都换算到同一口径下评估；
+LTV 必须用\kw{同生群（cohort）}口径而不是「总用户平均」；
+广告花费要包含达人坑位费与服务商费用，不能只统计投放后台的消耗。
+\end{pitfall}
+
+\section{工程基础}
+
+\subsection{分布式训练：数据并行、模型并行与 AllReduce}
+
+\begin{table}[htbp]
+\centering
+\caption{分布式训练四种范式的取舍}
+\label{tab:parallel}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.5cm} L{2.4cm} Y}
+\toprule
+\tabhead{范式} & \tabhead{切分方式} & \tabhead{主要瓶颈} & \tabhead{适用与注意事项} \\
+\midrule
+数据并行 & 按 batch 切到多卡 & 梯度同步通信 & 最通用；需要用大 batch + lr 缩放（linear scaling / LARS） \\
+\addlinespace
+模型并行（张量） & 单层矩阵按维度切 & 卡间高频通信 & 超大层（如宽 Embedding、大 FFN）；对带宽要求极高 \\
+\addlinespace
+流水线并行 & 按层切分成多段 & 气泡（idle）率 & 段数越多气泡越大；需要 micro-batch 调度 \\
+\addlinespace
+参数服务器 & 参数切片存于多机 & 网络带宽与热点 & 稀疏 Embedding 的经典方案；支持异步更新 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+数据并行的核心通信操作是\term{全规约}{AllReduce}。\term{环状全规约}{Ring AllReduce} 把 $N$ 张卡的梯度环状传递，
+通信量与卡数无关、只与参数量成正比：
+
+\begin{equation}
+\text{CommVol}_{\text{ring}} = 2 \cdot \frac{N-1}{N} \cdot \abs{\bm{\theta}} ,
+\label{eq:allreduce}
+\end{equation}
+
+即「一次 reduce-scatter + 一次 all-gather」，每卡上下行约 $2\abs{\bm{\theta}}$。
+这解释了为什么大模型训练的瓶颈是\kw{通信而非算力}：
+$\abs{\bm{\theta}}$ 为 10 亿参数（fp16，2 GB）时，单步通信量约 4 GB，
+在 100 Gbps 网络下就是 0.3 秒级的纯通信时间。
+
+\begin{insight}[Embedding 是分布式训练里最特殊的部分]
+稠密参数（MLP 权重）适合 AllReduce，而 Embedding 表有 99\% 以上的行在单个 batch 里根本不被访问。
+对所有行做 AllReduce 是极大的浪费。因此工业界的标准做法是
+\kw{稀疏参数用参数服务器 + 稀疏梯度聚合，稠密参数用 AllReduce}，
+两套通信域分开维护；或者把 Embedding 表按行切到多卡、用 all-to-all 交换本 batch 命中的行。
+理解这一点，才能解释为什么「推荐模型的分布式训练框架」和「CV/NLP 的训练框架」长得不一样。
+\end{insight}
+
+\subsection{混合精度训练}
+
+用 fp16/bf16 存储与计算、用 fp32 维护主参数副本（master weights），
+可以同时获得显存下降（约 2 倍）与吞吐提升（Tensor Core 加速，常见 1.5--3 倍）。
+两个必须处理的数值问题：
+
+\begin{itemize}
+  \item \term{下溢}{Underflow}：fp16 的最小正规数约 $6\times 10^{-5}$，
+        小梯度会直接变成 0。解法是\term{损失缩放}{Loss Scaling}——把 loss 乘 $2^{k}$，
+        反传后再除回去，并动态调整 $k$（若连续若干步无溢出则增大，溢出则减半并跳过该步）。
+  \item \term{累加精度}{Accumulation}：softmax 的分母、BatchNorm 的统计量、
+        大 Embedding 的梯度累加都必须在 fp32 中进行，否则误差累积。
+        bf16 因为指数位与 fp32 相同（8 位）而不需要损失缩放，是更省心的选择，
+        代价是尾数位更少（7 位），精度略低。
+\end{itemize}
+
+结合 \term{闪存注意力}{FlashAttention} \cite{dao2022flashattention} 这类 IO 感知的算子优化，
+现代训练的收益往往来自\kw{减少显存读写}而非减少浮点运算次数——
+在硬件上，访存带宽早已是比算力更稀缺的资源。
+
+\subsection{Embedding 表的显存估算}
+
+这是面试与容量规划里出现频率最高的计算题，必须能徒手估：
+
+\begin{equation}
+\underbrace{M_{\text{emb}}}_{\text{总显存}}
+= \underbrace{N_{\text{feat}} \cdot D \cdot b}_{\text{参数本体}}
+\times \underbrace{(1 + r_{\text{opt}})}_{\text{优化器状态}}
+\times \underbrace{r_{\text{rep}}}_{\text{副本与碎片}}
++ \underbrace{M_{\text{dense}} + M_{\text{act}}}_{\text{稠密参数与激活}} ,
+\label{eq:emb-mem}
+\end{equation}
+
+其中 $N_{\text{feat}}$ 是特征取值总行数（所有特征表的行数之和），$D$ 是嵌入维度，
+$b$ 是每参数字节数（fp32 为 4、fp16/bf16 为 2），
+$r_{\text{opt}}$ 是优化器状态倍数（SGD+Momentum 约 1 份、Adam 需要 2 份额外状态，
+若主参数保持 fp32 还要再加），$r_{\text{rep}}$ 是副本系数（数据并行副本、梯度桶、碎片，常见 1.1--1.3）。
+
+\begin{toolbox}[Embedding 显存与 QPS 估算表（示范量级）]
+以 $N_{\text{feat}} = 10^9$ 行、Adam、fp32 主参数为例：
+
+\begin{center}
+\begin{tabularx}{\linewidth}{L{1.6cm} L{1.6cm} L{2.0cm} L{2.2cm} Y}
+\toprule
+\tabhead{维度 $D$} & \tabhead{参数本体} & \tabhead{含 Adam 状态} & \tabhead{含副本（$\times 1.2$）} & \tabhead{结论} \\
+\midrule
+8 & 32 GB & 约 96 GB & 约 115 GB & 单卡 A100 80G 放不下，需分片或降精度 \\
+\addlinespace
+16 & 64 GB & 约 192 GB & 约 230 GB & 标准做法：稀疏参数走参数服务器 \\
+\addlinespace
+32 & 128 GB & 约 384 GB & 约 460 GB & 只有超大规模稀疏系统才用；收益递减明显 \\
+\addlinespace
+16（bf16 存储） & 32 GB & 约 96 GB & 约 115 GB & 存储减半但优化器仍需 fp32 状态 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{QPS 与延迟粗算}（单机 GPU，用于量级判断）：
+若单次前向包含「用户塔 1 次（约 2 MFLOPs）+ 向量检索 1 次（HNSW，$10^7$ 库，约 1--5 ms）+
+精排 200 个候选（每个 0.5 MFLOPs）」，则单请求约 100 MFLOPs 量级。
+在标称 100 TFLOPS 的卡上、按 10\% 实际利用率算即 10 TFLOPS 可用，
+理论上限约每秒 10 万请求；但真实的瓶颈几乎总在\kw{显存带宽、批大小与 Python 调度开销}上，
+因此必须做\kw{动态批（dynamic batching）}把 batch 攒到 32--256 再送 GPU。
+缓存命中率每提高 10\%，等效算力提升往往超过换一代硬件。
+
+下面的脚本对应 \cref{eq:emb-mem}，可以直接用来做容量规划：
+
+\begin{lstlisting}[style=growth, language=Python, caption={Embedding 显存估算脚本（对应式 \ref{eq:emb-mem}）}]
+def emb_memory_gb(n_rows, dim, dtype_bytes=4, optimizer="adam",
+                  replication=1.2, dense_gb=0.0, activation_gb=0.0):
+    """Estimate total GPU memory for an embedding table."""
+    params = n_rows * dim * dtype_bytes
+    # optimizer state: sgd 0 extra, momentum 1x, adam 2x, adam + fp32 master 3x
+    extra = {"sgd": 0.0, "momentum": 1.0, "adam": 2.0, "adam_master": 3.0}[optimizer]
+    states = params * extra
+    total = (params + states) * replication + (dense_gb + activation_gb) * (1 << 30)
+    return total / (1 << 30)
+
+for d in (8, 16, 32):
+    print(d, round(emb_memory_gb(10 ** 9, d), 1), "GB")
+# -> 8: 115.2 GB   16: 230.4 GB   32: 460.8 GB
+\end{lstlisting}
+\end{toolbox}
+
+\subsection{在线服务延迟预算与 p99}
+
+平均延迟几乎不构成挑战，\kw{尾延迟（p99）}才是用户体验与超时率的主导因素。
+设一次请求经过 $S$ 个阶段，各阶段耗时 $\{T_1,\dots,T_S\}$，则
+
+\begin{equation}
+T_{\text{total}} = \sum_{s=1}^{S} T_s,
+\qquad
+\Prob\big(T_{\text{total}} > \tau\big) \le \sum_{s=1}^{S}\Prob\big(T_s > \tau_s\big)
+\;\;\text{（并集界，需 } \sum \tau_s = \tau \text{）} .
+\label{eq:latency-p99}
+\end{equation}
+
+注意 $p_{99}(T_{\text{total}}) \ne \sum_s p_{99}(T_s)$——除非各阶段完全同步相关，
+直接相加会高估；但\kw{并集界}给出了一个安全的工程上界，用于设定各阶段的独立超时预算。
+
+\begin{table}[htbp]
+\centering
+\caption{一次推荐请求的典型延迟预算拆解（示范量级，总预算 200 ms）}
+\label{tab:latency-budget}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{1.6cm} L{1.6cm} Y}
+\toprule
+\tabhead{阶段} & \tabhead{p50} & \tabhead{p99 预算} & \tabhead{优化与降级手段} \\
+\midrule
+网关 + 鉴权 & 3 ms & 10 ms & 连接复用、本地会话缓存 \\
+\addlinespace
+用户特征拉取 & 8 ms & 30 ms & 本地缓存 + 异步预取；超时降级为离线快照特征 \\
+\addlinespace
+召回（多路并行） & 20 ms & 60 ms & 各路独立超时（如 40 ms），按路裁剪；向量检索走 GPU 或专用引擎 \\
+\addlinespace
+精排（200 候选） & 30 ms & 80 ms & 动态批、模型量化（int8）、裁剪候选数 \\
+\addlinespace
+重排 + 业务规则 & 5 ms & 20 ms & 规则本地化，避免远程 RPC \\
+\addlinespace
+序列化 + 网络返回 & 10 ms & 30 ms & 字段裁剪、压缩、CDN/边缘节点 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[延迟优化的三个反直觉点]
+(1) \textbf{降级不是「返回空」}：正确的降级是切换到\kw{更便宜但结构相同的通路}
+（缓存结果、热门榜、离线快照），保证页面结构不塌；
+(2) \textbf{超时设置必须小于上游预算}：下游超时设得比上游还大，等于没有超时，
+会把级联超时放大成雪崩；行业经验是每层超时约为其上级预算的 60\%--80\%；
+(3) \textbf{p99 优化常常要动的是 GC 与内存分配}：大量临时对象导致的 GC 停顿
+在 p50 上完全看不出，却是 p99 的常见元凶，必须用火焰图与 GC 日志定位，
+而不是先怀疑模型。
+\end{pitfall}
+
+\subsection{缓存与降级策略}
+
+缓存的分层通常为：\kw{客户端/边缘缓存}（CDN，秒级到分钟级）
+$\to$ \kw{接入层缓存}（整页/整个响应，适用于非个性化或弱个性化场景）
+$\to$ \kw{特征缓存}（用户特征、物品特征，命中率通常最高）
+$\to$ \kw{结果缓存}（Top-N 结果，key 为用户 + 场景 + 上下文版本）。
+
+设计要点：
+\begin{itemize}
+  \item \textbf{缓存 key 必须包含特征版本与模型版本}，否则模型更新后仍在返回旧结果，
+        这是「上线了但指标没变」的经典原因；
+  \item \textbf{缓存击穿}用单飞（singleflight）合并并发回源；
+  \item \textbf{缓存雪崩}用过期时间随机抖动（jitter）打散；
+  \item \textbf{兜底策略}必须\kw{预演}：定期在预发环境注入特征服务失败、模型服务超时，
+        验证降级路径真的可用——没有演练过的降级等于没有降级。
+\end{itemize}
+
+\section{数据基础}
+
+\subsection{数仓分层：ODS / DWD / DWS / ADS}
+
+\begin{table}[htbp]
+\centering
+\caption{数仓分层与算法侧的对接方式}
+\label{tab:warehouse}
+\small
+\begin{tabularx}{\textwidth}{L{1.8cm} L{2.6cm} L{3.0cm} Y}
+\toprule
+\tabhead{层次} & \tabhead{内容} & \tabhead{典型产出} & \tabhead{算法侧关注点} \\
+\midrule
+ODS & 原始日志/业务库同步 & 埋点日志表、Binlog 表 & 埋点 schema 变更、事件时间与处理时间 \\
+\addlinespace
+DWD & 明细清洗与标准化 & 曝光/点击/转化明细宽表 & 去重口径、脏数据过滤、跨端 ID 打通 \\
+\addlinespace
+DWS & 主题域轻度汇总 & 用户日粒度行为汇总、物品统计 & 时间窗口与截止时刻必须明确 \\
+\addlinespace
+ADS & 面向应用的集市 & 训练样本表、特征表、报表 & 样本表要带\kw{快照时间}与\kw{特征版本} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+对算法工程师而言，最重要的两张表是\kw{样本表}与\kw{特征表}，而它们之间必须满足
+\term{时间点一致性}{Point-in-Time Correctness}：样本在第 $t$ 时刻的标签，
+只能与「$t$ 时刻之前可观测」的特征拼接。实现方式是给每个特征表加
+\code{feature\_time} 与 \code{version}，用区间连接（as-of join）而不是等值连接。
+
+\subsection{离线、近线、实时三条链路与 Lambda/Kappa}
+
+\begin{itemize}
+  \item \term{离线链路}{Offline}：T+1 或小时级批处理，用于训练样本、全量特征回填、报表。
+        优势是数据完整（可以等晚到的埋点）、可回溯、成本低；劣势是时效。
+  \item \term{近线链路}{Nearline}：分钟级流处理，把用户近期行为写入在线 KV。
+        它是「离线特征」与「实时特征」之间的缓冲区，也是推荐系统里最容易被低估的一环。
+  \item \term{实时链路}{Realtime}：毫秒级流处理，直接从消息队列消费曝光/点击事件，
+        更新在线特征与模型（在线学习）。
+\end{itemize}
+
+\term{Lambda 架构}{Lambda Architecture} = 批处理层 + 速度层，两套代码维护两份逻辑；
+\term{Kappa 架构}{Kappa Architecture} = 只用流处理，历史数据用流重放。实践中的选择标准很朴素：
+\kw{如果离线与实时的特征逻辑必须一致，就应该尽量共享代码}（流批一体，如 Flink SQL 统一批流语义），
+因为「两份实现必然产生两份口径」是数据不一致事故的头号来源。
+
+\subsection{特征一致性：离线与线上必须对齐的四件事}
+
+\begin{table}[htbp]
+\centering
+\caption{离线/线上特征一致性对照表}
+\label{tab:consistency}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{3.4cm} L{3.4cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{离线（训练）} & \tabhead{线上（服务）} & \tabhead{不一致的后果} \\
+\midrule
+时间窗口 & 批处理按自然日聚合 & 滚动滑动窗口 & 特征分布偏移，模型「学到了昨天的日界」 \\
+\addlinespace
+默认值 & 缺失填 0 或全局均值 & 缺失填 0 或走兜底逻辑 & 缺失率高的特征线上权重失真 \\
+\addlinespace
+类型与精度 & double/int64 & float32/量化值 & 阈值型特征（如「是否大于 100」）判断翻转 \\
+\addlinespace
+去重与顺序 & 按主键去重、可乱序 & 按到达顺序、可能重复 & 计数类特征系统性偏高或偏低 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[模型上线前的 20 项检查清单]
+\textbf{数据与样本}
+\begin{enumerate}
+  \item 训练样本时间范围与线上服务时间是否满足「只用过去」的约束？
+  \item 负样本是否来自真实曝光日志（而非全量未交互集合）？
+  \item 是否做了严格的时间切分验证（不是随机切分）？
+  \item 标签定义与业务报表口径是否一致（支付/下单/加购）？
+  \item 样本权重、去重规则、异常值处理是否有文档记录？
+\end{enumerate}
+\textbf{特征}
+\begin{enumerate}
+  \setcounter{enumi}{5}
+  \item 每个特征是否都能在服务时刻真实取到（逐条走查，不靠推断）？
+  \item 离线与线上的特征计算逻辑是否共享同一份代码或同一份 DSL？
+  \item 缺失值、默认值、类型精度是否两侧一致？
+  \item 特征覆盖率与新鲜度是否有监控（空值率、延迟、版本）？
+  \item 是否做了特征穿越的单特征体检（单特征 AUC 异常即报警）？
+\end{enumerate}
+\textbf{模型}
+\begin{enumerate}
+  \setcounter{enumi}{10}
+  \item 离线指标是否同时报了 AUC/GAUC/LogLoss/校准（而非只看 AUC）？
+  \item 是否做了离线重放，确认离线与线上打分可比？
+  \item 模型体积、加载时间、单次推理延迟是否在预算内？
+  \item 是否验证了极端输入（全零特征、超长序列、超大 ID）不崩溃？
+  \item 是否有版本号、训练数据版本与可回滚的历史模型？
+\end{enumerate}
+\textbf{服务与实验}
+\begin{enumerate}
+  \setcounter{enumi}{15}
+  \item 是否有超时、熔断、降级与兜底结果，且降级路径经过演练？
+  \item 是否配置了模型维度的监控（QPS、p99、空结果率、分数分布漂移）？
+  \item 分流是否做了 SRM 校验，实验互斥与分层是否正确？
+  \item 核心指标、护栏指标、长期指标是否都定义清楚？
+  \item 是否准备了回滚预案与决策标准（涨多少全量、跌多少回滚）？
+\end{enumerate}
+\end{toolbox}
+
+\begin{casebox}[案例：Google 的 FTRL 论文给了什么]
+\cite{mcmahan2013ftrl} 并非只提出一个新优化器，它完整记录了一个工业 CTR 系统的工程决策组合，
+这些决策到今天仍然是教科书式的：\\
+\textbf{(1) 优化器}：FTRL-Proximal，兼顾 AdaGrad 的稀疏性与在线学习的收敛性，
+在同等 AUC 下模型体积显著小于 L2 正则的 OGD；\\
+\textbf{(2) 特征}：把连续特征做分桶（并针对分位数分桶），把 ID 类特征哈希到固定空间，
+同时使用「低频过滤 + 特征概率下降」控制模型规模；\\
+\textbf{(3) 训练}：每日全量重训 + 在线增量更新，用「天级模型」保证稳定性、
+用「实时更新」捕捉当天热点，避免纯在线学习的方差；\\
+\textbf{(4) 评估}：离线 AUC 之外大量使用\kw{渐进验证（progressive validation）}与
+在线 A/B，并强调\textbf{校准}对最终收益的影响。\\
+\textbf{启示}：这篇论文的价值不在公式本身，而在于它展示了「指标—样本—特征—优化—服务」
+必须作为一个整体来设计；任何单点优化都会被其他环节的上限吃掉。
+\end{casebox}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 高频数学只有三块：\kw{线性代数（表示与检索）}、\kw{概率统计（推断与决策）}、\kw{一阶优化（学习）}；
+        其余内容按需查询即可。
+  \item 内积、余弦、欧氏距离由 $\norm{\bm{u}-\bm{v}}^2 = \norm{\bm{u}}^2+\norm{\bm{v}}^2-2\inner{\bm{u}}{\bm{v}}$
+        联系起来；归一化是在选择模型先验，不是数据清洗。
+  \item AUC 是「正样本得分高于负样本」的概率，衡量全局排序；GAUC 按用户分组加权，
+        与线上组内排序的相关性更高。二者都\kw{不反映校准}。
+  \item 交叉熵 = 负对数似然，logistic 是指数族的自然结果（log-odds 线性）；
+        偏差--方差分解提供了「该加特征还是该加正则」的诊断语言。
+  \item 实验前先定 MDE 再算样本量；多重比较必须用 FDR（BH 过程）控制，
+        并始终检查 SRM 与效应量。
+  \item 优化器的选择取决于稀疏性：稠密深度模型用 Adam/AdamW，
+        大规模稀疏 ID 特征的在线系统用 FTRL-Proximal，它的稀疏性来自 L1 软阈值与累积梯度的双重作用。
+  \item 带约束分配的统一工具是拉格朗日与 KKT，$\lambda$ 就是影子价格——
+        这是预算平滑、频控与多样性配额背后同一个数学。
+  \item 容量规划的三个必备公式：\kw{Embedding 显存估算}、\kw{AllReduce 通信量}、\kw{延迟预算分解}；
+        工程瓶颈通常不在算力，而在显存带宽、批大小与 GC。
+  \item 数据是模型的上限：样本表与特征表必须满足时间点一致性，
+        离线/近线/实时三条链路要尽量共享同一份逻辑，离线与线上的特征口径必须逐项对齐。
+  \item 上线不是「推模型」，而是走完 20 项检查清单；
+        离线指标变好而线上不涨，优先怀疑样本、穿越、级联与实验灵敏度这四类原因。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item AUC 的计算方式与物理意义是什么？为什么 AUC 提升但线上收益不涨？如何排查？
+  \item 为什么推荐系统精排更关注 GAUC 而不是全局 AUC？GAUC 的权重该怎么取，单组只有正样本时怎么处理？
+  \item 双塔模型为什么能用内积检索？它的表达能力损失体现在哪里？归一化与否对线上有什么影响？
+  \item FTRL 为什么稀疏？请写出它的更新式，并解释 $\lambda_1$ 与累积梯度 $z$ 各自的作用。
+  \item 给定 10 亿行 Embedding、维度 16、使用 Adam 训练，估算需要多少显存？如何做容量优化？
+  \item 线上请求总预算 200 ms，如何拆分各阶段延迟？为什么 $p_{99}(T_1+T_2) \ne p_{99}(T_1) + p_{99}(T_2)$？
+  \item 什么是特征穿越？请举出至少三种典型形态以及对应的排查方法。
+  \item 一个 A/B 实验显示核心指标提升 1\%、p 值 0.03，但你也看了 20 个指标，你会怎么下结论？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+到这里，后面每一章都会用到的工具已经备齐：向量表示与检索、概率与检验、优化与稀疏、
+指标与校准、分布式与延迟、数仓与一致性。
+下一章我们从推荐系统总论与召回开始（\cref{ch:recall}），
+读者会看到本节里的内积几何、负采样与 NDCG，如何立刻变成四路召回与漏斗级联的具体设计。

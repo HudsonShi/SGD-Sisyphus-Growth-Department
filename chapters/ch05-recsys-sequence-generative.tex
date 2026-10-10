@@ -1,0 +1,1065 @@
+\chapter{序列建模与生成式推荐}
+\label{ch:sequence}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 用户的行为序列里，到底藏着哪些静态画像与统计特征表达不了的信息？
+  \item GRU4Rec、SASRec、BERT4Rec 三代序列模型，每一代解决了上一代的什么问题，又付出了什么代价？
+  \item 行为序列从 50 条涨到 10000 条，为什么不能直接把 Transformer 拉长？SIM、ETA、TWIN 各自怎么做两阶段妥协？
+  \item 物品的语义 ID（semantic ID）为什么能让推荐变成「生成」？RQ-VAE 与层次 K-means 分别怎么构造它？
+  \item TIGER 与 HSTU 代表的两条生成式路线有什么本质区别？工业界在什么条件下才该跟进？
+  \item 强化学习做长期价值，为什么论文很多、真正上线的很少？
+\end{enumerate}
+\end{insight}
+
+\section{从「给候选集打分」到「生成下一步行为」}
+
+\subsection{范式的迁移：从判别式排序到生成式建模}
+
+过去十年推荐系统的主线是\textbf{判别式}的：给定用户 $u$、上下文 $\text{ctx}$ 和一个候选集合 $\mathcal{C}$，
+学习一个打分函数 $s(u, c, \text{ctx})$，然后按分数排序。双塔召回、DIN/DIEN 精排、MMoE 多目标，
+本质都是在这个框架里换更强的打分器（见 \cref{ch:recall} 与 \cref{ch:ranking}）。
+这个框架有两个隐含假设：\textbf{候选集是给定的}（模型只能从已有物品里挑），
+\textbf{打分是逐点的}（物品之间除了最后的重排，彼此独立）。
+
+生成式推荐换掉了这两个假设。它把推荐写成条件概率：
+
+\begin{equation}
+\Prob(i_{t+1} = c \given i_{1:t}, u)
+= \frac{\exp\big( \inner{ \phi(u, i_{1:t}) }{ \psi(c) } \big)}
+       {\sum_{c' \in \mathcal{C}} \exp\big( \inner{ \phi(u, i_{1:t}) }{ \psi(c') } \big)} ,
+\label{eq:next-item}
+\end{equation}
+
+其中 $i_{1:t}$ 是用户的行为序列，$\phi$ 是用户侧编码器，$\psi$ 是物品侧编码器。
+判别式系统关心的是式~\eqref{eq:next-item} 的\textbf{分子}（排序），生成式系统关心的是\textbf{整个分布}（输出什么）。
+一旦把推荐的输出建模成「一个由模型自己产生的序列」，候选集就不必再是固定的了：
+模型可以组合出训练集中从未出现过的物品序列，也可以直接生成物品的语义标识。
+
+\begin{table}[htbp]
+\centering
+\caption{判别式排序与生成式推荐的范式差异}
+\label{tab:disc-vs-gen}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{4.4cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{判别式排序} & \tabhead{生成式推荐} \\
+\midrule
+输出形式 & 每个候选一个分数 & 一个物品（或语义 ID）序列上的概率分布 \\
+\addlinespace
+候选集 & 外部给定，通常由多路召回拼成 & 由解码过程隐式定义，理论上不受限 \\
+\addlinespace
+训练目标 & 逐点/逐对损失（BCE、BPR、listwise） & 序列到序列的似然（自回归或 Cloze） \\
+\addlinespace
+物品表示 & 随机初始化的 ID embedding & 语义 ID（由内容/协同向量量化得到） \\
+\addlinespace
+泛化方式 & 靠特征与协同信号外推 & 靠语义前缀共享，天然可迁移到新物品 \\
+\addlinespace
+主要代价 & 召回与排序的能力上限 & 解码延迟、无效输出、工程链路重写 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{问题的输入、输出与业务约束}
+
+从工程视角看，序列建模要回答的问题非常具体：\textbf{给一个用户，把他的行为日志按时间排序，
+预测他下一步最可能消费什么。}输入通常是三类信息：
+
+\begin{itemize}
+  \item \textbf{行为序列}：$(i_1, e_1, \tau_1), \dots, (i_L, e_L, \tau_L)$，其中 $e$ 是事件类型（曝光、点击、加购、下单、负反馈），$\tau$ 是时间戳；
+  \item \textbf{静态画像}：性别、年龄、城市、会员等级等，用于与序列表示拼接或做条件调制；
+  \item \textbf{上下文}：当前时间、场景（首页/搜索/详情页）、设备、网络、地理位置。
+\end{itemize}
+
+输出取决于任务形态：在\textbf{召回层}，输出是 Top-$K$ 物品列表，要求延迟在毫秒量级；
+在\textbf{精排层}，输出是 CTR/CVR/时长等预估值；在\textbf{生成式系统}中，输出是一串语义 ID，需要再映射回真实物品。
+
+\begin{insight}[序列信号为什么不可替代]
+静态画像回答的是「这个人长期是什么样」，序列回答的是「这个人此刻正在想什么」。
+一个平时只买婴儿用品的账号，如果最近三天连续浏览露营装备，那么当前意图与画像严重冲突——
+这类\textbf{意图漂移}只有序列能捕捉。经验上，在电商与内容场景中，引入行为序列带来的离线 AUC 提升，
+通常与引入一整套静态画像特征的量级相当甚至更大；但它的代价是特征链路复杂度上升一个数量级，
+这正是 \cref{ch:receng} 要处理的问题。
+\end{insight}
+
+\section{评估口径：序列推荐到底该看什么指标}
+
+在评测之前必须先统一口径，否则「离线涨、线上跌」会反复出现。
+
+对于「预测下一个物品」的任务，最常用的是留一法（leave-one-out）：
+把每个用户的最后一条行为作为测试目标，其余作为历史。此时常用的指标有：
+
+\begin{equation}
+\HR\text{@}K = \frac{1}{\abs{\mathcal{U}}} \sum_{u \in \mathcal{U}}
+\mathbf{1}\Big[ \operatorname{rank}_u\big( i^{\star}_u \big) \le K \Big],
+\label{eq:hr}
+\end{equation}
+
+\begin{equation}
+\NDCG\text{@}K = \frac{1}{\abs{\mathcal{U}}} \sum_{u \in \mathcal{U}}
+\frac{ \mathbf{1}\big[ \operatorname{rank}_u(i^{\star}_u) \le K \big] }
+     { \log_2 \big( \operatorname{rank}_u(i^{\star}_u) + 1 \big) },
+\label{eq:ndcg}
+\end{equation}
+
+其中 $i^{\star}_u$ 是用户 $u$ 的真实下一物品，$\operatorname{rank}_u(\cdot)$ 是该物品在模型排序中的名次。
+由于只有一个正样本，理想 DCG 恰好为 $1$，所以式~\eqref{eq:ndcg} 不需要再除以 IDCG。
+
+\begin{table}[htbp]
+\centering
+\caption{序列推荐常用指标的口径与陷阱}
+\label{tab:seq-metrics}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{3.6cm} L{2.4cm} Y}
+\toprule
+\tabhead{指标} & \tabhead{计算要点} & \tabhead{对 $K$ 的敏感性} & \tabhead{常见误读} \\
+\midrule
+HR@K & 命中即得分，不区分名次 & 高，$K$ 越大越接近饱和 & 与线上曝光位数量无关，不能直接换算成收益 \\
+\addlinespace
+NDCG@K & 按名次对数折扣 & 中，头部名次主导 & 单正样本时数值天然很小，别和排序场景的 NDCG 比 \\
+\addlinespace
+MRR & 只取第一个命中的倒数名次 & 高 & 多正样本场景下会低估真实表现 \\
+\addlinespace
+Recall@K & 全量排序或采样负样本下统计 & 高 & 采样 100 个负样本与全量排序不可比 \\
+\addlinespace
+AUC / GAUC & 逐点二分类口径 & 低 & 与 NDCG 相关性弱，AUC 涨不代表 Top-$K$ 变好 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[离线指标「虚高」的四种来源]
+第一，\textbf{负样本采样方式不一致}：训练用 1 正 1 负，评估用 1 正 100 负，与全量排序差距巨大；
+第二，\textbf{时间穿越}：构造历史序列时用了测试时刻之后的行为，或者用「未来的物品特征」编码历史；
+第三，\textbf{重复物品泄漏}：测试目标是用户已交互过的物品，而该物品仍留在历史序列里；
+第四，\textbf{用户分布不一致}：评测集合里活跃用户占比过高，而线上流量以中低频用户为主。
+排查方法很朴素：把训练集里出现过、但评测时被当作「新目标」的样本比例打出来，
+再把序列的时间戳截断点与样本时间做一次全量比对，通常 10 分钟就能定位。
+\end{pitfall}
+
+\section{会话推荐与 GRU4Rec：把序列交给循环网络}
+
+\subsection{会话建模的问题设定}
+
+最早被认真处理的序列推荐问题不是「长序列」，而是\textbf{会话}（session）：
+用户在没有登录、或者只带来一次连续访问的情况下，系统只有当前这次会话的若干次点击可用，
+既没有稳定 ID，也没有长期历史。新闻推荐、短视频冷启动、跨境电商的匿名流量都属于这一类。
+公开数据集 MIND \cite{chen2019mind} 就是为新闻场景的会话推荐设计的，
+它的特点是：物品（新闻）生命周期极短、标题文本信息量大、用户兴趣高度分散。
+
+GRU4Rec \cite{hidasi2016gru4rec} 的贡献在于把这件事第一次做成了端到端的序列模型：
+用 GRU 编码会话内的点击序列，直接预测下一个点击物品。
+
+\begin{equation}
+\begin{aligned}
+z_t &= \sigmoid\big( W_z x_t + U_z h_{t-1} \big), \\
+r_t &= \sigmoid\big( W_r x_t + U_r h_{t-1} \big), \\
+\tilde{h}_t &= \tanh\big( W_h x_t + U_h ( r_t \odot h_{t-1} ) \big), \\
+h_t &= (1 - z_t) \odot h_{t-1} + z_t \odot \tilde{h}_t ,
+\end{aligned}
+\label{eq:gru}
+\end{equation}
+
+其中 $z_t$ 是更新门，$r_t$ 是重置门，$\odot$ 是逐元素乘。
+更新门的直觉是「记住多少旧状态、写入多少新信息」；重置门的直觉是「在计算候选状态时，旧状态有多大影响」。
+对序列推荐而言，这个结构天然适合表达「兴趣的延续与切换」：连续点击同一类目时门控保持开放，
+一旦出现跨类目的点击，重置门会快速清空旧语境。
+
+\subsection{训练目标：排序损失而不是交叉熵}
+
+GRU4Rec 的第二个贡献是\textbf{用排序损失替代逐点交叉熵}。原因很实际：
+物品空间动辄百万级，做完整 softmax 代价极高，而推荐本质上只关心「正样本排得比负样本高」。
+论文中使用的 TOP1 损失可以写成：
+
+\begin{equation}
+\mathcal{L}_{\text{TOP1}} = \frac{1}{N_s} \sum_{j=1}^{N_s}
+\Big[ \sigmoid\big( \hat{r}_{s,j} - \hat{r}_{s,j^{-}} \big)
++ \sigmoid\big( \hat{r}_{s,j^{-}} \big)^2 \Big],
+\label{eq:gru4rec-loss}
+\end{equation}
+
+其中 $\hat{r}_{s,j}$ 是正样本得分，$\hat{r}_{s,j^{-}}$ 是负样本得分。
+第一项把正负样本的分数差推大，第二项把负样本的绝对分数压向 $0$——
+这一项很关键，否则模型只要把所有分数一起抬高就能让第一项变小。
+
+\subsection{样本构造：滑窗是序列建模的第一性工作}
+
+序列样本的构造方式比模型结构更能决定效果。最基础的做法是滑窗：
+
+\begin{equation}
+\mathcal{D} = \Big\{ \big( (i_1, \dots, i_t),\; i_{t+1} \big) \;\Big|\;
+1 \le t < L,\; \tau_{t+1} \le T_{\text{cut}} \Big\},
+\label{eq:sliding-window}
+\end{equation}
+
+即对一条长度 $L$ 的行为序列，产生 $L-1$ 个「前缀 $\to$ 下一物品」的训练样本。
+这里有几个必须明确的工程决策：
+
+\begin{itemize}
+  \item \textbf{截断点}：$T_{\text{cut}}$ 必须严格早于标签时间。实践中常见的错误是「取用户最近 30 天行为做历史，取昨天的行为做标签」，
+        这会让历史里包含比标签更晚的行为，属于典型的未来信息泄漏；
+  \item \textbf{窗口长度}：GRU4Rec 时代以 20--50 为主，SASRec 时代常用 50--200，长序列模型用 500--5000；
+  \item \textbf{事件粒度}：只用点击，还是把曝光、加购、下单都算进去？答案是\textbf{全部算，但要带类型 embedding 与不同权重}，
+        因为「曝光未点击」携带强负反馈信息，丢掉它会显著损伤效果；
+  \item \textbf{采样密度}：把每个位置都作为标签会让训练集膨胀数十倍，通常对长序列做\textbf{跳跃采样}（每隔 2--5 个位置取一个标签）。
+\end{itemize}
+
+\begin{toolbox}[行为序列样本构造清单]
+\begin{enumerate}
+  \item 时间戳统一到时区明确的秒级或毫秒级，并明确「服务端时间」还是「客户端时间」（两者可差数分钟，足以造成穿越）；
+  \item 先按 \code{user\_id} 聚合、按时间升序排序，再做\textbf{同物品去重}与\textbf{连续曝光折叠}；
+  \item 标签时刻之后的行为一律截断，落盘时把 \code{label\_ts} 单独存一列，便于回溯审计；
+  \item 序列长度不足时用统一的 padding 符号补齐，不要把 padding 参与注意力（用 mask 屏蔽）；
+  \item 负样本与正样本使用同一个时间窗口，避免「用今天的负样本衡量昨天的正样本」；
+  \item 上线前做一次「删除未来数据」的重跑：把日志里所有晚于标签的记录物理删除后重新生成样本，对比指标差异。
+        若差异超过 $1\%$，几乎可以确定存在泄漏。
+\end{enumerate}
+\end{toolbox}
+
+\section{自注意力序列建模：SASRec 与 BERT4Rec}
+
+\subsection{为什么要换掉 RNN}
+
+RNN 的问题不在于表达力，而在于\textbf{不可并行}与\textbf{长程衰减}。
+长度为 $L$ 的序列，RNN 需要 $L$ 次串行计算，训练时 GPU 利用率极低；
+同时信息要经过 $L$ 次门控传递，长程依赖会衰减。Transformer \cite{vaswani2017attention} 用注意力一次性建模任意两个位置的关系，
+把序列内路径长度从 $O(L)$ 降到 $O(1)$，代价是计算复杂度变成 $O(L^2 d)$。这笔交易在小 $L$ 时极其划算。
+Transformer 的完整推导与训练细节见 \cref{ch:nlp}，本节只讨论它在行为序列上的改造。
+
+\subsection{SASRec：因果掩码加位置编码}
+
+SASRec \cite{kang2018sasrec} 把自注意力直接用到物品序列上，是序列推荐事实上的工业基线。其核心是缩放点积注意力：
+
+\begin{equation}
+\Attention(Q, K, V) = \softmax\!\left( \frac{Q K\T}{\sqrt{d_k}} + M \right) V ,
+\label{eq:self-attn}
+\end{equation}
+
+其中 $M$ 是掩码矩阵。SASRec 使用\textbf{因果掩码}（下三角掩码）：
+位置 $t$ 的查询只能关注位置 $\le t$ 的键值，从而保证预测 $i_{t+1}$ 时看不到 $i_{t+1}$ 及其之后的信息。
+这一点与 GPT 类语言模型完全同构，也是后来生成式推荐能够直接复用的根本原因。
+
+与语言模型不同的是，物品序列没有天然顺序信息，必须显式注入\textbf{位置编码}。
+SASRec 使用的是可学习的位置 embedding；正弦位置编码的形式为：
+
+\begin{equation}
+\text{PE}_{(p, 2j)} = \sin\!\big( p / 10000^{2j/d} \big), \qquad
+\text{PE}_{(p, 2j+1)} = \cos\!\big( p / 10000^{2j/d} \big) .
+\label{eq:pe}
+\end{equation}
+
+下一物品的概率由最后一层在位置 $t$ 的隐状态与物品 embedding 的内积给出：
+
+\begin{equation}
+\Prob(i_{t+1} = c \given i_{1:t})
+= \frac{ \exp\big( \inner{ h_t }{ e_c } \big) }
+       { \sum_{c' \in \mathcal{C}} \exp\big( \inner{ h_t }{ e_{c'} } \big) },
+\qquad
+h_t = \Attention\big( Q_t,\, K_{1:t},\, V_{1:t} \big) .
+\label{eq:sasrec-prob}
+\end{equation}
+
+工程细节比公式更容易出错，SASRec 的几个关键点值得记住：
+\textbf{(1)} 残差连接 + LayerNorm 是必需的，否则两层以上难以训练；
+\textbf{(2)} dropout 要作用在 embedding、注意力权重与 FFN 三处；
+\textbf{(3)} 训练时每个正样本配一个负样本做 BCE 即可，不必做全量 softmax；
+\textbf{(4)} 推理时只需前向一次即可得到全部物品分数，若物品空间过大则改用内积检索（Faiss/HNSW，见 \cite{johnson2019faiss,malkov2020hnsw}）。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=0.7cm, y=0.7cm, every node/.style={font=\sffamily\scriptsize}]
+  % ---- SASRec causal mask ----
+  \begin{scope}[shift={(0,0)}]
+    \foreach \i in {0,...,3}{%
+      \foreach \j in {0,...,3}{%
+        \ifnum\i<\j
+          \fill[RuleGray!45] (\j, -\i) rectangle ++(0.92,-0.92);
+        \else
+          \fill[TealDeep!30] (\j, -\i) rectangle ++(0.92,-0.92);
+        \fi
+        \draw[SlateGray, line width=0.2pt] (\j, -\i) rectangle ++(0.92,-0.92);
+      }%
+    }
+    \node[below=1mm, text width=3.6cm, align=center] at (1.4,-4.3)
+      {\textbf{SASRec}：因果掩码\\位置 $t$ 只能看到 $\le t$ 的行为};
+  \end{scope}
+  % ---- BERT4Rec bidirectional mask ----
+  \begin{scope}[shift={(6.2,0)}]
+    \foreach \i in {0,...,3}{%
+      \foreach \j in {0,...,3}{%
+        \ifnum\i=\j
+          \fill[CrimsonDeep!30] (\j, -\i) rectangle ++(0.92,-0.92);
+        \else
+          \fill[NavyMid!18] (\j, -\i) rectangle ++(0.92,-0.92);
+        \fi
+        \draw[SlateGray, line width=0.2pt] (\j, -\i) rectangle ++(0.92,-0.92);
+      }%
+    }
+    \node[below=1mm, text width=3.8cm, align=center] at (1.4,-4.3)
+      {\textbf{BERT4Rec}：双向可见\\深色位置是被遮盖的预测目标};
+  \end{scope}
+\end{tikzpicture}
+\caption{SASRec 的因果掩码与 BERT4Rec 的双向 Cloze 掩码对比}
+\label{fig:masks}
+\end{figure}
+
+\subsection{BERT4Rec：把预测变成填空}
+
+BERT4Rec \cite{sun2019bert4rec} 借用 BERT \cite{devlin2019bert} 的思路，
+把「预测下一个」改成「遮盖住序列中的若干位置，让模型还原它们」。
+这就是所谓的 \term{Cloze 目标}{Cloze Objective}：
+
+\begin{equation}
+\mathcal{L}_{\text{Cloze}}
+= - \sum_{u \in \mathcal{U}} \sum_{m \in \mathcal{M}_u}
+\log \Prob\big( i_m \given i_{\setminus \mathcal{M}_u} \big)
+= - \sum_{u} \sum_{m \in \mathcal{M}_u}
+\log \frac{ \exp\big( \inner{ h_m }{ e_{i_m} } \big) }
+          { \sum_{c \in \mathcal{C}} \exp\big( \inner{ h_m }{ e_c } \big) } ,
+\label{eq:cloze}
+\end{equation}
+
+其中 $\mathcal{M}_u$ 是被遮盖的位置集合，$i_{\setminus \mathcal{M}_u}$ 表示剩余可见的行为。
+
+\begin{insight}[Cloze 目标为什么能 work]
+三个原因。第一，\textbf{监督信号密度}：因果模型在位置 $t$ 只有一个监督信号（预测 $t+1$），
+而 Cloze 可以在一次前向中同时监督 20\% 的位置，样本效率更高。
+第二，\textbf{双向上下文}：预测中间某个物品时，左右两侧的行为都提供了证据，
+比只看左侧的单向模型信息更充分。第三，\textbf{正则化效应}：遮盖破坏了「抄最近一条」的捷径，
+迫使模型学习更全局的兴趣结构。
+但代价同样明确：Cloze 在推理时需要构造一个人为的遮盖位（通常在序列末尾追加一个 mask 符号），
+此时模型看到的上下文与训练时并不完全一致，属于一种\textbf{目标错配}。
+所以后续工作（以及绝大多数工业实现）更倾向于因果式建模，因为它的训练目标与服务目标完全一致，
+也能自然衔接到生成式解码。
+\end{insight}
+
+\subsection{两代模型的取舍}
+
+把两者放在一起比较，结论可以压缩成一句话：
+\textbf{数据稀疏、序列短、需要填空式补全时用双向；数据充足、要做实时预测与生成时用因果。}
+
+\begin{casebox}[案例：SASRec 与 BERT4Rec 的公开实验结论]
+两篇论文都在 Amazon Beauty/Sports、MovieLens、Steam 等公开数据集上做过系统对比。
+公开报告的主要结论有三条：
+\begin{enumerate}
+  \item SASRec 相对 GRU4Rec、Caser 等 RNN/CNN 基线，在 HR@10 与 NDCG@10 上有两位数百分比量级的相对提升，
+        且训练时间更短（自注意力可并行，同等数据量下迭代更快）；
+  \item BERT4Rec 在多数数据集上进一步超过 SASRec，遮盖率取值在 0.2 附近表现较稳；
+  \item 序列越长、数据越密集，注意力类方法的优势越明显；在极短序列（长度小于 3）时，
+        复杂结构的收益迅速衰减，甚至不如简单的 ItemCF。
+\end{enumerate}
+\textbf{启示}：模型结构的选择必须和序列长度、数据规模一起看。
+用 SASRec 替换 ItemCF 的前提是「用户有足够长的可观测序列」，
+在冷启动流量占比很高的业务里，收益往往被摊薄。
+\end{casebox}
+
+\section{对比学习与自监督序列建模}
+
+\subsection{从「预测」到「表示」}
+
+监督信号只有「下一个物品」时，模型学到的表示高度依赖标签的密度与质量。
+BST（把 Transformer 搬进 CTR 预估，加入时间间隔与类别特征）、
+S3-Rec（自监督：关联属性预测、遮盖物品预测、片段预测）、
+CL4SRec（序列级对比学习）代表了一条共同的思路：
+\textbf{先让模型学一个对噪声稳健、对长尾友好的序列表示，再拿去做下游任务。}
+
+对比学习的标准形式是 InfoNCE 损失：
+
+\begin{equation}
+\mathcal{L}_{\text{InfoNCE}}
+= - \sum_{u \in \mathcal{U}} \log
+\frac{ \exp\big( \inner{ z_u }{ z_u^{+} } / \tau_c \big) }
+     { \exp\big( \inner{ z_u }{ z_u^{+} } / \tau_c \big)
+       + \sum_{u^{-} \in \mathcal{I}_u^{-}} \exp\big( \inner{ z_u }{ z_{u^{-}} } / \tau_c \big) },
+\label{eq:infonce}
+\end{equation}
+
+其中 $z_u$ 与 $z_u^{+}$ 是同一用户序列的两次不同增强视图，$z_{u^{-}}$ 是其他用户的序列表示，
+$\tau_c$ 是温度系数（常用 $0.05 \sim 0.2$）。温度越低，模型越关注「难负样本」。
+
+\begin{table}[htbp]
+\centering
+\caption{序列自监督增强算子对比}
+\label{tab:selfsup-ops}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{3.4cm} L{2.6cm} Y}
+\toprule
+\tabhead{算子} & \tabhead{操作} & \tabhead{学到的能力} & \tabhead{风险} \\
+\midrule
+裁剪 Crop & 随机截取子序列 & 局部兴趣的完整性 & 截断点落在兴趣切换处会引入矛盾的监督 \\
+\addlinespace
+遮盖 Mask & 随机隐藏若干物品 & 上下文补全、抗缺失 & 遮盖率过高时序列语义被破坏 \\
+\addlinespace
+重排 Reorder & 交换相邻物品顺序 & 对顺序噪声的鲁棒性 & 强时序依赖场景（连播、追剧）会直接伤害效果 \\
+\addlinespace
+替换 Substitute & 用相似物品替换 & 物品粒度的不变性 & 替换物品若语义偏离会引入假负样本 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[对比学习的真实收益来源]
+很多实现报告「加了对比学习，HR@10 涨了几个点」，但把增益拆开看，
+其主要来源通常不是「更聪明的模型」，而是两件更朴素的事：
+\textbf{(1) 抗噪}——线上行为序列充满误点、重复曝光、机器人流量，增强视图相当于隐式的数据清洗；
+\textbf{(2) 长尾覆盖}——对比学习把表示空间拉均匀，长尾物品不再被头部物品挤到角落。
+如果业务的数据质量本身就很高、长尾占比很低，那么对比学习带来的收益会显著小于论文报告值。
+反过来说，如果发现「训练损失下降但线上没变」，先查数据里有多少比例的序列是「曝光即点击」的刷量流量。
+\end{insight}
+
+\section{长序列建模：SIM、ETA 与 TWIN}
+
+\subsection{长度爆炸带来的三重代价}
+
+序列从 50 条涨到 10000 条，代价不是线性增长：
+
+\begin{itemize}
+  \item \textbf{计算}：自注意力复杂度为 $O(L^2 d)$。$L$ 从 $10^2$ 到 $10^4$，注意力矩阵元素数量增长 $10^4$ 倍；
+  \item \textbf{存储}：以每个行为 64 维、float16 存储计算，单用户 $10^4$ 条行为约需 $10^4 \times 64 \times 2$ 字节 $\approx 1.28$ MB；
+        若有 $10^8$ 量级用户，全量常驻内存需要 $128$ TB 量级（经验估算），必须做分层存储与量化；
+  \item \textbf{噪声}：序列越长，包含的过期兴趣、误点、代购行为越多，信号信噪比下降。
+\end{itemize}
+
+于是所有长序列方案都在做同一件事：\textbf{先用便宜的方式把 $10^4$ 缩小到 $10^2$，再用昂贵的注意力精确建模。}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  bx/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=9mm, inner sep=4pt, text width=2.5cm},
+  gx/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=9mm, inner sep=4pt, text width=2.3cm}
+]
+\node[bx] (seq) {用户全量行为序列\\$L \approx 10^4$};
+\node[gx, right=10mm of seq] (gsu) {GSU / 检索\\筛出 Top-$K$ 相关行为};
+\node[bx, right=10mm of gsu] (esu) {ESU / 精注意力\\对 $K$ 条做多头注意力};
+\node[bx, right=10mm of esu] (rep) {兴趣表示\\与候选物品交互};
+\node[bx, above=8mm of gsu, text width=2.3cm] (cand) {候选物品 $c$};
+\draw[-{Stealth}, thick, SlateGray] (seq) -- (gsu);
+\draw[-{Stealth}, thick, SlateGray] (gsu) -- (esu);
+\draw[-{Stealth}, thick, SlateGray] (esu) -- (rep);
+\draw[-{Stealth}, thick, CrimsonDeep] (cand) -- (gsu);
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] (cand) -- (esu);
+\end{tikzpicture}
+\caption{长序列的两阶段建模范式：GSU 负责「选」，ESU 负责「算」}
+\label{fig:two-stage}
+\end{figure}
+
+\subsection{SIM：硬检索与软检索的组合}
+
+SIM（Search-based Interest Model）把两阶段明确拆成 GSU（General Search Unit）与 ESU（Exact Search Unit）。
+GSU 有两种检索方式。\textbf{硬检索}按类目/属性做规则筛选，取同一类目下最近的 $K_1$ 条：
+
+\begin{equation}
+\mathcal{S}_{\text{hard}}(c) = \operatorname{TopK}_{i \in \mathcal{H}_u}
+\Big( \mathbf{1}\big[ \text{cat}(i) \in \text{cat}(c) \big] \Big),
+\qquad \abs{\mathcal{S}_{\text{hard}}} = K_1 ,
+\label{eq:sim-hard}
+\end{equation}
+
+\textbf{软检索}则用内积近似用户兴趣与候选的相关性：
+
+\begin{equation}
+\mathcal{S}_{\text{soft}}(c) = \operatorname{TopK}_{i \in \mathcal{H}_u}
+\big\langle W_b e_i,\; W_a e_c \big\rangle ,
+\qquad \abs{\mathcal{S}_{\text{soft}}} = K_2 .
+\label{eq:sim-soft}
+\end{equation}
+
+得到子序列后，ESU 用类似 DIN 的注意力聚合（并加入时间间隔等辅助特征）：
+
+\begin{equation}
+\text{AttnPool}(\mathcal{S}) = \sum_{i \in \mathcal{S}}
+\frac{ \exp\big( \inner{ e_i }{ e_c } \big) }
+     { \sum_{j \in \mathcal{S}} \exp\big( \inner{ e_j }{ e_c } \big) } \, e_i .
+\label{eq:esu}
+\end{equation}
+
+工程上，硬检索几乎零成本（一次倒排查询或按类目分桶），软检索需要向量相似度计算，
+通常用预计算的用户侧桶索引 + PQ 量化实现。公开论文报告 SIM 把可用序列长度从百级提升到万级，
+并带来在线 CTR 的百分点量级相对提升（具体数值以原论文表格为准）。
+
+\subsection{ETA：用局部敏感哈希保证两阶段一致}
+
+SIM 的软检索依赖预训练 embedding，检索出的子序列与 ESU 的目标并不完全一致。
+ETA 的思路是：\textbf{用可端到端训练的 SimHash 直接近似注意力分数}，让检索与精算共享同一套参数。
+SimHash 把向量投影到二值空间：
+
+\begin{equation}
+\text{hash}(e) = \operatorname{sgn}\big( P e \big) \in \{-1, +1\}^{b},
+\qquad
+\big\langle \text{hash}(e_i),\, \text{hash}(e_c) \big\rangle \approx b \cdot \inner{ e_i }{ e_c } ,
+\label{eq:eta-hash}
+\end{equation}
+
+其中 $P$ 是随机投影矩阵。因为二值向量之间的汉明距离可以用位运算快速计算，
+ETA 可以在毫秒级从万级行为中取出与候选最相似的 Top-$K$。
+代价是哈希碰撞会引入误差，需要通过增大 $b$（典型 32--128 位）与多哈希表来压低。
+
+\subsection{TWIN：让两阶段「对齐」}
+
+TWIN 关注的是两阶段之间的\textbf{不一致}：第一阶段用粗略的簇中心或低维表示选行为，
+第二阶段用完整表示做注意力，两阶段的标准不同会导致「重要的行为在第一阶段就被丢掉」。
+TWIN 的做法是用同一套注意力分数驱动筛选与聚合，并在第二阶段对第一阶段选出的候选重新归一化，
+使两阶段的排序尽量一致。公开报告显示，这种一致性设计在相同序列长度下的收益，
+往往比单纯把序列再加长一倍更明显。
+
+\begin{table}[htbp]
+\centering
+\caption{长序列方案对比}
+\label{tab:long-seq}
+\small
+\begin{tabularx}{\textwidth}{L{1.5cm} L{3.3cm} L{1.5cm} L{2.2cm} Y}
+\toprule
+\tabhead{方案} & \tabhead{筛选机制} & \tabhead{可用长度} & \tabhead{额外存储} & \tabhead{主要代价} \\
+\midrule
+截断基线 & 直接取最近 $N$ 条 & $10^2$ & 无 & 远期兴趣完全丢失，长周期品类受影响最大 \\
+\addlinespace
+SIM & 硬检索（类目）+ 软检索（内积） & $10^4$ & 需预计算物品/行为向量 & 两阶段目标不一致，硬检索强依赖类目质量 \\
+\addlinespace
+ETA & SimHash + 汉明距离检索 & $10^4$ & 二值签名（每行为 4--16 字节） & 哈希碰撞引入噪声，需要多表与更大位宽 \\
+\addlinespace
+TWIN & 一致化的两阶段注意力 & $10^3 \sim 10^4$ & 中等 & 实现复杂，线上需保证两阶段参数同步 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[「序列越长越好」是长序列建模最贵的误解]
+现象：把序列长度从 100 加到 2000，离线 NDCG 涨了，线上却持平甚至下降。
+根因通常有三类：
+\textbf{(1) 噪声稀释}——新增的远期行为大量是低频、随机、甚至误点行为，注意力被它们摊薄；
+\textbf{(2) 训练与服务不一致}——离线用全量序列训练，线上因为延迟预算只透传最近 200 条，
+模型见到的分布与训练时不同；
+\textbf{(3) 位置与新鲜度缺失}——长序列里 3 年前的行为与昨天的行为被同等对待，
+必须引入时间衰减或时间间隔特征（见式~\eqref{eq:time-decay}）。
+排查方法：先做「长度消融」，把序列长度分别设为 50/200/1000，观察离线与线上的一致性；
+再检查线上实际透传长度分布，若 P50 远小于训练时的平均长度，问题基本可以确认。
+\end{pitfall}
+
+\begin{formulacard}[行为序列的时间衰减权重]
+把「时间」显式地写进权重，是长序列建模中最便宜也最有效的修正：
+
+\begin{equation}
+w(t, t_0) = \gamma^{\, \Delta t / \tau} = \exp\!\left( - \frac{\Delta t}{\tau} \ln \frac{1}{\gamma} \right),
+\qquad \Delta t = t_0 - t ,
+\label{eq:time-decay}
+\end{equation}
+
+等价地，用半衰期 $T_{1/2}$ 表示更直观：$w = 0.5^{\, \Delta t / T_{1/2}}$。
+示范量级：新闻/短视频取 $T_{1/2} \approx 1 \sim 3$ 天，快消电商取 7 天，
+耐用消费品与房产等长决策周期场景取 30 天以上。这些是经验值，必须用线上 A/B 校准。
+\end{formulacard}
+
+\section{生成式推荐与语义 ID}
+
+\subsection{为什么需要语义 ID}
+
+双塔召回的根本问题在于：物品用随机 ID embedding 表示，两个物品之间的相似度完全由共现学习得到，
+\textbf{没有任何先验语义}。这带来两个后果：其一，新物品没有充分共现，embedding 学不出来（冷启动）；
+其二，召回被限制在内积空间的几何结构里，难以表达「多峰兴趣」与「组合式需求」。
+
+\textbf{语义 ID}（semantic ID）把每个物品表示成一串短码，例如 $(c_1, c_2, c_3)$，
+每一层码字来自一个可学习的或可解释的码本。这样做的收益是：
+相似物品共享前缀，模型可以把「前缀模式」泛化到没见过的新物品；
+同时物品被表示成离散序列，推荐问题就自然变成了「序列到序列」的生成问题。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  bx/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, inner sep=4pt, minimum height=8mm, text width=2.7cm},
+  cw/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, inner sep=4pt, minimum height=8mm, text width=1.9cm},
+  ar/.style={-{Stealth}, thick, SlateGray},
+  ra/.style={-{Stealth}, thick, AmberDeep, dashed}
+]
+\node[bx] (z)  at (0,0)      {物品内容/协同向量 $z$};
+\node[bx] (q1) at (4.6,0)    {第 1 层码本 $\mathcal{C}_1$};
+\node[cw] (c1) at (8.9,0)    {码字 $c_1$};
+\node[bx] (r1) at (0,-1.8)   {残差 $r_1 = z - \mathcal{C}_1[c_1]$};
+\node[bx] (q2) at (4.6,-1.8) {第 2 层码本 $\mathcal{C}_2$};
+\node[cw] (c2) at (8.9,-1.8) {码字 $c_2$};
+\node[bx] (r2) at (0,-3.6)   {残差 $r_2 = r_1 - \mathcal{C}_2[c_2]$};
+\node[bx] (q3) at (4.6,-3.6) {第 3 层码本 $\mathcal{C}_3$};
+\node[cw] (c3) at (8.9,-3.6) {码字 $c_3$};
+\node[cw, fill=white, text width=4.4cm] (sid) at (4.6,-5.2) {语义 ID $= (c_1, c_2, c_3)$};
+\draw[ar] (z) -- (q1);
+\draw[ar] (q1) -- (c1);
+\draw[ra] (z.south) -- (r1.north);
+\draw[ar] (r1) -- (q2);
+\draw[ar] (q2) -- (c2);
+\draw[ra] (r1.south) -- (r2.north);
+\draw[ar] (r2) -- (q3);
+\draw[ar] (q3) -- (c3);
+\draw[ra] (c3.south) |- (sid.east);
+\end{tikzpicture}
+\caption{层次量化语义 ID 的构造：每层量化当前残差，输出一个码字}
+\label{fig:semantic-tree}
+\end{figure}
+
+\subsection{RQ-VAE：残差量化怎么训练}
+
+RQ-VAE 用编码器 $E$ 把物品向量压到隐空间，再用 $L$ 个码本逐层量化残差：
+
+\begin{equation}
+r_0 = E(x), \qquad
+c_l = \argmin_{k \in [K]} \norm{ r_{l-1} - \mathcal{C}_l[k] }_2 , \qquad
+r_l = r_{l-1} - \mathcal{C}_l[c_l] , \qquad l = 1, \dots, L .
+\label{eq:rqvae}
+\end{equation}
+
+总损失由重构项与码本对齐项组成（$\text{sg}[\cdot]$ 表示停止梯度）：
+
+\begin{equation}
+\mathcal{L}_{\text{RQ-VAE}}
+= \underbrace{ \norm{ x - D\Big( \textstyle\sum_{l=1}^{L} \mathcal{C}_l[c_l] \Big) }_2^2 }_{\text{重构}}
++ \underbrace{ \sum_{l=1}^{L} \Big(
+    \norm{ \text{sg}[r_{l-1}] - \mathcal{C}_l[c_l] }_2^2
+  + \beta \norm{ r_{l-1} - \text{sg}[\mathcal{C}_l[c_l]] }_2^2 \Big) }_{\text{码本对齐}} ,
+\label{eq:rqvae-loss}
+\end{equation}
+
+其中 $D$ 是解码器，$\beta$ 是承诺损失系数（常用 $0.25$）。
+第一项码本损失把码字拉向残差，第二项承诺损失把编码器输出拉向码字。
+实践中还有一个常被忽视的细节：\textbf{码本坍缩}——大量残差被分配到少数几个码字，
+导致语义 ID 的区分度丧失。常用的对策包括码本重启（把长期未被使用的码字重新初始化到随机残差上）
+与熵正则（鼓励码字使用分布均匀）。
+
+\subsection{层次 K-means：更简单但更可控的构造}
+
+如果没有条件训练 RQ-VAE，可以直接对物品的内容向量（标题/图片/类目文本编码）或协同向量做层次聚类：
+第一层聚成 $K$ 个簇，第二层在每个簇内部再聚 $K$ 个簇，依次递归，物品的语义 ID 就是它沿途经过的簇编号。
+这种方法实现成本极低、可解释性强（每层簇可以人工命名），但有三个必须处理的工程问题：
+
+\begin{enumerate}
+  \item \textbf{簇不均衡}：普通 K-means 会产生大小相差百倍的簇，导致高频簇对应的语义 ID 前缀被过度预测。
+        解法是使用平衡 K-means，或对每簇设置样本量上限；
+  \item \textbf{ID 冲突}：两个不同物品可能落在同一条路径上，共享同一个语义 ID。
+        影响是召回去重与统计口径混乱。解法有三种：增加层数或每层码字数稀释冲突；
+        在 ID 末尾拼接一个短哈希后缀；或者接受冲突，在生成结果落库时用一个轻量排序模型在候选集合内二次挑选；
+  \item \textbf{漂移}：物品池每天新增，聚类中心会失配。生产上通常每周或每月重训一次量化器，
+        并保留一份「旧 ID 到新 ID」的映射表，否则历史序列与线上物品对不上。
+\end{enumerate}
+
+\begin{keypoint}[语义 ID 的三条设计原则]
+\textbf{第一，前缀要有语义。}第一层码字应当对应粗粒度类目或内容主题，
+这样 beam search 在第一层就能砍掉大量无关分支；如果第一层是随机划分的簇，搜索效率会大幅下降。\\
+\textbf{第二，冲突率要可观测。}上线前必须统计「语义 ID 到真实物品」的一对多比例，
+并把它作为量化器的验收指标之一（建议控制在个位数百分比以内，超过则说明码本容量不足）。\\
+\textbf{第三，ID 必须稳定。}任何重训都要生成映射表并做双跑对比，
+因为序列模型把语义 ID 当作词表，词表一变，历史序列的含义就变了。
+\end{keypoint}
+
+\subsection{TIGER：把推荐写成一个生成任务}
+
+TIGER \cite{rajput2023tiger} 的完整链路是：
+用内容编码器得到物品向量 $\to$ RQ-VAE 量化为语义 ID $\to$ 用编码器--解码器模型
+（T5 风格，见 \cite{raffel2020t5}）以用户行为序列为输入，自回归地生成下一个物品的语义 ID。
+生成过程是分层的：
+
+\begin{equation}
+\Prob\big( \text{SID}(i_{t+1}) \given i_{1:t} \big)
+= \prod_{l=1}^{L} \Prob\big( c_l \given c_{1:l-1},\, i_{1:t} \big) .
+\label{eq:gen-prob}
+\end{equation}
+
+因为语义 ID 的每一层只有 $K$ 个候选（典型 $K = 256$），
+解码空间是 $K^L$（$L=3$ 时约 $1.6 \times 10^7$），远小于百万级物品的裸空间，
+所以 beam search 可以在合理延迟内完成，且每个 beam 分支天然对应一个「兴趣方向」。
+
+公开论文报告的主要结论是：在 Amazon Beauty/Sports 等公开数据集上，
+TIGER 相对 SASRec 一类强基线在 Recall@10 与 NDCG@10 上有两位数百分比量级的相对提升，
+并且在\textbf{长尾物品与冷启动物品}上的优势更为明显，因为语义 ID 的前缀共享让新物品可以直接复用已有模式。
+需要注意：这些是公开数据集上的结果，真实业务的物品池规模、内容质量、序列长度分布都不同，
+不能直接外推。
+
+\begin{table}[htbp]
+\centering
+\caption{生成式检索与双塔召回的对比}
+\label{tab:gen-vs-tower}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{4.4cm} Y}
+\toprule
+\tabhead{对比维度} & \tabhead{双塔 + ANN 召回} & \tabhead{语义 ID 生成式检索} \\
+\midrule
+物品表示 & 随机初始化 ID embedding & 内容/协同向量的层次量化码字 \\
+\addlinespace
+相似度定义 & 内积，几何空间中的近邻 & 前缀共享的离散序列似然 \\
+\addlinespace
+候选集边界 & 已有物品全集，只会少不会多 & 由解码定义，可能生成无效或下架物品 \\
+\addlinespace
+新物品泛化 & 需要重新训练或在线学习 & 前缀可泛化，冷启动优势明显 \\
+\addlinespace
+延迟构成 & 一次用户塔前向 + 一次 ANN 检索 & 用户编码 + $L$ 层 beam search 解码 \\
+\addlinespace
+工程依赖 & 向量索引、量化、增量更新 & 量化器训练、词表管理、ID 冲突处理 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[「生成式推荐适合所有场景」是当下最流行的误解]
+生成式推荐很强，但它有明确的适用边界，踩坑通常来自以下五点：
+\begin{enumerate}
+  \item \textbf{候选集必须受限}：生成模型可能吐出停售、违规、库存为零的物品，
+        必须有合法性约束解码（constrained decoding）与后置过滤，否则会出现「推荐了不存在的商品」这类事故；
+  \item \textbf{实时性与成本}：beam search 每层需要 beam 次前向，beam size 取 10 时解码开销是单次前向的十倍以上，
+        在延迟预算只有几十毫秒的场景下难以承受；
+  \item \textbf{可控性}：业务方需要「屏蔽某类目」「保底某品牌」这类硬约束，
+        纯生成模型的可控性弱于「召回 + 规则」的组合；
+  \item \textbf{数据门槛}：语义 ID 的质量取决于物品内容与序列数据量，物品池只有十万级、序列稀疏时，
+        量化误差与冲突率都会显著上升；
+  \item \textbf{指标体系不兼容}：生成式系统的输出是序列似然，与既有的 AUC、GAUC 监控体系不直接对应，
+        需要重建离线评估与线上实验口径。
+\end{enumerate}
+\textbf{务实建议}：短期内把语义 ID 当作\textbf{一路额外的召回通道}（与双塔、i2i 并行），
+而不是替换整个召回层。这样既拿到泛化收益，又保留既有链路的兜底能力，见 \cref{ch:recall}。
+\end{pitfall}
+
+\section{HSTU：把推荐重写成序列 transducer}
+
+\subsection{核心主张}
+
+HSTU \cite{zhai2024hstu} 的出发点更激进：\textbf{不要再把推荐当成「特征交互 + 多任务头」，
+而是把它当成一个统一的生成式序列建模问题。}在这个视角下，用户的行为序列就是「文本」，
+推荐就是「下一个 token 预测」，CTR/CVR/时长等目标都被改写成序列上的生成任务，
+特征工程的大头（交叉特征、多任务塔）被统一到同一个 Transformer 变体里。
+
+HSTU 在注意力上做了两处关键改动。第一，用逐点的门控激活替代 softmax 归一化：
+
+\begin{equation}
+o_t = \sum_{s \le t} \phi\big( \inner{ q_t }{ k_s } \cdot \frac{1}{\sqrt{d}} + b_{t-s} \big) \odot v_s ,
+\qquad \phi = \text{SiLU} ,
+\label{eq:hstu-attn}
+\end{equation}
+
+其中 $b_{t-s}$ 是相对位置偏置。去掉 softmax 之后，注意力权重的计算变成了纯逐点运算，
+算子融合与显存访问效率更高，这是能把序列长度和模型规模同时推上去的前提。
+第二，训练目标改用逐点（pointwise）形式，配合隐式负采样与 logQ 校正：
+
+\begin{equation}
+\mathcal{L}_{\text{HSTU}}
+= - \sum_{u} \sum_{t}
+\log \frac{ \exp\big( \inner{ h_{u,t} }{ e_{i_{t+1}} } \big) }
+          { \exp\big( \inner{ h_{u,t} }{ e_{i_{t+1}} } \big)
+            + \sum_{j \in \mathcal{N}_{u,t}} \exp\big( \inner{ h_{u,t} }{ e_{j} } \big) } ,
+\label{eq:hstu}
+\end{equation}
+
+其中 $\mathcal{N}_{u,t}$ 是负样本集合。逐点形式让每个位置都能产生梯度，
+把「一个序列一次前向只更新一个标签」的低效，变成「一次前向更新所有位置」。
+
+\begin{casebox}[案例：Meta 公开报告的规模化经验]
+HSTU 论文公开报告了三类结论，值得逐条记住：
+\begin{enumerate}
+  \item \textbf{推荐任务上存在可观测的 scaling law}：把生成式推荐模型的参数量推到千亿甚至万亿量级，
+        训练计算量增加时，指标持续提升，尚未出现明显的饱和平台（与 NLP 的观察类似）；
+  \item \textbf{收益主要来自「统一」与「长序列」}：把多目标、多特征交叉统一到一个序列模型后，
+        既减少了特征工程与线上链路的维护成本，又让长用户生命周期序列能够被完整利用；
+  \item \textbf{线上收益是量级性的}：公开报告显示相对既有 DLRM 类生产模型，
+        在离线与在线指标上都有明显提升（具体数值以原论文为准），且推理侧通过算子优化把成本控制在可接受范围。
+\end{enumerate}
+\textbf{启示}：这条路线的门槛不在模型结构，而在\textbf{数据规模、算力预算与工程链路改造}。
+没有十亿级以上的行为日志与成规模的训练集群，直接照搬结构收益有限。
+\end{casebox}
+
+\begin{insight}[推荐正在复刻 NLP 的路径，但数据性质不同]
+统一架构、大数据、大参数、生成目标——这四件事 NLP 已经走通了一遍，推荐正在重走。
+但两边的数据性质差别巨大：语言的「下一个词」分布相对稳定，
+而推荐的「下一个物品」受供给变化、运营活动、季节、甚至一次大促的影响，
+分布漂移以天甚至小时计。这带来两个直接后果：
+其一，推荐的 scaling 边际收益与 NLP 不可直接类比，需要持续的数据刷新（增量训练）来维持；
+其二，评估更依赖在线实验，离线指标的可迁移性更差。
+\end{insight}
+
+\section{LLM4Rec：三条路线与现实取舍}
+
+大模型进入推荐系统有三条清晰的路线，它们在成本、收益与成熟度上差异极大。
+
+\begin{table}[htbp]
+\centering
+\caption{LLM4Rec 三条路线对比}
+\label{tab:llm4rec}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{3.0cm} L{2.6cm} Y}
+\toprule
+\tabhead{路线} & \tabhead{做法} & \tabhead{成熟度} & \tabhead{主要问题} \\
+\midrule
+作为推荐器 & 提示词 / 指令微调 / LoRA 微调后直接输出物品 & 研究为主 & 幻觉、物品空间无法对齐、延迟与成本高 \\
+\addlinespace
+作为特征增强 & 用 LLM 生成物品/用户的语义表示与标签，喂给下游模型 & 工业界已落地 & 需要保证离线/在线一致，收益随场景变化 \\
+\addlinespace
+作为推理与解释器 & 检索增强生成候选，再生成理由、做对话式导购 & 快速演进 & 事实性约束、延迟、与主排序链路的关系 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\textbf{路线一：作为推荐器。}最直接的做法是把用户历史与候选写进提示词，让模型输出下一个物品，
+或通过指令微调 \cite{ouyang2022instructgpt}、LoRA \cite{hu2021lora} 把推荐能力注入模型 \cite{brown2020gpt3}。
+它在小规模、强语义、可解释的场景（如旅行规划、课程推荐）能给出令人惊喜的结果，
+但用于百万级物品池的电商首页召回时，会遇到三个硬约束：模型无法枚举全部物品、
+输出物品名与真实商品 ID 无法稳定对齐、单次推理成本与延迟比双塔高出数个数量级。
+
+\textbf{路线二：作为特征增强。}这是当前工业界性价比最高的一条。
+用文本编码器把商品标题、详情、评价压成语义向量，作为物品特征与 ID embedding 拼接；
+用 LLM 抽取用户兴趣标签、生成用户画像摘要，作为序列模型的辅助输入。
+它的优点是\textbf{完全离线}、不改变线上链路、可增量上线，缺点是收益依赖场景：
+在内容型或商品文本丰富的场景收益明显，在纯行为驱动的短视频场景收益有限。
+
+\textbf{路线三：作为推理与解释器。}把 LLM 放在召回与排序的\textbf{下游}：
+先用传统系统拿到候选，再用检索增强生成 \cite{lewis2021rag,gao2023ragsurvey} 让模型组织理由、
+生成导购话术、处理多轮对话。这一路线的价值不在提升点击率，
+而在于提升转化率与信任度（例如「为什么推荐这款」），以及打开新的交互形态。
+
+\begin{pitfall}[用 LLM 直接替换召回或排序的典型失败模式]
+\textbf{失败一：物品空间对不齐。}模型输出「某品牌的轻便跑鞋」，但商品库里有 2400 个同类 SKU，
+无法确定推荐哪一个；强行让模型输出 ID 又会让它退化成普通的 ID 序列模型。
+\textbf{失败二：延迟与成本失控。}首屏推荐要求 P99 在 100 毫秒内，而一次大模型推理往往是数百毫秒到数秒，
+即使做批处理也无法覆盖全部流量。
+\textbf{失败三：幻觉造成的体验事故。}模型基于参数记忆编造不存在的优惠、材质或功效，
+在电商与医疗等强约束场景属于合规风险。
+\textbf{失败四：离线评估失真。}用 LLM 打分做离线评估时，模型偏好与真实用户偏好存在系统性偏差，
+会出现「评估分数涨、线上不涨」。
+\textbf{结论}：把 LLM 用在\textbf{离线}（特征、标注、内容理解）与\textbf{下游}（解释、对话）比用在\textbf{在线打分主链路}更理性。
+\end{pitfall}
+
+\section{强化学习与长期价值}
+
+\subsection{为什么贪心排序会伤害长期收益}
+
+推荐系统本质上是一个\textbf{序贯决策}过程：今天推荐的内容会改变用户明天的状态（兴趣、信任、疲劳度）。
+只优化即时点击的策略会产生三类长期损害：内容同质化导致兴趣收窄（俗称信息茧房）、
+标题党式的短期点击、以及内容生态的供给失衡（创作者收益两极分化）。
+公开研究普遍报告：在纯 CTR 目标下的长期留存指标，往往低于在目标中加入长期信号的策略。
+
+把这个过程写成马尔可夫决策过程 \cite{robbins1951stochastic}：
+状态 $s_t$ 是用户历史行为与上下文，动作 $a_t$ 是推荐物品，奖励 $r_t$ 是即时与延迟反馈的组合，
+$\gamma$ 是折扣因子。价值函数满足贝尔曼方程：
+
+\begin{equation}
+Q^{\pi}(s, a) = \E\Big[\, r_t + \gamma \, \E_{a' \sim \pi}\big[ Q^{\pi}(s', a') \big] \;\Big|\; s_t = s,\; a_t = a \,\Big],
+\label{eq:bellman}
+\end{equation}
+
+策略优化的目标是最小化负的期望折扣回报：
+
+\begin{equation}
+J(\pi) = \E_{\tau \sim \pi}\Big[ \sum_{t=0}^{T} \gamma^{t} r_t \Big],
+\qquad \pi^{\star} = \argmax_{\pi} J(\pi) .
+\label{eq:rl-obj}
+\end{equation}
+
+\subsection{奖励设计比算法选择更重要}
+
+在推荐场景里，奖励设计几乎决定了 RL 项目的成败：
+
+\begin{itemize}
+  \item \textbf{即时奖励}：点击（$+1$）、加购（$+2$）、下单（$+5$）、跳过（$-0.5$），权重需要与业务价值对齐；
+  \item \textbf{延迟奖励}：次日回访、7 日留存、30 日复购，需要与即时奖励做折扣或分层组合；
+  \item \textbf{生态奖励}：内容多样性、类目覆盖度、创作者曝光均衡度，这类奖励通常以约束而非加权的形式引入，
+        因为加权后极容易被即时收益淹没。
+\end{itemize}
+
+\subsection{离线强化学习：理论漂亮，落地艰难}
+
+离线 RL 的目标是\textbf{只用手上已有的日志}学一个比日志策略更好的策略，避免线上探索的风险。
+代表方法 BCQ 与 CQL 的核心思想一致：约束学到的策略不要偏离行为策略太远，
+否则 $Q$ 函数会在数据稀疏区域外推，产生严重高估。CQL 的做法是在标准贝尔曼误差上增加一项正则：
+
+\begin{equation}
+\mathcal{L}_{\text{CQL}}(\theta)
+= \E_{s,a \sim \mathcal{D}}\Big[ \big( Q_\theta(s,a) - \hat{\mathcal{B}} Q_\theta(s,a) \big)^2 \Big]
++ \alpha \, \E_{s \sim \mathcal{D}}\Big[ \log \sum_{a} \exp Q_\theta(s,a)
+- \E_{a \sim \hat{\pi}(a \given s)} Q_\theta(s,a) \Big],
+\label{eq:cql}
+\end{equation}
+
+其中 $\hat{\mathcal{B}}$ 是经验贝尔曼算子，$\hat{\pi}$ 是行为策略。
+第一项让 $Q$ 拟合数据中的回报，正则项一方面压低所有动作的 $Q$ 值（第一项），
+另一方面抬高数据中实际出现过的动作的 $Q$ 值（第二项），从而抑制对未见动作的高估。
+
+\begin{pitfall}[离线 RL 在推荐中落地困难的五个真实原因]
+\begin{enumerate}
+  \item \textbf{反事实评估方差极大}：用 IPS/DR 做离线策略评估时，权重容易爆炸，
+        置信区间往往宽到无法判断优劣（评估方法见 \cite{dudik2011ee,saito2020doubly}）；
+  \item \textbf{奖励延迟且稀疏}：留存类信号要等 7--30 天，与小时级的模型更新链路冲突，
+        用短期代理指标又会引入偏差；
+  \item \textbf{分布漂移快}：用户、物品池与运营策略每天都在变，离线数据与线上环境持续错位；
+  \item \textbf{探索有真实代价}：随机探索位会伤害体验与收入，多数业务只愿意给出 1\% 以下的流量；
+  \item \textbf{组织与考核}：长期指标没有明确负责人，A/B 实验周期长、方差大，
+        团队很难承受「三个月看不到收益」的成本。
+\end{enumerate}
+\textbf{务实做法}：多数工业系统实际采用「上下文老虎机式的探索 + 长期指标的离线约束 + 规则兜底」，
+把 RL 的完整闭环限制在少数可控场景（如推送时机、频次控制、预算分配），
+而不是直接让 RL 决定主 Feed 的排序。相关讨论见 \cref{ch:growth}。
+\end{pitfall}
+
+\section{扩散模型与其他生成范式的探索}
+
+扩散模型把生成建模成「逐步去噪」的过程。前向过程按方差表 $\beta_t$ 逐步加噪：
+
+\begin{equation}
+q(x_t \given x_{t-1}) = \mathcal{N}\big( x_t;\; \sqrt{1 - \beta_t}\, x_{t-1},\; \beta_t I \big),
+\qquad
+p_\theta(x_{t-1} \given x_t) = \mathcal{N}\big( x_{t-1};\; \mu_\theta(x_t, t),\; \Sigma_\theta(x_t, t) \big),
+\label{eq:diffusion}
+\end{equation}
+
+训练时只监督噪声预测，损失极其简单：
+
+\begin{equation}
+\mathcal{L}_{\text{simple}}
+= \E_{t,\, x_0,\, \epsilon}\Big[
+\norm{ \epsilon - \epsilon_\theta\big( \sqrt{\bar{\alpha}_t}\, x_0 + \sqrt{1 - \bar{\alpha}_t}\, \epsilon,\; t \big) }_2^2 \Big],
+\label{eq:diffusion-loss}
+\end{equation}
+
+其中 $\bar{\alpha}_t = \prod_{s \le t} (1 - \beta_s)$。
+
+在推荐中，扩散模型的吸引力来自三点：
+\textbf{(1) 多样性}——采样过程天然产生分布而非单点，适合「给一组互相不同的推荐」；
+\textbf{(2) 条件生成}——可以把用户序列作为条件，生成物品表示或物品序列；
+\textbf{(3) 鲁棒性}——对稀疏、含噪的隐式反馈有一定容忍度。
+当前的主要探索方向包括：用扩散模型生成用户兴趣表示（替代确定性编码器）、
+生成多品类组合、以及为冷启动做数据增广。
+
+但它的短板同样明显：\textbf{采样需要多步迭代}（原始 DDPM 需要数百步，改进采样器也需要 10--50 步），
+单次推荐的延迟比确定性模型高一个数量级。工业界的处理办法是蒸馏（把多步教师蒸成 1--4 步学生），
+或者只在\textbf{离线生成候选池}、\textbf{重排阶段做多样性}等对延迟不敏感的位置使用。
+
+其他生成范式方面，早期的 GAN 类推荐基本退场（训练不稳定、模式坍塌）；
+VAE 类方法仍用于协同过滤的隐变量建模；而当前真正形成工业主线的是
+\textbf{语义 ID + 自回归生成}，因为它的解码结构与已有的 Transformer 推理栈天然兼容。
+
+\section{工程实现：数据模型、在线服务与一致性}
+
+\subsection{行为序列表的数据模型}
+
+序列建模的工程量主要不在模型，而在数据管道。下面是一份简化的行为序列表设计与去重、截断逻辑：
+
+\begin{lstlisting}[style=growth, language=SQLx, caption={用户行为序列表：去重与截断的典型写法（简化示意）}]
+-- One row per (user, item, event) with a server-side timestamp
+CREATE TABLE dwd_user_behavior (
+  user_id     BIGINT     NOT NULL,
+  item_id     BIGINT     NOT NULL,
+  event_type  STRING     NOT NULL,   -- expose / click / cart / order
+  event_ts    TIMESTAMP  NOT NULL,
+  scene       STRING,
+  duration_ms BIGINT
+) PARTITIONED BY (ds STRING);
+
+-- Step 1: keep the most recent record per (user, item) to remove duplicates
+-- Step 2: keep the latest 500 distinct items per user as the sequence
+SELECT user_id, item_id, event_type, event_ts, scene, duration_ms
+FROM (
+  SELECT user_id, item_id, event_type, event_ts, scene, duration_ms,
+         ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY event_ts DESC) AS seq_no
+  FROM (
+    SELECT user_id, item_id, event_type, event_ts, scene, duration_ms,
+           ROW_NUMBER() OVER (PARTITION BY user_id, item_id
+                              ORDER BY event_ts DESC) AS dup_no
+    FROM dwd_user_behavior
+    WHERE ds >= '2024-01-01' AND ds <= '2024-01-30'
+  ) d
+  WHERE dup_no = 1
+) s
+WHERE seq_no <= 500;
+\end{lstlisting}
+
+有几条经验值得固化成规范：
+\textbf{时间戳必须来自服务端}（客户端时间可能被篡改或时区错误）；
+\textbf{曝光与点击都要保留}，因为曝光未点击是强负反馈，而点击未曝光的记录通常是日志丢失或跨端同步问题；
+\textbf{去重要对「同物品」而非「同事件」}做，否则一次加购会在序列里出现点击与加购两条记录，放大该类目权重。
+
+\subsection{存储、延迟与成本的量级估算}
+
+做序列建模之前，先用一张纸算清楚三笔账，可以避免项目推进到一半才发现不可行：
+
+\begin{itemize}
+  \item \textbf{存储}：单用户 $L$ 条行为、每条 $d$ 维 float16，占用 $2 L d$ 字节。
+        $L = 500$、$d = 64$ 时约 64 KB；$L = 10^4$ 时约 1.28 MB。
+        一亿用户分别是 6.4 TB 与 128 TB 量级（示范量级），
+        因此长序列必须做分层存储（近期全量 + 远期压缩/聚合）与 int8 量化；
+  \item \textbf{检索成本}：对每个候选做一次 Top-$K$ 相似度检索，$L = 10^4$、$d = 64$ 时单次约 $6.4 \times 10^5$ 次乘加，
+        500 个候选合计约 $3 \times 10^8$ 次运算，GPU 上通常在 10 毫秒量级，CPU 上则需要百毫秒量级——
+        这直接决定了长序列模型是放在精排（候选少）还是召回（候选多）；
+  \item \textbf{训练成本}：注意力显存随 $L^2$ 增长。$L = 4096$ 时的注意力矩阵若用 float16 存储约 $32$ MB/层/样本，
+        必须依赖 FlashAttention \cite{dao2022flashattention} 一类的分块实现，否则批大小会被压到个位数，训练效率崩塌。
+\end{itemize}
+
+\begin{toolbox}[序列特征上线检查清单]
+\begin{enumerate}
+  \item \textbf{长度分布监控}：上线后统计线上实际序列长度的 P50/P90/P99，并与训练集对比，差异超过 20\% 就要告警；
+  \item \textbf{覆盖率}：统计有多少比例的用户存在可用序列（新用户与纯匿名流量通常占 20--50\%），并为无序列用户准备降级路径；
+  \item \textbf{新鲜度}：统计「序列中最新行为距今的时长」分布，若 P90 超过 7 天，说明实时行为没有透传成功；
+  \item \textbf{一致性 diff}：每天抽样 1000 个用户，离线回放与线上日志逐条比对序列内容，包含顺序、事件类型与时间戳；
+  \item \textbf{回滚开关}：序列特征与序列模型必须能灰度到 1\% 流量并一键回滚，长序列方案的故障半径通常比想象中大；
+  \item \textbf{延迟预算}：把序列拼接、检索、注意力三段的耗时分别打点，单独设预算，避免互相挤占。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{训练与服务的一致性}
+
+序列建模最容易丢效果的地方，是训练与服务看到的数据不是同一个东西。常见的不一致有五类：
+
+\begin{enumerate}
+  \item \textbf{时间不一致}：离线用 T+1 的全量行为，线上只有 T 时刻的实时流，中间差了几个小时；
+  \item \textbf{长度不一致}：离线训练用 1000 条，线上只透传 200 条；
+  \item \textbf{过滤规则不一致}：离线样本过滤了下架物品与机器人流量，线上序列里还有；
+  \item \textbf{去重口径不一致}：离线按物品去重，线上按事件透传；
+  \item \textbf{编码不一致}：离线用最新版本的量化器生成语义 ID，线上还在用旧版本词表。
+\end{enumerate}
+
+\begin{insight}[序列模型的收益八成来自数据管道]
+把序列模型的效果拆开看，模型结构的贡献通常只占一小部分：
+从 GRU4Rec 换到 SASRec，离线指标可能有两位数百分比的相对提升；
+但从「日志里根本没有加购事件」到「把加购事件正确接入序列」，
+带来的提升往往更大，而且这种提升是\textbf{永久性}的——它不会随模型换代而消失。
+因此序列建模项目的正确顺序是：先把行为日志打通并保证时序正确，
+再把样本构造做扎实，最后才去比较模型结构。反过来做，通常会在第三个月发现效果无法复现。
+\end{insight}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 推荐正在从「给固定候选集打分」转向「生成下一步行为」：
+        判别式关心分布中的分子，生成式关心整个分布；
+  \item GRU4Rec 用循环网络与排序损失完成了序列建模的第一次工程化，
+        但样本构造（滑窗、截断、去重、事件类型）比模型结构更决定成败；
+  \item SASRec 用因果掩码加位置编码替代 RNN，训练可并行、长程依赖更好，
+        是序列推荐事实上的工业基线；BERT4Rec 用 Cloze 目标提升监督密度与双向上下文，
+        代价是训练与服务的目标错配；
+  \item 对比学习（InfoNCE 与裁剪/遮盖/重排增强）的真实收益主要来自抗噪与长尾覆盖，
+        数据质量本身很高时收益会明显缩水；
+  \item 长序列的标准解法是两阶段：SIM 用硬检索与软检索选行为，
+        ETA 用 SimHash 让两阶段共享参数，TWIN 强调两阶段的一致性；
+        其代价是存储（一亿用户可达百 TB 量级）与延迟；
+  \item 语义 ID 把物品变成离散短码，让推荐变成序列到序列的生成问题；
+        RQ-VAE 训练残差量化，层次 K-means 更简单但必须处理簇不均衡、ID 冲突与漂移；
+  \item TIGER 证明生成式检索在公开数据集与冷启动物品上有明显优势；
+        HSTU 把推荐统一成序列 transducer，公开报告显示推荐任务存在 scaling law，
+        但门槛在数据、算力与工程链路；
+  \item LLM4Rec 三条路线中，「作为特征增强」是当前性价比最高的一条，
+        直接替换在线主链路则受制于幻觉、延迟与物品空间对齐；
+  \item 强化学习能表达长期价值，但反事实评估方差、奖励延迟与分布漂移使其实用化受限，
+        工业界多在频控、推送时机、预算分配等可控环节使用；
+  \item 扩散模型为多样性生成提供了新工具，采样步数是其主要瓶颈，通常通过蒸馏或离线使用来规避。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item SASRec 与 BERT4Rec 的核心区别是什么？为什么工业界的序列模型更偏向因果结构？
+  \item 自注意力为什么要除以 $\sqrt{d_k}$？去掉它会怎样？
+  \item 行为序列的样本构造中，你如何防止时间穿越与物品泄漏？
+  \item 序列长度从 200 加到 5000，你会怎么设计实验来判断收益是否真实？
+  \item 生成式推荐与双塔召回各自的优势和代价是什么？什么业务适合上生成式？
+  \item RQ-VAE 与层次 K-means 构造语义 ID，各自的优缺点与适用条件是什么？
+  \item 用 LLM 做推荐有哪三条路线？如果只有一个月工期，你会选哪一条，为什么？
+  \item 离线 RL 在推荐中难以落地的主要原因是什么？你会如何设计一个可控的长期价值实验？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+本章讨论的是「模型能力」：序列怎么建模、兴趣怎么生成。
+但再强的模型，也要靠稳定、低延迟、可回滚的工程链路才能变成线上收益——
+特征的一致性、样本的时序正确性、全链路超时与降级，缺一个都会让模型效果归零。
+下一章（\cref{ch:receng}）我们进入推荐系统的工程化：从特征平台、样本工程到在线服务与训练系统，
+把本章的模型真正跑在生产环境里。

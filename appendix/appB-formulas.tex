@@ -1,0 +1,258 @@
+\chapter{公式速查手册}
+\label{app:formulas}
+
+\begin{insight}[怎么用这一章]
+这不是用来「背」的。正确的用法是：在推导、写代码、做面试题卡住时回到这里查口径，
+然后回到对应章节看它的\textbf{假设与代价}。
+公式本身很少错，错的是用错了场景——所以每条公式后面都标了出处章节。
+\end{insight}
+
+\section{相似度、距离与损失}
+
+\begin{formulacard}[向量相似度（\cref{ch:recall}）]
+\begin{align}
+\text{内积} \quad & s(u,i) = \inner{u}{i} = \sum_{k=1}^{d} u_k i_k , \\
+\text{余弦} \quad & \cos(u,i) = \frac{\inner{u}{i}}{\norm{u}_2 \norm{i}_2} , \\
+\text{欧氏距离} \quad & d(u,i) = \norm{u - i}_2 = \sqrt{\norm{u}_2^2 + \norm{i}_2^2 - 2\inner{u}{i}} .
+\end{align}
+\textbf{注意}：当所有向量都已 L2 归一化时，内积等价于余弦，且与欧氏距离单调对应；
+这是双塔模型线上用内积（可用 ANN 索引）的数学前提。
+\end{formulacard}
+
+\begin{formulacard}[TF-IDF 与 BM25（\cref{ch:search}）]
+\begin{align}
+\text{tf-idf}(t,d) &= \frac{f_{t,d}}{\max_{t'} f_{t',d}} \cdot \log\frac{N}{n_t} , \\
+\text{BM25}(q,d) &= \sum_{t \in q} \text{IDF}(t) \cdot \frac{f_{t,d}(k_1+1)}{f_{t,d} + k_1\left(1 - b + b\,\frac{|d|}{\text{avgdl}}\right)} , \\
+\text{IDF}(t) &= \log\frac{N - n_t + 0.5}{n_t + 0.5} .
+\end{align}
+经验值：$k_1 \in [1.2, 2.0]$，$b \in [0.5, 0.8]$。
+$k_1 \to 0$ 退化为只关心是否出现，$k_1 \to \infty$ 退化为线性词频；
+$b = 0$ 关闭长度归一化，$b = 1$ 完全归一化。
+\end{formulacard}
+
+\begin{formulacard}[查询似然与 Dirichlet 平滑（\cref{ch:search}）]
+\begin{equation}
+\Prob(q \given d) = \prod_{t \in q} \frac{f_{t,d} + \mu \cdot \Prob(t \given C)}{|d| + \mu} ,
+\end{equation}
+其中 $\Prob(t \given C)$ 是词在全集中的概率，$\mu$ 是平滑强度（典型 $1000 \sim 2000$）。
+$\mu$ 越大越接近背景语言模型，越小越依赖文档本身。
+\end{formulacard}
+
+\begin{formulacard}[BPR 与交叉熵（\cref{ch:recall}、\cref{ch:ranking}）]
+\begin{align}
+\mathcal{L}_{\text{BPR}} &= -\sum_{(u,i,j) \in D_s} \log \sigmoid\big(\hat{x}_{ui} - \hat{x}_{uj}\big) + \lambda \norm{\Theta}_2^2 , \\
+\mathcal{L}_{\text{BCE}} &= -\frac{1}{N}\sum_{k=1}^{N}\Big[ y_k \log \hat{p}_k + (1-y_k)\log(1-\hat{p}_k) \Big] .
+\end{align}
+BPR 用 \textbf{pairwise} 比较替代评分回归，是隐式反馈场景的标准做法；
+BCE（LogLoss）是 CTR 预估的标准损失，其梯度对校准误差敏感。
+\end{formulacard}
+
+\section{推荐模型}
+
+\begin{formulacard}[矩阵分解与 FM 二阶项（\cref{ch:recall}）]
+\begin{align}
+\hat{r}_{ui} &= \mu + b_u + b_i + \inner{p_u}{q_i} , \\
+\hat{y}_{\text{FM}}(\mathbf{x}) &= w_0 + \sum_{i=1}^{n} w_i x_i
+ + \sum_{i=1}^{n}\sum_{j=i+1}^{n} \inner{v_i}{v_j} x_i x_j \notag \\
+&= w_0 + \sum_i w_i x_i
+ + \frac{1}{2}\sum_{f=1}^{k}\left[ \Big(\sum_{i=1}^{n} v_{i,f} x_i\Big)^2 - \sum_{i=1}^{n} v_{i,f}^2 x_i^2 \right] .
+\end{align}
+第二个等号是关键：把 $O(n^2)$ 的两两交叉重写成 $O(nk)$ 的聚合形式，
+这就是 FM 能在工业界大规模使用的原因。
+\end{formulacard}
+
+\begin{formulacard}[双塔与采样 Softmax（\cref{ch:recall}）]
+\begin{equation}
+\Prob(i \given u) = \frac{\exp\big(\inner{f_u(x_u)}{g_i(x_i)} / \tau\big)}
+{\sum_{j \in \mathcal{I}} \exp\big(\inner{f_u(x_u)}{g_j(x_j)} / \tau\big)} ,
+\qquad
+\tilde{\Prob}(i \given u) = \frac{\exp\big(s_{ui} - \log Q_i\big)}
+{\sum_{j \in \mathcal{S}} \exp\big(s_{uj} - \log Q_j\big)} .
+\end{equation}
+$\tau$ 是温度（越小越尖锐）；$Q_i$ 是采样概率，减去 $\log Q_i$ 用于校正采样偏差。
+训练用全量 softmax 不可行，因此用 sampled softmax 近似。
+\end{formulacard}
+
+\begin{formulacard}[注意力与多任务门控（\cref{ch:ranking}）]
+\begin{align}
+\Attention(Q,K,V) &= \softmax\!\left(\frac{QK\T}{\sqrt{d_k}}\right)V , \\
+\text{(DIN) } v_u(i) &= \sum_{j \in \mathcal{H}_u} a(i, j)\, e_j ,
+\quad a(i,j) = \frac{\exp\!\big(\relu(W[e_i, e_j, e_i - e_j])\big)}{\sum_{k}\exp\!\big(\relu(W[e_i,e_k,e_i-e_k])\big)} , \\
+\text{(MMoE) } y_k &= h^k\!\left( \sum_{i=1}^{n} g^k_i(\mathbf{x})\, f_i(\mathbf{x}) \right),
+\quad g^k(\mathbf{x}) = \softmax\!\big(W_{gk}\mathbf{x}\big) .
+\end{align}
+DIN 的注意力\textbf{没有用 softmax 做归一化}（原论文指出归一化会削弱对长序列的表达），
+这是最容易记错的一个细节；MMoE 的门控是\textbf{软的、按样本的}，这是它与 Shared-Bottom 的本质差异。
+\end{formulacard}
+
+\begin{formulacard}[位置偏差消偏（PAL，\cref{ch:ranking}）]
+\begin{equation}
+\hat{y} = \sigma\big(\underbrace{f_u(x)}_{\text{用户-物品相关性}} + \underbrace{f_p(\text{pos})}_{\text{位置偏置}}\big) ,
+\qquad
+\text{服务时令 } f_p \equiv 0 .
+\end{equation}
+训练时位置项吸收位置带来的点击提升，从而让 $f_u$ 学到「纯相关性」；
+服务时无位置概念，置零即可。前提是\textbf{训练数据中位置必须有充分随机性}。
+\end{formulacard}
+
+\section{评估指标}
+
+\begin{formulacard}[AUC 与 GAUC（\cref{ch:math}）]
+\begin{equation}
+\AUC = \frac{\sum_{i \in \mathcal{P}}\sum_{j \in \mathcal{N}}
+ \mathbb{I}\big[s_i > s_j\big] + \tfrac{1}{2}\mathbb{I}\big[s_i = s_j\big]}{|\mathcal{P}| \cdot |\mathcal{N}|}
+ = \frac{R_{\text{pos}} - \tfrac{n_+ (n_+ + 1)}{2}}{n_+ n_-} ,
+\end{equation}
+其中 $R_{\text{pos}}$ 是正样本的\textbf{平均秩}（升序，从 1 开始，并列取平均秩）。GAUC 按用户分组后加权平均：
+\begin{equation}
+\GAUC = \frac{\sum_{u} w_u \cdot \AUC_u}{\sum_u w_u} ,
+\qquad w_u \text{ 常取该用户的样本数或点击数} .
+\end{equation}
+\textbf{直觉}：AUC 是「随机取一正一负，正样本排在前面的概率」；
+GAUC 回答的是「同一个用户的候选排序做得好不好」，因此更贴近线上。
+\end{formulacard}
+
+\begin{formulacard}[NDCG、MAP、MRR、Recall@K（\cref{ch:search}、\cref{ch:recall}）]
+\begin{align}
+\text{DCG@}K &= \sum_{i=1}^{K} \frac{2^{rel_i} - 1}{\log_2(i+1)} ,
+\qquad \text{NDCG@}K = \frac{\text{DCG@}K}{\text{IDCG@}K} , \\
+\text{AP} &= \frac{1}{|\mathcal{R}|}\sum_{k=1}^{K} \Precision(k) \cdot rel_k ,
+\qquad \text{MAP} = \frac{1}{|\mathcal{U}|}\sum_{u} \text{AP}_u , \\
+\text{MRR} &= \frac{1}{|\mathcal{U}|}\sum_{u} \frac{1}{\text{rank}_u} ,
+\qquad \text{Recall@}K = \frac{|\text{Top-}K \cap \mathcal{R}|}{|\mathcal{R}|} .
+\end{align}
+NDCG 的增益是\textbf{指数}的（$2^{rel}-1$），对头部位置的正确性极度敏感；
+Recall@K 衡量召回覆盖率，$K$ 要按下游粗排容量设定，否则指标好看但线上无效。
+\end{formulacard}
+
+\begin{formulacard}[校准与排序一致性（\cref{ch:ranking}）]
+\begin{equation}
+\text{ECE} = \sum_{m=1}^{M} \frac{|\mathcal{B}_m|}{N}
+\left| \text{acc}(\mathcal{B}_m) - \text{conf}(\mathcal{B}_m) \right| .
+\end{equation}
+排序类指标（AUC/NDCG）对单调变换\textbf{不敏感}，但广告出价、预算控制、
+ROI 约束都依赖绝对概率，因此必须看 ECE / 分桶校准曲线。
+\textbf{一句话}：排序看 AUC，出价看校准。
+\end{formulacard}
+
+\section{计算广告与出价}
+
+\begin{formulacard}[eCPM 与质量分（\cref{ch:ad}）]
+\begin{align}
+\text{eCPM}_{\text{CPC}} &= 1000 \times \text{pCTR} \times \text{bid} , \\
+\text{eCPM}_{\text{CPA}} &= 1000 \times \text{pCTR} \times \text{pCVR} \times \text{CPA} , \\
+\text{实际 CPC} &= \frac{\text{下一位广告的 eCPM}}{\text{本方 pCTR} \times \text{质量分}} + \text{最小计价单位} .
+\end{align}
+第三条是「质量分越低、CPC 越高」的数学表达：
+同等竞争环境下，质量分高的广告能以更低价格拿到同样位置。
+\end{formulacard}
+
+\begin{formulacard}[GSP 与 VCG（\cref{ch:ad}）]
+\begin{align}
+\text{(GSP)} \quad p_i &= \frac{\text{eCPM}_{i+1}}{\text{pCTR}_i} , \\
+\text{(VCG)} \quad p_i &= \frac{1}{\text{pCTR}_i}\Big( \sum_{j \neq i} v_j(\text{alloc}^{-i}) - \sum_{j \neq i} v_j(\text{alloc}) \Big) .
+\end{align}
+GSP 按「下一名的出价」定价，\textbf{不是}激励相容的（广告主有动机低报以影响邻居）；
+VCG 按「自己造成的外部性」定价，是激励相容的，但平台收入可能更低且实现复杂。
+这正是「效率与收入」的经典权衡。
+\end{formulacard}
+
+\begin{formulacard}[最优出价与预算平滑（\cref{ch:admodel}）]
+\begin{align}
+\text{最优出价（无约束）} \quad & b^* = v \cdot \text{pCVR} \cdot \frac{1}{\text{price of } 1} \;\; \text{（按价值出价即可，无需压价）} , \\
+\text{ROI 约束下的出价} \quad & b^* = \frac{v \cdot \text{pCVR}}{1 + \lambda} ,
+\quad \lambda \text{ 为 ROI 约束的拉格朗日乘子} , \\
+\text{PID 预算控制} \quad & u(t) = K_p e(t) + K_i \!\int_0^t\! e(s)\dd s + K_d \frac{\dd e(t)}{\dd t} ,
+\quad e(t) = \frac{\text{spend}^*(t) - \text{spend}(t)}{\text{budget}} .
+\end{align}
+第一价格机制下存在\textbf{出价着色}：不按真实价值出价，而是乘一个小于 1 的因子换取 ROI。
+$\lambda$ 越大（ROI 约束越紧），出价越保守、量级越小。
+\end{formulacard}
+
+\begin{formulacard}[Shapley 值归因（\cref{ch:admodel}）]
+\begin{equation}
+\phi_k = \sum_{S \subseteq \mathcal{C} \setminus \{k\}}
+\frac{|S|!\,\big(|\mathcal{C}| - |S| - 1\big)!}{|\mathcal{C}|!}
+\Big( v(S \cup \{k\}) - v(S) \Big) .
+\end{equation}
+$v(S)$ 是触点集合 $S$ 的转化贡献（或转化概率）。
+时间复杂度为 $O(2^{|\mathcal{C}|})$，因此实践中用\textbf{采样近似}或按通道分组降维。
+它满足效率性、对称性、虚拟性、可加性四条公理，是「归因应当公平」的数学化表达。
+\end{formulacard}
+
+\section{实验与统计}
+
+\begin{formulacard}[样本量与最小可检测效应（\cref{ch:growth}）]
+\begin{align}
+n_{\text{per arm}} &\approx \frac{\big(z_{1-\alpha/2} + z_{1-\beta}\big)^2 \big[p_1(1-p_1) + p_2(1-p_2)\big]}{(p_2 - p_1)^2} , \\
+&\approx \frac{16 \, p(1-p)}{\delta^2} \quad \text{（}\alpha = 0.05,\ \beta = 0.20\text{ 时的常用近似）} , \\
+\text{MDE} &\approx \big(z_{1-\alpha/2} + z_{1-\beta}\big)\sqrt{\frac{2p(1-p)}{n}} .
+\end{align}
+$p$ 是基线转化率，$\delta$ 是绝对提升。
+\textbf{关键直觉}：所需样本量与 $\delta^2$ 成反比——想检测的提升减半，样本量要翻两番。
+\end{formulacard}
+
+\begin{formulacard}[CUPED 方差缩减（\cref{ch:growth}）]
+\begin{equation}
+Y^{\text{cv}} = Y - \theta (X - \E[X]) ,
+\qquad \theta^* = \frac{\Cov(X, Y)}{\Var(X)} ,
+\qquad
+\text{方差缩减} = \rho^2(X, Y) .
+\end{equation}
+$X$ 是实验前的协变量（如实验前 7 天的同一指标）。
+若实验前后指标相关系数为 $\rho$，有效样本量放大 $\tfrac{1}{1-\rho^2}$ 倍。
+典型电商场景 $\rho \approx 0.5 \sim 0.8$，相当于白拿 $1.3 \sim 2.8$ 倍的样本量。
+\end{formulacard}
+
+\begin{formulacard}[增量与单位经济（\cref{ch:growth}、\cref{ch:cbec}）]
+\begin{align}
+\text{增量转化} &= \text{实验组转化} - \text{对照组转化} , \\
+\text{iROAS} &= \frac{\text{增量收入} - \text{对照组收入}}{\text{广告花费}} , \\
+\text{LTV} &= \sum_{t=0}^{T} \frac{\text{ARPU}_t \cdot \text{毛利率}}{(1+r)^t} ,
+\qquad \text{CAC} = \frac{\text{总获客投入}}{\text{新增付费用户数}} , \\
+\text{Payback} &= \min\Big\{ T : \sum_{t=1}^{T} \text{contribution}_t \ge \text{CAC} \Big\} .
+\end{align}
+\textbf{注意口径}：LTV 用毛利还是收入，会让 LTV/CAC 差出数倍；
+平台后台的 ROAS 通常按\textbf{收入}口径，不是利润口径。
+\end{formulacard}
+
+\section{跨境电商与供应链}
+
+\begin{formulacard}[漏斗乘法链与单位经济（\cref{ch:overview}、\cref{ch:cbec}）]
+\begin{align}
+\text{GMV} &= \text{UV} \times \text{CTR} \times \text{CVR} \times \text{AOV} \times (1 - \text{退货率}) , \\
+\text{净利} &= \text{售价} - \big( \text{货值} + \text{头程} + \text{关税} + \text{仓配} + \text{尾程}
+ + \text{佣金} + \text{支付} + \text{广告} + \text{退货损耗} \big) , \\
+\text{盈亏平衡售价} &= \frac{\text{固定成本项}}{\,1 - \text{佣金率}\,} .
+\end{align}
+最后一条容易被忽略：佣金按售价比例抽成，因此\textbf{提价并不能线性增加利润}，
+需要通过方程反解真正的盈亏平衡点。
+\end{formulacard}
+
+\begin{formulacard}[安全库存、ROP 与 EOQ（\cref{ch:supply}）]
+\begin{align}
+SS &= z \cdot \sqrt{\text{LT} \cdot \sigma_d^2 + \bar{d}^2 \cdot \sigma_{\text{LT}}^2} , \\
+\text{ROP} &= \bar{d} \cdot \text{LT} + SS , \\
+EOQ &= \sqrt{\frac{2 D S}{H}} , \qquad H = \text{单位成本} \times \text{持有成本率} .
+\end{align}
+$z$ 由目标服务水平决定（90\% 对应 1.28，95\% 对应 1.65，99\% 对应 2.33）。
+\textbf{注意}：当交期波动 $\sigma_{\text{LT}}$ 很大时（跨境头程的现实），
+第二项会主导安全库存——这就是为什么跨境卖家的库存成本远高于国内电商。
+\end{formulacard}
+
+\begin{formulacard}[牛鞭效应的方差放大（\cref{ch:supply}）]
+\begin{equation}
+\frac{\Var(q)}{\Var(d)} \;\ge\; 1 + \frac{2L}{p} + \frac{2L^2}{p^2} ,
+\end{equation}
+其中 $L$ 是交期，$p$ 是需求观测周期（Lee 等 1997 的经典结论）。
+交期越长，订单量的波动相对需求被放大越厉害。
+\textbf{管理含义}：缩短交期不只是省时间，而是直接降低整条链的波动与库存成本——
+这正是 SHEIN「小单快反」的经济学基础。
+\end{formulacard}
+
+\begin{keypoint}[最后一句话]
+把这本手册里的公式分成两类：
+\textbf{一类是「定义」（如 AUC、eCPM、NDCG），必须精确};
+\textbf{另一类是「近似」（如 MDE、EOQ、CUPED），使用时必须记住它的假设}。
+面试和实战里翻车的，几乎都是在第二类上把假设忘了。
+\end{keypoint}

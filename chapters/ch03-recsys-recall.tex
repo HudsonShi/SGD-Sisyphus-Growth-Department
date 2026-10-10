@@ -1,0 +1,1213 @@
+\chapter{推荐系统总论与召回}
+\label{ch:recall}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 推荐系统的本质是什么？为什么说\textbf{召回决定了效果上限}，而排序只是逼近这个上限？
+  \item 显式反馈与隐式反馈在数学建模上有什么根本差异？为什么工业界几乎只做 Top-N 而不是评分预测？
+  \item 协同过滤从 UserCF 走到 ItemCF，中间发生了什么？为什么工业界几乎一边倒地选择 i2i？
+  \item 矩阵分解与 BPR 到底在优化什么？pairwise 损失为什么比 pointwise 的回归更适合隐式反馈？
+  \item 双塔（two-tower）模型为什么既能做到毫秒级召回，又\textbf{结构性地丢掉了用户与物品的交叉信息}？
+  \item 图召回、多路融合与冷启动这三件事，在真实系统里分别由谁负责、用什么手段兜底？
+\end{enumerate}
+\end{insight}
+
+\section{推荐问题的形式化}
+
+\subsection{从信息过载到效用最大化}
+
+推荐系统的第一性原理可以用一句话概括：\textbf{在信息过载的条件下，把有限的展示位分配给能带来最大期望效用的候选}。
+它与搜索最大的区别在于\textbf{意图的存在性}：搜索用户带着一个可表达的需求（query）进来，系统的工作是「匹配」；
+推荐用户往往只有一个模糊的状态（刚打开 App、刚看完一个视频、刚加购一件商品），系统的工作是「推断 + 引导」。
+
+把这句话写成数学形式，就是\textbf{带约束的排序优化}（\cref{eq:unified}）：
+
+\begin{equation}
+\max_{\pi} \; \E_{u \sim \mathcal{U}} \Big[ \sum_{c \in \pi(u)} w_u \cdot v(u, c, \text{ctx}) \Big]
+\quad \text{s.t.} \quad g_j(\pi) \le b_j, \; j = 1, \dots, m .
+\label{eq:recall-objective}
+\end{equation}
+
+其中 $v(\cdot)$ 是效用函数（点击率、观看时长、成交概率乘毛利），$w_u$ 是用户权重，
+$g_j$ 是资源与体验约束（曝光频控、展示位数量、多样性下限、生态集中度上限）。
+\textbf{召回层的作用，是在这个优化问题里把可行域从 $10^7$ 缩小到 $10^4$——一旦某个物品没被召回，
+无论后面的排序模型多强，它都不可能出现在结果里}。这正是「召回决定上限」的严格含义。
+
+\begin{keypoint}[召回与排序的分工]
+\begin{itemize}
+  \item \textbf{召回}追求\kw{召回率（Recall）}：宁可放进 1000 个有噪声的候选，也不愿漏掉那个真正该展示的物品。
+        评价口径通常是「最终点击/成交的物品中，有多少出现在召回集合里」。
+  \item \textbf{排序}追求\kw{精度（Precision）与序}：在给定候选集内部把最该展示的排到最前面。
+        评价口径是 \metric{AUC}/\metric{GAUC}/\metric{NDCG}。
+  \item 二者是一对\textbf{串联的漏斗}：整体上限 $=$ 召回覆盖率 $\times$ 排序能力。召回掉了 10\% 的目标物品，
+        排序再提升 3\% 的 \metric{AUC} 也补不回来。
+\end{itemize}
+\end{keypoint}
+
+\subsection{用户-物品交互矩阵与两类反馈}
+
+推荐的原始数据是一个稀疏矩阵 $\R \in \R^{m \times n}$，行对应用户，列对应物品：
+
+\begin{itemize}
+  \item \textbf{显式反馈（explicit feedback）}：用户主动给出的评分，如 Netflix 的 1--5 星。
+        矩阵中非空元素\emph{本身就是标签}，缺失值表示「没看过」，通常可以假设为\kw{随机缺失}。
+  \item \textbf{隐式反馈（implicit feedback）}：点击、观看、停留、加购、下单等行为。
+        此时\emph{只有正样本是可信的}，缺失值混合了「不喜欢」与「没机会看到」两种情况，
+        这是一个典型的\kw{MNAR（Missing Not At Random）}问题。
+\end{itemize}
+
+这个差异不是细节，而是整个算法设计的出发点。显式反馈可以建模成回归问题（预测 4.2 星），
+隐式反馈只能建模成\emph{排序}或\emph{概率}问题：我们唯一能确定的信号是「$u$ 选择了 $i$ 而不是 $j$」。
+
+\begin{table}[htbp]
+\centering
+\caption{显式反馈与隐式反馈的建模差异}
+\label{tab:feedback}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{3.6cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{显式反馈} & \tabhead{隐式反馈} \\
+\midrule
+典型信号 & 1--5 星评分、点赞/踩、问卷 & 曝光、点击、观看时长、加购、成交、跳过 \\
+缺失值语义 & 未评分，可近似随机缺失 & 「不喜欢」+「没机会看到」混合，强 MNAR \\
+样本量级 & 极少（评分率常低于 1\%） & 极多（曝光日志每天可达 $10^{10}$ 行） \\
+标签噪声 & 主观偏差、文化差异 & 误点、诱导点击、机器流量 \\
+建模目标 & 评分预测（RMSE/MAE） & Top-N 排序（Recall@K/NDCG@K/AUC） \\
+典型损失 & 平方损失、加权 MF & BPR 等 pairwise 损失、交叉熵、加权 logistic \\
+评估难点 & 无偏但稀疏 & 有偏（位置偏差、曝光偏差），需消偏 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{评分预测与 Top-N：目标不同，指标不同}
+
+很多教材把推荐等同于「评分预测」，这在工业界是一个需要被纠正的直觉。
+\kw{评分预测}优化的是对已评分物品的数值拟合精度，指标是 \metric{RMSE}；
+\kw{Top-N 推荐}优化的是「在列表前 K 位里放进了多少用户真正会消费的物品」，指标是 \metric{Recall@K}、\metric{NDCG@K}、\metric{HitRate@K}。
+
+\begin{insight}[为什么「RMSE 降低」经常与「推荐变好」无关]
+一个只推荐热门物品的模型，可以让 \metric{RMSE} 很低——因为绝大多数评分集中在 3--4 星，预测均值就能拿到不错的误差。
+但它对头部几个百分点的「用户真正想看的长尾物品」毫无贡献。
+反过来，一个好的 Top-N 模型可能 \metric{RMSE} 很差，却在 \metric{Recall@K} 上遥遥领先。
+\textbf{结论：隐式反馈场景下，不要用回归指标评估，也不要用「预测评分排序」当作推荐依据。}
+\end{insight}
+
+\subsection{离线指标：召回率、命中率与 NDCG@K}
+
+设用户 $u$ 的测试集真实交互集合为 $\mathcal{T}_u$，推荐列表为 $\hat{\mathcal{L}}_u$（长度 $K$），
+则召回侧最常用的三个指标为：
+
+\begin{align}
+\Recall@K(u) &= \frac{\abs{\mathcal{T}_u \cap \hat{\mathcal{L}}_u}}{\abs{\mathcal{T}_u}},
+\qquad
+\HR@K(u) = \mathbf{1}\big[ \mathcal{T}_u \cap \hat{\mathcal{L}}_u \ne \emptyset \big],
+\label{eq:recall-hr} \\[2pt]
+\NDCG@K(u) &= \frac{\mathrm{DCG}@K(u)}{\mathrm{IDCG}@K(u)},
+\qquad
+\mathrm{DCG}@K(u) = \sum_{r=1}^{K} \frac{2^{y_{u,r}} - 1}{\log_2 (r + 1)} .
+\label{eq:ndcg@k}
+\end{align}
+
+其中 $y_{u,r}$ 是第 $r$ 位的相关度等级。这三个指标的诊断价值完全不同：
+\metric{Recall@K} 衡量「召回通道的覆盖能力」，\metric{HR@K} 衡量「有没有命中」，
+\metric{NDCG@K} 同时惩罚「命中但排太后」。\textbf{召回层的迭代主要看 \metric{Recall@K} 与覆盖率（Coverage），
+排序层才看 \metric{NDCG@K} 与 \metric{AUC}}。
+
+\begin{pitfall}[离线 Recall@K 涨了，线上反而不涨]
+这是推荐迭代里最常见的翻车形态，根因通常有四类：
+\begin{enumerate}
+  \item \textbf{测试集构造偏了}：用「随机留一（leave-one-out）」构造测试集，会把大量热门物品留进测试集，
+        模型只要学会推热门就能刷高 \metric{Recall@K}，但这与线上「不重复推荐历史消费」的约束冲突；
+  \item \textbf{忽略负反馈}：测试集只统计正向交互，没有把用户主动屏蔽、取消关注、快速划走的物品排除；
+  \item \textbf{候选集不一致}：离线评估时把「全库物品」当候选，线上实际只有召回池里的几千个候选；
+  \item \textbf{时间穿越（leakage）}：特征里混进了测试窗口之后才产生的行为，例如用「未来 7 天的购买次数」当特征。
+\end{enumerate}
+正确做法是\textbf{按时间切分 + 全局留出 + 剔除已消费 + 保持候选集一致}，
+并配合\kw{离线重放（replay）}：用线上日志的真实候选集和真实特征重新打分，比较新旧模型的排序差异。
+\end{pitfall}
+
+\section{协同过滤：从共现到相似度}
+
+\subsection{相似度的四种定义}
+
+协同过滤（Collaborative Filtering, CF）的核心假设是：\textbf{相似的用户会消费相似的物品}。
+一切 CF 算法的差异，都可以还原为「用什么向量、用什么相似度、怎么聚合」这三个选择。
+
+设物品 $i$ 的交互用户集合为 $U_i$，用户 $u$ 的交互物品集合为 $I_u$，$r_{ui}$ 为评分或行为强度。
+
+\begin{formulacard}[四个基础相似度]
+\begin{align}
+\text{余弦（cosine）} \quad & w_{ij}^{\cos} = \frac{\sum_{u \in U_i \cap U_j} r_{ui} r_{uj}}
+{\sqrt{\sum_{u \in U_i} r_{ui}^2} \sqrt{\sum_{u \in U_j} r_{uj}^2}} ,
+\label{eq:cosine} \\[3pt]
+\text{雅可比（Jaccard）} \quad & w_{ij}^{\mathrm{jac}} = \frac{\abs{U_i \cap U_j}}{\abs{U_i \cup U_j}} ,
+\label{eq:jaccard} \\[3pt]
+\text{皮尔逊（Pearson）} \quad & w_{ij}^{\mathrm{pear}} =
+\frac{\sum_{u \in U_{ij}} (r_{ui} - \bar r_i)(r_{uj} - \bar r_j)}
+{\sqrt{\sum_{u \in U_{ij}} (r_{ui} - \bar r_i)^2}\sqrt{\sum_{u \in U_{ij}} (r_{uj} - \bar r_j)^2}} ,
+\label{eq:pearson} \\[3pt]
+\text{共现计数（co-click）} \quad & w_{ij}^{\mathrm{cnt}} = \abs{U_i \cap U_j} .
+\label{eq:coclick}
+\end{align}
+\end{formulacard}
+
+四种定义在工业上的适用场景差别很大：
+\begin{itemize}
+  \item \textbf{余弦}最通用，配合 L2 归一化后等价于「归一化共现」，对活跃用户有一定抑制；
+  \item \textbf{Jaccard} 适合纯二值行为（是否点击），对物品热度天然有惩罚，但对高频行为丢失了强度信息；
+  \item \textbf{皮尔逊}能消除用户评分尺度差异，但计算要求交集非空且方差非零，覆盖率低；
+  \item \textbf{共现计数}实现最简单（一条 \code{JOIN} 就能算），但会被爆款物品严重污染，
+        必须叠加\kw{热门惩罚}（见 \cref{eq:popularity-penalty}）。
+\end{itemize}
+
+\subsection{UserCF 与 ItemCF}
+
+\kw{UserCF} 先找「和 $u$ 相似的用户」，再把他们喜欢而 $u$ 没见过的物品推荐给 $u$：
+
+\begin{equation}
+\hat{r}_{ui} = \bar r_u + \frac{\sum_{v \in N_k(u)} w_{uv} \, (r_{vi} - \bar r_v)}
+{\sum_{v \in N_k(u)} \abs{w_{uv}}} ,
+\label{eq:usercf}
+\end{equation}
+
+其中 $N_k(u)$ 是与 $u$ 最相似的前 $k$ 个用户。\kw{ItemCF} 则先算物品相似度，再用用户历史物品的加权和预测：
+
+\begin{equation}
+\hat{r}_{ui} = \frac{\sum_{j \in I_u \cap N_k(i)} w_{ij} \, r_{uj}}
+{\sum_{j \in I_u \cap N_k(i)} \abs{w_{ij}}} ,
+\label{eq:itemcf}
+\end{equation}
+
+线上工程中更常用的是「取 top-$k$ 个最相似物品、只保留用户历史里有行为的那些、分数线性加权」的简化形式：
+
+\begin{equation}
+\text{score}(u, i) = \sum_{j \in I_u \cap N_k(i)} w_{ij} \cdot \big( \text{decay}(t - t_{uj}) \big)^{\alpha} .
+\label{eq:itemcf-score}
+\end{equation}
+
+\begin{table}[htbp]
+\centering
+\caption{UserCF 与 ItemCF 的全面对比}
+\label{tab:usercf-itemcf}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{4.0cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{UserCF} & \tabhead{ItemCF} \\
+\midrule
+核心假设 & 相似用户的口味相通 & 用户的兴趣具有物品层面的延续性 \\
+相似度矩阵规模 & $m \times m$（用户数，亿级） & $n \times n$（物品数，百万到千万级） \\
+稳定性 & 差：用户兴趣与画像每天变化 & 好：物品属性与受众在数周内基本稳定 \\
+可离线计算 & 难：新用户、新行为随时发生 & 易：相似度矩阵可按天/小时批量更新 \\
+可解释性 & 弱：「和你相似的人还看了」 & 强：「因为你看过 A，所以推荐 B」 \\
+推荐理由 UI & 难落地 & 天然可落地（i2i 理由标签） \\
+新用户友好度 & 较好（只要行为少也能找到相似人） & 较差（无历史行为则无法触发） \\
+长尾能力 & 强：能挖掘小众兴趣群体 & 中等：受物品热度分布影响 \\
+典型适用 & 新闻、社交、早期小规模系统 & 电商、视频、广告、内容平台（主流） \\
+主要风险 & 用户数大导致在线计算成本高 & 爆款污染、相似度矩阵过大需截断 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{为什么工业界几乎一边倒选择 ItemCF}
+
+除了上表的稳定性与可解释性，还有三条工程上的硬理由：
+
+\begin{enumerate}
+  \item \textbf{离线可算、在线可查}。物品相似度只依赖交互日志，可以完全离线批量计算成
+        \code{i2i} 倒排索引；线上只需拿用户最近 $N$ 个行为去查表、合并、截断，
+        延迟稳定在个位数毫秒（经验量级）。UserCF 的相似用户会随新行为不断变化，很难做到同样稳定。
+  \item \textbf{可截断、可控成本}。每个物品只保留 top-$k$（经验值 $k \in [50, 500]$）个最相似物品，
+        存储与计算都可预算。一个千万级物品库、每个物品 100 条 i2i 边，就是 $10^9$ 条记录，
+        用 KV 存储可以接受（示范量级）。
+  \item \textbf{与业务语义天然对齐}。电商里「买过 A 的人也买了 B」、视频里「看完 A 的人接着看 B」，
+        本身就是可运营、可审核的关系，运营同学可以直接配置黑名单与白名单。
+\end{enumerate}
+
+\begin{keypoint}[i2i 的三个工程参数]
+\begin{itemize}
+  \item \textbf{行为窗口}：常用 30/90/180 天滑动窗口。窗口太短会丢失长周期兴趣，太长会被过时偏好污染。
+  \item \textbf{行为权重}：点击 1、加购 3、收藏 2、下单 5 是常见经验权重；权重需要通过离线 \metric{Recall@K} 与线上 \metric{CTR} 联合校准。
+  \item \textbf{相似度归一化与阈值}：保留相似度大于阈值 $\tau$ 的边（经验值 $\tau$ 取 0.1--0.3），
+        并对相似度做幂次压缩 $w^{\gamma}$（$\gamma \in [0.5, 1]$）以削弱头部物品的支配力。
+\end{itemize}
+\end{keypoint}
+
+\subsection{热门惩罚与 Swing 算法}
+
+原始的共现计数有一个致命缺陷：\textbf{爆款物品与任何物品都共现}。
+如果把「iPhone 手机壳」和「手机贴膜」同时放进爆款列表，它们会被算成高度相似，而实际上这只是因为它们都热。
+标准的抑制手段是 IDF 式的热门惩罚：
+
+\begin{equation}
+w_{ij} = \frac{\abs{U_i \cap U_j}}{\abs{U_i}^{\beta_1} \abs{U_j}^{\beta_2}} ,
+\qquad
+\text{或等价地} \quad
+w_{ij} = \frac{\abs{U_i \cap U_j}}{\log (1 + \abs{U_i}) \log (1 + \abs{U_j})} .
+\label{eq:popularity-penalty}
+\end{equation}
+
+经验上 $\beta_1 = \beta_2 = 0.5$（即余弦归一化）已经把爆款压得比较合理；若平台爆款现象极端，
+可以把指数提高到 0.6--0.8，代价是长尾物品之间的相似度信号也被削弱。
+
+阿里巴巴在 2014 年前后公开介绍的 \kw{Swing} 算法给出了另一种更精细的思路：
+\textbf{两个物品相似，不仅因为共现的人多，更因为共现的人「圈子小」}。
+如果 $u$ 和 $v$ 同时买了 $i$ 和 $j$，而 $u$、$v$ 各自的好友集合重叠很少，
+那么这次共现的信息量就更大。Swing 的相似度定义为：
+
+\begin{equation}
+w_{ij}^{\mathrm{swing}} = \sum_{u \in U_i \cap U_j} \sum_{v \in U_i \cap U_j, \, v \ne u}
+\frac{1}{\alpha + \abs{I_u \cap I_v}} ,
+\label{eq:swing}
+\end{equation}
+
+其中 $\abs{I_u \cap I_v}$ 是两个用户的共同行为数，$\alpha$ 是平滑项（经验值 $\alpha \in [1, 20]$，常取 $5$--$10$）。
+分母越小说明两人越「同质」，这一对共现的贡献越大。Swing 在电商场景下对「小众同好」的挖掘能力显著优于余弦，
+代价是计算复杂度从 $O(\sum_i \abs{U_i}^2)$ 上升到需要用户两两配对的规模，
+必须依赖分布式框架（如 Spark/ODPS）并配合采样。
+
+\begin{insight}[相似度的本质是「信息量」而非「次数」]
+从 IDF 到 Swing，本质上是同一件事的两次逼近：
+\textbf{一次共现的信息量，取决于这次共现有多「意外」。}
+热门物品与多数物品共现是意料之中的，所以权重要压低；
+两个只有 3 个共同行为的用户同时买了两个冷门物品，这才是强信号。
+用信息论的语言说，$w_{ij} \propto \mathrm{PMI}(i, j) = \log \frac{P(i,j)}{P(i)P(j)}$，
+余弦与 IDF 惩罚都是 PMI 的工程近似——理解这一点，就能在面对新场景时自己推导出合适的归一化方式。
+\end{insight}
+
+\subsection{相似度计算的工程实现：倒排 + 多路合并}
+
+工业级 i2i 的计算流程可以拆成四步，核心思想是\textbf{用「用户 $\to$ 物品列表」做倒排，避免 $n^2$ 的两两比较}：
+
+\begin{enumerate}
+  \item \textbf{构建用户行为倒排}：从数仓拉取窗口内的行为表，按 \code{user\_id} 聚合为物品列表；
+  \item \textbf{按活跃度截断}：只保留行为数在 $[2, 500]$ 区间的用户（太少的没有共现，太多的多为爬虫或运营号）；
+  \item \textbf{两两展开求共现}：对每个用户的物品列表做自连接，输出 $(i, j, \text{cnt})$ 三元组；
+        这一步的复杂度是 $O(\sum_u \abs{I_u}^2)$，通常用 \code{map-side join} 或 Spark 的 \code{flatMap} 实现；
+  \item \textbf{聚合 + 归一化 + 截断 + 写回}：按 $(i,j)$ 求和，套用 \cref{eq:popularity-penalty}，
+        每个 $i$ 只保留 top-$k$，写入 KV/倒排存储。
+\end{enumerate}
+
+\begin{toolbox}[i2i 的 SQL 实现骨架与 Python 兜底版本]
+下面的 SQL 展示了「共现计数 + 热门惩罚 + top-k 截断」的最小可用实现，
+思路在离线数仓（Hive/Spark SQL）与单机（SQLite/DuckDB）之间是通用的：
+
+\begin{lstlisting}[style=growthnoline, language=SQLx, caption={i2i 共现与热门惩罚的 SQL 骨架}]
+-- Step 1: user -> item list within the last 90 days
+WITH behav AS (
+  SELECT user_id, item_id,
+         MAX(weight) AS w          -- weight: click=1, cart=3, order=5
+  FROM dwd_user_behavior
+  WHERE dt BETWEEN '2025-01-01' AND '2025-03-31'
+  GROUP BY user_id, item_id
+),
+-- Step 2: drop bots and extreme users
+clean AS (
+  SELECT * FROM behav
+  WHERE user_id IN (
+    SELECT user_id FROM behav GROUP BY user_id
+    HAVING COUNT(*) BETWEEN 2 AND 500)
+),
+-- Step 3: self join to get co-occurrence
+pair AS (
+  SELECT a.item_id AS i, b.item_id AS j,
+         SUM(a.w * b.w) AS co
+  FROM clean a JOIN clean b
+    ON a.user_id = b.user_id AND a.item_id < b.item_id
+  GROUP BY a.item_id, b.item_id
+),
+-- Step 4: popularity penalty + top-k truncation
+pop AS (SELECT item_id, COUNT(*) AS n FROM clean GROUP BY item_id),
+scored AS (
+  SELECT p.i, p.j,
+         p.co / (POW(x.n, 0.5) * POW(y.n, 0.5)) AS sim
+  FROM pair p
+  JOIN pop x ON p.i = x.item_id
+  JOIN pop y ON p.j = y.item_id
+),
+ranked AS (
+  SELECT i, j, sim,
+         ROW_NUMBER() OVER (PARTITION BY i ORDER BY sim DESC) AS rk
+  FROM scored WHERE sim >= 0.1
+)
+SELECT i, j, sim FROM ranked WHERE rk <= 200;
+\end{lstlisting}
+
+当数据量较小或需要快速试验时，用 Python 的字典聚合即可，注意必须做双向写入（$i \to j$ 与 $j \to i$）：
+
+\begin{lstlisting}[style=growthnoline, language=Python, caption={i2i 相似度计算的 Python 骨架}]
+from collections import defaultdict
+import math
+
+def build_i2i(user_items, topk=200, min_sim=0.1):
+    """user_items: dict[user_id] -> list[item_id]"""
+    co = defaultdict(float)
+    pop = defaultdict(int)
+    for u, items in user_items.items():
+        items = list(dict.fromkeys(items))      # dedup, keep order
+        if not (2 <= len(items) <= 500):        # skip bots / cold users
+            continue
+        for it in items:
+            pop[it] += 1
+        for a in range(len(items)):
+            for b in range(a + 1, len(items)):
+                i, j = sorted((items[a], items[b]))
+                co[(i, j)] += 1.0
+    sim = defaultdict(list)
+    for (i, j), c in co.items():
+        s = c / math.sqrt(pop[i] * pop[j])      # cosine-like penalty
+        if s >= min_sim:
+            sim[i].append((j, s))
+            sim[j].append((i, s))
+    out = {}
+    for i, lst in sim.items():
+        lst.sort(key=lambda x: -x[1])
+        out[i] = lst[:topk]                     # truncate per item
+    return out
+\end{lstlisting}
+\end{toolbox}
+
+\section{矩阵分解：把共现压进隐空间}
+
+\subsection{FunkSVD 与带偏置的 MF}
+
+协同过滤的邻居模型有两个瓶颈：相似度矩阵需要显式存储，且无法平滑地泛化到「长得像」的物品。
+\kw{矩阵分解（Matrix Factorization, MF）}换了一个思路：
+把用户与物品都映射到 $d$ 维隐空间（经验值 $d \in [8, 256]$，工业界常用 32--128），
+用内积逼近观测到的交互：
+
+\begin{equation}
+\hat r_{ui} = \mu + b_u + b_i + \inner{\mathbf{p}_u}{\mathbf{q}_i} ,
+\qquad
+\min_{\mathbf{P}, \mathbf{Q}, \mathbf{b}} \sum_{(u,i) \in \mathcal{O}}
+\big( r_{ui} - \hat r_{ui} \big)^2 + \lambda \big( \norm{\mathbf{p}_u}^2 + \norm{\mathbf{q}_i}^2 + b_u^2 + b_i^2 \big) .
+\label{eq:mf-bias}
+\end{equation}
+
+其中 $\mu$ 是全局均值，$b_u$、$b_i$ 是用户/物品偏置。这一写法来自 Netflix Prize 时代的工程总结 \cite{koren2009mf}，
+它的价值在于\textbf{把「谁在评」和「评什么」这两类系统性偏差显式分离出来}——
+有些用户永远打高分，有些物品天生受欢迎，如果不用偏置吸收掉，这些方差会全部跑到隐向量里，
+使隐向量既表达偏好又表达倾向，泛化能力下降。
+
+在隐式反馈场景下 $\mathcal{O}$ 只包含正样本，可以做两种处理：
+（1）\textbf{加权回归}，让正样本权重为 1、未观测样本权重为一小正数 $c_0$（\cref{eq:mf-weighted}）；
+（2）把正样本的强度 $r_{ui}$ 直接当置信度 $c_{ui} = 1 + \alpha r_{ui}$（\cref{eq:als-confidence}）。
+
+\begin{equation}
+\min \sum_{u,i} c_{ui} \big( p_{ui} - \inner{\mathbf{p}_u}{\mathbf{q}_i} \big)^2 + \lambda \norm{\mathbf{P}}_F^2 + \lambda \norm{\mathbf{Q}}_F^2 ,
+\qquad p_{ui} = \mathbf{1}[r_{ui} > 0] .
+\label{eq:mf-weighted}
+\end{equation}
+
+\begin{equation}
+c_{ui} = 1 + \alpha \, r_{ui}, \qquad \alpha \in [1, 40] \; \text{（经验值，常取 10--40）}.
+\label{eq:als-confidence}
+\end{equation}
+
+\begin{table}[htbp]
+\centering
+\caption{ALS 与 SGD 的取舍（隐式反馈 MF）}
+\label{tab:als-sgd}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{3.9cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{ALS（交替最小二乘）} & \tabhead{SGD（随机梯度下降）} \\
+\midrule
+更新方式 & 固定 $\mathbf{Q}$ 解 $\mathbf{P}$ 的闭式解，交替迭代 & 每次采样一个 $(u,i)$ 或一个 batch 做梯度步 \\
+单步复杂度 & $O(d^3 + d^2 \abs{\mathcal{O}})$ 量级，可用预计算缓存 & $O(d)$，极低 \\
+并行性 & 按用户/物品分片天然并行，适合多机 & 需异步 SGD 或 \kw{参数服务器}，有梯度冲突 \\
+收敛速度 & 迭代次数少，但每步贵 & 迭代次数多，但每步便宜且早期收敛快 \\
+超参敏感度 & 较低，学习率不存在 & 对学习率、初始化、batch 顺序敏感，需调优 \\
+适用场景 & 全量重训、矩阵规模可控、要求可复现 & 流式/增量训练、样本量大、需要 online learning \\
+实践建议 & 离线天级全量训练的第一选择 & 在线学习与快速实验的首选 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{BPR：从 pointwise 到 pairwise 的推导}
+
+MF 的加权回归有一个隐患：它把所有未观测样本都当成「弱负样本」并给了权重 $c_0$。
+但隐式反馈的本质是\emph{相对偏好}——用户选择 $i$ 而不是 $j$，这个比较才是可靠信号。
+\kw{BPR（Bayesian Personalized Ranking）}\cite{rendle2009bpr} 正是把这一直觉形式化。
+
+\textbf{第一步：定义偏好。} 对用户 $u$，构造训练集
+$D_S = \{(u, i, j) \mid i \in I_u^{+}, \; j \notin I_u^{+}\}$，
+表示「$u$ 喜欢 $i$ 甚于 $j$」，记作 $i >_u j$。
+
+\textbf{第二步：写出后验。} 假设用户之间独立，后验正比于似然乘先验：
+
+\begin{equation}
+\Prob(\Theta \given >_u) \propto \prod_{(u,i,j) \in D_S} \Prob(i >_u j \given \Theta) \cdot \Prob(\Theta) .
+\label{eq:bpr-posterior}
+\end{equation}
+
+\textbf{第三步：用 sigmoid 连接打分差。} 令 $\hat x_{uij} = \hat x_{ui} - \hat x_{uj}$，
+并假设 $\Prob(i >_u j) = \sigmoid(\hat x_{uij})$，取对数后得到目标函数：
+
+\begin{equation}
+\ln \Prob(\Theta \given >_u) =
+\sum_{(u,i,j) \in D_S} \ln \sigmoid(\hat x_{ui} - \hat x_{uj}) - \lambda \norm{\Theta}^2 .
+\label{eq:bpr-logposterior}
+\end{equation}
+
+\textbf{第四步：取负对数，得到可优化的 BPR-Opt 损失}（工程上直接最小化它）：
+
+\begin{equation}
+\mathcal{L}_{\mathrm{BPR}} =
+- \sum_{(u,i,j) \in D_S} \ln \sigmoid\big( \hat x_{ui} - \hat x_{uj} \big)
++ \lambda \norm{\Theta}^2 ,
+\qquad
+\hat x_{ui} = \inner{\mathbf{p}_u}{\mathbf{q}_i} .
+\label{eq:bpr-loss}
+\end{equation}
+
+\textbf{第五步：求梯度。} 记 $\delta_{uij} = \sigmoid(\hat x_{ui} - \hat x_{uj})$，则
+
+\begin{equation}
+\frac{\partial \mathcal{L}_{\mathrm{BPR}}}{\partial \Theta} =
+- \sum_{(u,i,j)} \big( 1 - \delta_{uij} \big) \cdot
+\frac{\partial (\hat x_{ui} - \hat x_{uj})}{\partial \Theta} + 2 \lambda \Theta .
+\label{eq:bpr-grad}
+\end{equation}
+
+具体到参数上：$\mathbf{p}_u \mathrel{+}= \eta \big[ (1-\delta_{uij})(\mathbf{q}_i - \mathbf{q}_j) - \lambda \mathbf{p}_u \big]$，
+$\mathbf{q}_i \mathrel{+}= \eta \big[ (1-\delta_{uij}) \mathbf{p}_u - \lambda \mathbf{q}_i \big]$，
+$\mathbf{q}_j \mathrel{+}= \eta \big[ -(1-\delta_{uij}) \mathbf{p}_u - \lambda \mathbf{q}_j \big]$。
+
+\begin{insight}[BPR 的三个容易被忽略的细节]
+\begin{enumerate}
+  \item \textbf{$(1-\delta_{uij})$ 自动做了难例挖掘}。当模型已经把正样本排得足够高（$\delta \to 1$）时，
+        梯度趋近于零；真正产生学习信号的是那些「排错了」的三元组。这意味着 BPR 天然关注难样本，
+        但也意味着\textbf{训练后期有效样本急剧减少}，收敛会变慢。
+  \item \textbf{配对策略决定了效果上限}。常用的负采样方式有：均匀随机采样（最简单，但绝大多数是「用户不可能看到」的样本，
+        信息量低）、按热度采样（$p_j \propto n_j^{0.75}$，兼顾信息量与合理性）、
+        以及 \kw{hard negative}（从召回池里挑出模型打高分但实际未交互的物品）。
+        工程经验是\textbf{训练前期用随机，后期混入一定比例 hard negative}。
+  \item \textbf{BPR 与 AUC 是同一族目标}。sigmoid 型损失是 AUC 的可微代理，
+        优化 BPR 本质上是在优化 pairwise 排序正确率。这也解释了为什么 BPR 训练的模型在 \metric{AUC} 上通常优于
+        平方损失 MF——两者优化的目标本来就不是一回事。
+\end{enumerate}
+\end{insight}
+
+\subsection{SVD++：把「隐式行为集合」并入用户表示}
+
+SVD++ 观察到：\textbf{用户即使没有评分，他的历史行为集合本身就携带偏好信息}。
+于是把用户表示写成「隐向量 $+$ 历史行为物品隐向量的归一化聚合」：
+
+\begin{equation}
+\hat r_{ui} = \mu + b_u + b_i + \inner{\mathbf{q}_i}{\; \mathbf{p}_u + \abs{I_u}^{-1/2} \sum_{j \in I_u} \mathbf{y}_j \;} .
+\label{eq:svdpp}
+\end{equation}
+
+$\mathbf{y}_j$ 是「隐式反馈隐向量」，与用于预测的 $\mathbf{q}_j$ 分开学习。
+SVD++ 在 Netflix 竞赛上效果显著，但在工业界的直接使用不多，原因是：
+（1）$\sum_{j \in I_u} \mathbf{y}_j$ 需要遍历用户全部历史，训练与推理成本都高；
+（2）社交/行为序列更强的建模方式（如序列模型、双塔）后来居上。
+不过它的思想——\textbf{把行为集合当作用户表示的一部分}——被后来的所有深度召回模型继承，
+双塔中的「用户行为序列 pooling」就是 SVD++ 的深度版本（见 \cref{sec:two-tower}）。
+
+\section{因子分解机与特征化召回}
+
+\subsection{FM 的二阶交叉与线性复杂度}
+
+矩阵分解只处理「用户 ID $\times$ 物品 ID」两类特征，无法处理「用户年龄 $\times$ 商品类目 $\times$ 时段」这种多字段交叉。
+\kw{因子分解机（Factorization Machine, FM）}\cite{rendle2010fm} 把二分类特征全部 one-hot 拼接成稀疏向量 $\mathbf{x}$，
+并对\emph{所有二阶交叉项}赋予低秩参数化：
+
+\begin{equation}
+\hat y(\mathbf{x}) = w_0 + \sum_{i=1}^{n} w_i x_i + \sum_{i=1}^{n} \sum_{j=i+1}^{n} \inner{\mathbf{v}_i}{\mathbf{v}_j} \, x_i x_j ,
+\label{eq:fm}
+\end{equation}
+
+其中 $\mathbf{v}_i \in \R^{d}$ 是第 $i$ 个特征的隐向量（经验值 $d \in [4, 64]$）。
+朴素实现需要 $O(n^2 d)$ 次计算，但利用对称性可以化简到 $O(nd)$：
+
+\begin{equation}
+\sum_{i=1}^{n}\sum_{j=i+1}^{n} \inner{\mathbf{v}_i}{\mathbf{v}_j} x_i x_j
+= \frac{1}{2} \left[
+\Big\lVert \sum_{i=1}^{n} x_i \mathbf{v}_i \Big\rVert^2
+- \sum_{i=1}^{n} x_i^2 \norm{\mathbf{v}_i}^2
+\right] .
+\label{eq:fm-transform}
+\end{equation}
+
+\begin{formulacard}[FM 化简的推导过程]
+设 $\mathbf{V} = \sum_i x_i \mathbf{v}_i$，展开 $\norm{\mathbf{V}}^2$：
+\begin{equation}
+\norm{\mathbf{V}}^2 = \sum_i \sum_j x_i x_j \inner{\mathbf{v}_i}{\mathbf{v}_j}
+= \underbrace{\sum_i x_i^2 \norm{\mathbf{v}_i}^2}_{\text{对角项 } i=j}
++ 2\underbrace{\sum_{i<j} x_i x_j \inner{\mathbf{v}_i}{\mathbf{v}_j}}_{\text{交叉项}} .
+\label{eq:fm-expand}
+\end{equation}
+移项即得 \cref{eq:fm-transform}。\textbf{关键收益}：交叉项从 $O(n^2 d)$ 降到 $O(nd)$，
+而且 $\mathbf{V}$ 可以在一次前向扫描中累加得到，工程上等价于「embedding 求和 + 一次平方和运算」。
+\textbf{关键代价}：低秩假设 $d \ll n$ 意味着模型只能表达 $d$ 维的交叉结构，
+强依赖特征的复杂高阶交互（如「价格区间 $\times$ 类目 $\times$ 用户生命周期」的三元组合）无法被完整刻画——
+这正是后续 FFM、DeepFM、DCN 要解决的问题（见 \cref{ch:ranking}）。
+\end{formulacard}
+
+\begin{remark}
+FM 与 MF 的关系可以精确说明：如果特征只有「用户 ID」和「物品 ID」两列，
+且每行只有一个用户特征和一个物品特征为 1，那么 \cref{eq:fm} 退化为
+$\hat y = w_0 + w_u + w_i + \inner{\mathbf{v}_u}{\mathbf{v}_i}$，
+与带偏置的 MF 完全同构。\textbf{所以 FM 是 MF 的超集，MF 是 FM 的特例。}
+\end{remark}
+
+\subsection{FFM 与 Field 概念}
+
+\kw{FFM（Field-aware FM）}\cite{juan2017ffm} 的改进只有一句话：
+\textbf{每个特征针对「与自己交叉的那个 Field」学习一套独立的隐向量}：
+
+\begin{equation}
+\hat y(\mathbf{x}) = w_0 + \sum_{i=1}^n w_i x_i
++ \sum_{i=1}^{n} \sum_{j=i+1}^n \inner{\mathbf{v}_{i, f_j}}{\mathbf{v}_{j, f_i}} x_i x_j ,
+\label{eq:ffm}
+\end{equation}
+
+其中 $f_j$ 是特征 $j$ 所属的 Field（如「用户」「商品」「上下文」），
+$\mathbf{v}_{i, f_j}$ 表示特征 $i$ 在 Field $f_j$ 视角下的隐向量。
+参数量从 FM 的 $n \times d$ 增加到 $n \times F \times d$（$F$ 为 Field 数，典型 10--30），
+训练与存储成本上升一个量级，但 \cite{juan2017ffm} 报告在 CTR 预测任务上有稳定的相对提升（论文报告口径）。
+在\emph{召回}场景中，FM/FFM 的用法与排序不同：不直接用 $\hat y$ 排序，
+而是用「物品侧特征的隐向量」建索引，用户侧特征算出向量后做内积检索——
+这就是「特征化召回」，即双塔的思想原型。
+
+\section{向量化召回：双塔模型}
+\label{sec:two-tower}
+
+\subsection{为什么需要双塔}
+
+i2i 与 FM 都无法在毫秒级完成「任意用户 $\times$ 千万物品」的打分。
+唯一可行的结构是：\textbf{让用户侧与物品侧的计算完全解耦}，使得物品向量可以离线预计算并建索引，
+线上只算一次用户向量，再用向量检索（ANN）取 top-K。
+
+\begin{equation}
+s(u, i) = \inner{ f_{\theta_U}(\mathbf{x}_u) }{ f_{\theta_I}(\mathbf{x}_i) }
+= \inner{\mathbf{e}_u}{\mathbf{e}_i}, \qquad
+\mathbf{e}_u \in \R^{d}, \; \mathbf{e}_i \in \R^{d} .
+\label{eq:two-tower-score}
+\end{equation}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  box/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+              inner sep=3pt, text width=2.5cm},
+  feat/.style={draw=SlateGray, fill=white, rounded corners=1pt, minimum height=6mm,
+               inner sep=2pt, text width=2.0cm},
+  emb/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=6mm,
+              inner sep=2pt, text width=1.7cm}
+]
+% Left tower: user
+\node[feat] (u1) at (0,0.9) {用户 ID/画像};
+\node[feat] (u2) at (0,-0.3) {行为序列};
+\node[feat] (u3) at (0,-1.5) {上下文};
+\node[box] (um) at (3.0,-0.3) {用户塔 MLP};
+\node[emb] (ue) at (6.0,-0.3) {$\mathbf{e}_u \in \R^d$};
+% Right tower: item
+\node[feat] (i1) at (0,-3.1) {物品 ID};
+\node[feat] (i2) at (0,-4.3) {类目/属性};
+\node[feat] (i3) at (0,-5.5) {统计特征};
+\node[box] (im) at (3.0,-4.3) {物品塔 MLP};
+\node[emb] (ie) at (6.0,-4.3) {$\mathbf{e}_i \in \R^d$};
+% Fusion
+\node[emb, draw=CrimsonDeep, text width=2.6cm] (dot) at (9.0,-1.9) {内积 $s(u,i)$};
+\node[box, draw=AmberDeep, fill=white, text width=2.2cm] (ann) at (9.0,-4.3) {ANN 索引\\HNSW / IVF-PQ};
+% Edges
+\draw[-{Stealth}, SlateGray] (u1) -- (um);
+\draw[-{Stealth}, SlateGray] (u2) -- (um);
+\draw[-{Stealth}, SlateGray] (u3) -- (um);
+\draw[-{Stealth}, SlateGray] (um) -- (ue);
+\draw[-{Stealth}, SlateGray] (i1) -- (im);
+\draw[-{Stealth}, SlateGray] (i2) -- (im);
+\draw[-{Stealth}, SlateGray] (i3) -- (im);
+\draw[-{Stealth}, SlateGray] (im) -- (ie);
+\draw[-{Stealth}, NavyMid, thick] (ue) -- node[above, font=\sffamily\tiny, text width=1.5cm]{在线} (dot);
+\draw[-{Stealth}, TealDeep, thick] (ie) -- node[below, font=\sffamily\tiny, text width=1.6cm]{离线预计算} (ann);
+\draw[-{Stealth}, CrimsonDeep, dashed] (ann) -- (dot);
+\node[draw=SlateGray, dashed, rounded corners=2pt, inner sep=3pt, font=\sffamily\tiny,
+      text width=3.2cm] at (6.0,-6.6) {两侧不共享参数、\\不做特征交叉};
+\end{tikzpicture}
+\caption{双塔召回模型结构：物品塔可离线预计算并建 ANN 索引，线上只需算一次用户塔}
+\label{fig:two-tower}
+\end{figure}
+
+\begin{keypoint}[双塔的结构性缺陷：交叉信息丢失]
+用户在双塔里的所有特征（包括历史行为序列）必须被\textbf{压缩成一个 $d$ 维向量}，
+物品的所有特征同样如此。这意味着：
+\begin{itemize}
+  \item 模型\textbf{无法表达 $u$ 与 $i$ 的细粒度交叉}，例如「这个用户只对这个类目下的这个价位段敏感」；
+  \item 行为序列无论多长，都要 pooling 成定长向量，信息有损（这是 SIM、ETA 等长序列模型要解决的问题，见 \cref{ch:sequence}）；
+  \item 更隐蔽的是：\textbf{如果用户塔输入了物品侧特征（如「上次点击物品的类目」），就形成了特征穿越风险}——
+        训练时这些特征来自真实曝光，服务时来自用户历史，分布不同。
+\end{itemize}
+因此双塔只适合做召回，精排必须用交叉结构（DIN/DeepFM，见 \cref{ch:ranking}）。
+\end{keypoint}
+
+\subsection{YouTube DNN：样本、负采样与 sampled softmax}
+
+\cite{covington2016youtube} 是把深度召回工程化的里程碑论文（本章案例盒展开），
+它的核心形式化是：\textbf{把「从百万视频中选出下一个观看」当作极端多分类问题}，
+每个视频是一个类别，用户与上下文是输入，用 softmax 输出概率：
+
+\begin{equation}
+\Prob(\omega = i \given u, \text{ctx}) =
+\frac{\exp\big( \inner{\mathbf{e}_u}{\mathbf{q}_i} \big)}
+{\sum_{j \in \mathcal{V}} \exp\big( \inner{\mathbf{e}_u}{\mathbf{q}_j} \big)} ,
+\label{eq:youtube-softmax}
+\end{equation}
+
+其中 $\mathcal{V}$ 是全部视频（百万量级），分母无法精确计算。
+于是用 \kw{sampled softmax}：从全部物品中采样 $N$ 个负样本
+（$N$ 经验值 100--10000，论文中取「几千」量级），并用\emph{采样概率校正}保证无偏：
+
+\begin{equation}
+\Prob(i \text{ 被选中}) = \frac{\exp\big( \inner{\mathbf{e}_u}{\mathbf{q}_i} - \log q_i \big)}
+{\exp\big( \inner{\mathbf{e}_u}{\mathbf{q}_i} - \log q_i \big)
++ \sum_{j \in \mathcal{N}} \exp\big( \inner{\mathbf{e}_u}{\mathbf{q}_j} - \log q_j \big)} ,
+\label{eq:sampled-softmax}
+\end{equation}
+
+其中 $q_i$ 是物品 $i$ 被采样的概率（常用按热度 $q_i \propto n_i^{0.75}$）。
+$-\log q_i$ 这一项就是\kw{logit 校正}：热门物品被采样的概率高、被误判为负样本的机会多，
+如果不校正，模型会系统性地压低热门物品的分数，导致线上热门内容供给不足。
+
+\begin{pitfall}[sampled softmax 的两个常见误用]
+\begin{enumerate}
+  \item \textbf{忘记 logit 校正}。训练时用采样分布算 softmax，服务时用全量内积检索，
+        两者优化的分布不一致，线上会出现「冷门物品分数异常高、热门物品被系统性压制」的现象。
+  \item \textbf{把 batch 内其他样本当负样本，但采样分布是均匀的}。
+        in-batch negative 是一种高效实现，但它的隐式采样分布其实是「按 batch 内的出现频率」，
+        与「按热度采样」不同。如果训练用了 in-batch negative，就应该按 batch 内频率做校正
+        （或者干脆接受这个偏差，因为它等同于一种热度惩罚，但要在离线评估中验证效果）。
+\end{enumerate}
+\end{pitfall}
+
+\subsection{双塔的特征与训练工程细节}
+
+\begin{table}[htbp]
+\centering
+\caption{双塔模型的典型输入特征（以视频推荐为例，字段为示范设计）}
+\label{tab:tower-features}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.0cm} Y}
+\toprule
+\tabhead{塔} & \tabhead{特征组} & \tabhead{具体字段与处理方式} \\
+\midrule
+用户塔 & 静态画像 & 性别、年龄段、注册时长、设备机型、国家/地区（embedding 或 one-hot） \\
+用户塔 & 行为序列 & 最近 $N$ 次观看的物品 ID embedding（$N$ 经验值 50--500），
+按时间衰减加权平均或 attention pooling \\
+用户塔 & 统计特征 & 7/30 天观看数、平均观看时长、类目分布熵、活跃时段 \\
+用户塔 & 上下文 & 请求时刻、星期、网络类型、入口来源、当前页面 \\
+物品塔 & 内容属性 & 物品 ID、一级/二级类目、标签、时长分桶、语言、作者 ID \\
+物品塔 & 统计特征 & 30 天曝光/点击/完播/分享次数，以及派生比率（CTR 分桶后 one-hot 更稳） \\
+物品塔 & 质量信号 & 清晰度、是否原创、审核等级（作为安全兜底） \\
+训练侧 & 标签 & 隐式反馈（点击/完播/点赞）与加权逻辑回归目标（观看时长） \\
+训练侧 & 负采样 & 按热度 $p \propto n^{0.75}$ 采样，负正比经验值 $4:1$ 到 $100:1$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{casebox}[案例：YouTube 双塔的四个工程细节]
+\cite{covington2016youtube} 的公开描述中，有四条经验到今天仍然成立：
+\begin{enumerate}
+  \item \textbf{样本构造用「下一条观看」而不是「所有观看」}。对每个用户按时间排序，
+        取第 $t$ 次观看作为标签、第 $1 \dots t-1$ 次作为输入，形成监督样本。
+        这样构造出的样本分布与线上「看完一个视频后预测下一个」的分布一致。
+  \item \textbf{用加权逻辑回归学期望观看时长}。标签取 $T_i \cdot \sigmoid(\hat y)$ 的形式，
+        其中 $T_i$ 是实际观看时长。这样模型既学到「会不会看」（概率），又学到「会看多久」（时长），
+        避免了纯 CTR 目标导致的标题党问题。
+  \item \textbf{训练与服务分布不一致要显式处理}。训练时信息来自「用户真实选择的下一个视频」，
+        服务时面对的是「从全库检索出的候选」，存在位置偏差与曝光偏差；
+        论文的做法是引入「是否来自推荐位」等特征，并在服务时把这些特征置为零（即不依赖它们）。
+  \item \textbf{物品塔的类别数需要动态处理}。视频库每天都在变，无法固定一个词表做 softmax；
+        工程上采用「先按热度截断出活跃物品集，再更新词表」的方案，并定期把新视频加入训练。
+\end{enumerate}
+\end{casebox}
+
+\begin{toolbox}[双塔负采样比例实验：一份可执行的设计]
+\begin{enumerate}
+  \item \textbf{变量只设一个}：固定模型结构、特征、学习率与训练轮数，只改变负采样比例
+        （如 $1:1$、$4:1$、$16:1$、$64:1$ 四组）。
+  \item \textbf{每组的验证口径要一致}：都使用同一份按时间切分的验证集，报告
+        \metric{Recall@100}、\metric{Recall@500}、覆盖率（Coverage）与热门物品占比（Top-100 中头部物品的比例）。
+  \item \textbf{关注「召回-覆盖」双指标}：负采样比例过高会显著提升 \metric{Recall@K}（因为模型更严格），
+        但覆盖率会下降——线上可能出现「永远只推那几千个物品」的问题。
+        经验上 \textbf{负正比在 4:1 到 32:1 之间}是常见的工作区间，具体值必须用线上 A/B 校准。
+  \item \textbf{训练时间与显存要记录}：负样本数直接线性放大显存与计算。
+        如果 $N$ 从 4 加到 64，而 \metric{Recall@100} 只提升不到 1 个百分点，就不值得。
+  \item \textbf{用 hard negative 做二次微调}：先用随机负采样训到收敛，再从召回池中挑出
+        「模型打高分但未交互」的物品作为难负样本，用小学习率做几轮微调，通常能带来额外收益。
+  \item \textbf{线上验证}：分组实验的护栏指标必须包含\kw{多样性}（类目熵）、\kw{新物品曝光占比}与
+        \kw{长尾消费占比}，避免用 \metric{CTR} 单指标换回一个高度同质化的推荐池。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{超越单向量：多兴趣与树结构}
+
+双塔把用户压成一个向量，这在兴趣广泛的用户上损失很大。
+两个主流改进方向是\kw{多兴趣表示}与\kw{树结构检索}。
+
+\textbf{多兴趣（MIND）。} 用 $K$ 组「兴趣胶囊」表示一个用户的多个意图，
+对候选物品取「与各兴趣向量内积的最大值」作为打分：
+
+\begin{equation}
+s(u, i) = \max_{k \in \{1,\dots,K\}} \inner{\mathbf{v}_u^{(k)}}{\mathbf{e}_i} ,
+\label{eq:mind-score}
+\end{equation}
+
+胶囊向量由动态路由（dynamic routing）从行为序列聚合而来：
+
+\begin{align}
+\mathbf{c}_k &= \sum_{t} w_{tk} \, \mathbf{h}_t, &
+w_{tk} &= \frac{\exp(b_{tk})}{\sum_{k'} \exp(b_{tk'})},
+\label{eq:mind-routing} \\[2pt]
+b_{tk} &\leftarrow b_{tk} + \inner{\mathbf{h}_t}{\mathbf{c}_k}, & &
+\end{align}
+
+即「软聚类 + 迭代精化」。$K$ 的取值需要权衡：$K=1$ 退化成单塔，
+$K$ 太大（如 20 以上）会让每个兴趣过于稀疏，且线上要做 $K$ 次 ANN 检索，
+延迟线性增长。经验值 $K \in [3, 8]$。多兴趣在新闻、短视频这类兴趣分散的场景收益明显
+（\cite{chen2019mind} 提供的大规模新闻推荐数据集即为此类研究的常用基准）。
+
+\textbf{树召回（TDM / 深度树）。} 阿里提出的 TDM 把全库物品组织成一棵二叉树，
+每个非叶节点是一个「类目语义」节点，用模型预估「用户对某节点感兴趣的概率」，
+再自顶向下逐层选择 top-k 分支，把检索复杂度从 $O(n)$ 降到 $O(k \log n)$。
+它的价值在于\textbf{把「用户-物品」的检索变成了「用户-层次类目」的检索}，
+每个节点可以复用子树的统计特征，对新物品更友好。
+代价是：（1）树结构本身需要一个单独的模型来学习（如何分叉），且树一旦固定就难以调整；
+（2）逐层 beam search 会带来层间误差累积；
+（3）工程实现复杂，需要维护节点级索引。
+
+\begin{casebox}[案例：Pinterest PinSage 的图召回工程化]
+\cite{ying2018pinsage} 报告了 Pinterest 的图卷积召回系统（公开论文口径），
+三个工程细节对做图召回的人最有参考价值：
+\begin{enumerate}
+  \item \textbf{用随机游走构造邻居，而不是直接用二跳邻居}。二跳邻居数量会爆炸
+        （度分布重尾），随机游走后取 top-$T$ 个「访问频次最高」的邻居，
+        把每个节点的邻居数控制在一个常数，使计算可预算。
+  \item \textbf{用 minibatch 训练但保持邻居一致性}。对每个 batch 内的节点，
+        采样其邻居的邻居（多跳），共享计算图以避免重复前向。
+  \item \textbf{生产者-消费者 + GPU 推理}。用 MapReduce 式的流水线在全图上做多轮卷积，
+        只对活跃节点（近期有行为的 Pin）重算 embedding，
+        其余节点的向量复用上一轮结果，把每天的更新成本压到可接受范围。
+\end{enumerate}
+\end{casebox}
+
+\begin{interview}[阶段性面试追问]
+\begin{enumerate}
+  \item ItemCF 与 UserCF 的本质区别是什么？为什么工业界偏爱 ItemCF？
+  \item Swing 相比余弦相似度改进了什么？它会带来什么额外的计算代价？
+  \item BPR 的损失函数如何推导？为什么它比加权 MF 更适合隐式反馈？
+  \item FM 的二阶项为什么能化简到 $O(nd)$？这个化简的代价是什么？
+  \item 双塔模型为什么无法利用用户-物品交叉特征？有哪些改进思路？
+  \item sampled softmax 的 logit 校正项是在解决什么问题？不做校正会发生什么？
+\end{enumerate}
+\end{interview}
+
+\section{图召回}
+
+\subsection{ItemCF 的图上解释与 PersonalRank}
+
+把交互数据写成二部图 $\mathcal{G} = (\mathcal{U} \cup \mathcal{I}, \mathcal{E})$：
+用户与物品是两类节点，一次交互是一条边。此时：
+
+\begin{itemize}
+  \item \textbf{ItemCF 等价于「二跳邻居的概率质量」}：从 $u$ 出发，沿边走到 $i$，再走回物品节点 $j$，
+        路径的权重乘积之和就是 $\text{score}(u,j)$；
+  \item \textbf{UserCF 等价于「三跳路径」}：$u \to i \to v \to j$，
+        这也是 UserCF 计算更贵、更不稳定的图论解释；
+  \item 图视角的最大好处是：\textbf{它把「相似度」变成了「路径权重」}，
+        于是自然引入随机游走、重启概率、高阶邻居聚合等一整套工具。
+\end{itemize}
+
+\kw{PersonalRank} 是最直接的随机游走召回算法。给定起点用户 $u$，
+在第 $t$ 步，以概率 $\alpha$ 随机选择一条出边继续游走，以概率 $1-\alpha$ 回到起点：
+
+\begin{equation}
+\mathrm{PR}(v) = (1 - \alpha) \, \mathbf{1}[v = u] + \alpha \sum_{v' \in N(v)} \frac{\mathrm{PR}(v')}{\abs{N(v')}} ,
+\label{eq:personalrank}
+\end{equation}
+
+其中 $\alpha \in [0.6, 0.9]$（经验值，常取 0.85，与 PageRank 的阻尼系数习惯一致）。
+迭代到收敛后，物品节点的 $\mathrm{PR}$ 值即为召回分数。
+PersonalRank 的优点是\textbf{不需要训练、可解释、天然支持多跳}；
+缺点同样明显：\textbf{每个用户都要单独迭代，无法离线预计算}，
+在线成本高到无法直接落地。工程上的两种近似是：
+（1）只取固定跳数（2--3 跳）并做截断，等价于有界的路径聚合；
+（2）用 \kw{图嵌入}方法一次性学出所有节点的向量，再用 ANN 检索。
+
+\subsection{GraphSAGE 与 PinSage：邻居采样与聚合}
+
+\kw{GraphSAGE}\cite{hamilton2017graphsage} 的关键贡献是\textbf{把图卷积从 transductive 变成 inductive}：
+不再为每个节点学一个独立向量，而是学一个「聚合函数」，
+使得新节点（新用户、新物品）只要给出它的邻居，就能立刻算出向量。
+这直接解决了推荐系统里最痛的冷启动问题。
+
+一层 GraphSAGE 的更新为：
+
+\begin{equation}
+\mathbf{h}_v^{(l+1)} = \sigma \left(
+\mathbf{W}^{(l)} \cdot \concat\!\Big( \mathbf{h}_v^{(l)}, \; \mathrm{AGG}\big( \{ \mathbf{h}_n^{(l)} : n \in N(v) \} \big) \Big)
+\right) ,
+\label{eq:graphsage}
+\end{equation}
+
+其中 $\mathrm{AGG}$ 可取 mean、pooling（对邻居做 max/mean pooling 前先过一层 MLP）
+或 LSTM。$K$ 层堆叠意味着聚合 $K$ 跳邻居。
+\cite{ying2018pinsage} 的 PinSage 在此之上做了三项工程改造：
+\textbf{随机游走邻居采样}（控制邻居数）、\textbf{重要性池化}（用与中心节点的相似度做加权平均）、
+以及\textbf{负样本共享}（在同一 batch 内共享负样本，降低计算量）。
+
+图召回在推荐中的\textbf{真实定位}是「i2i 的高阶版本」：
+ItemCF 只能捕捉「共同被点击」，图方法可以捕捉「通过 3--5 跳路径关联」的隐含关系，
+在时尚、家居、内容这类「跨类目关联强但共现弱」的场景有明显收益。
+代价是训练与维护成本显著高于 i2i，且\textbf{图结构变化时需要重训或增量更新}。
+
+\subsection{LightGCN：把图卷积简化到只剩传播}
+
+\cite{he2020lightgcn} 的发现相当反直觉：在推荐任务上，GCN 里最有用的部分只有\emph{邻域传播}，
+特征变换（线性层）与非线性激活不但没用，反而会损害效果。于是 LightGCN 把传播式简化为：
+
+\begin{equation}
+\mathbf{e}_u^{(k+1)} = \sum_{i \in N(u)} \frac{1}{\sqrt{\abs{N(u)} \abs{N(i)}}} \mathbf{e}_i^{(k)} ,
+\qquad
+\mathbf{e}_i^{(k+1)} = \sum_{u \in N(i)} \frac{1}{\sqrt{\abs{N(i)} \abs{N(u)}}} \mathbf{e}_u^{(k)} ,
+\label{eq:lightgcn}
+\end{equation}
+
+最终表示取各层的加权和（而不是只用最后一层）：
+
+\begin{equation}
+\mathbf{e}_u = \sum_{k=0}^{K} \alpha_k \mathbf{e}_u^{(k)} ,
+\qquad \alpha_k = \frac{1}{K+1} \; \text{（最常用的均匀权重）} .
+\label{eq:lightgcn-layer}
+\end{equation}
+
+推荐的损失仍然是 BPR（\cref{eq:bpr-loss}）。LightGCN 的价值在于\textbf{把「为什么图有效」解释清楚了}：
+效果来自\textbf{高阶邻域平滑}——一个用户的高阶邻居反映了他的兴趣扩散范围，
+层数 $K$（经验值 2--4）控制平滑强度。$K$ 过大（如 5 以上）会出现\kw{过平滑（over-smoothing）}，
+所有节点向量趋于相同，\metric{Recall@K} 反而下降。
+
+\begin{table}[htbp]
+\centering
+\caption{图召回方法的对比}
+\label{tab:graph-recall}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{2.6cm} L{2.0cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{核心机制} & \tabhead{可增量/归纳} & \tabhead{工程代价与适用场景} \\
+\midrule
+PersonalRank & 单用户随机游走 & 否（每个用户单独算） & 在线成本高，仅适合小规模或离线实验 \\
+GraphSAGE & 邻居采样 + 聚合函数 & 是（inductive） & 可服务新节点；需要多跳采样，训练图维护复杂 \\
+PinSage & 随机游走采样 + 重要性池化 & 是 & 工业级方案，需要 GPU 推理与流水线更新 \\
+LightGCN & 对称归一化传播 + 层加权 & 部分（新节点需重算） & 结构极简、易复现，适合中小规模或作为强 baseline \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[图召回的三个落地陷阱]
+\begin{enumerate}
+  \item \textbf{度分布重尾导致采样偏置}。少数超级节点（千万粉丝的账号、爆款商品）会让随机游走
+        在它们附近长时间停留，导致召回结果高度集中。
+        必须做度数截断、加权采样或对高频节点降权。
+  \item \textbf{把「图上的高分」直接当线上分数}。图嵌入的相似度尺度与 i2i 相似度、双塔内积完全不同，
+        多路融合时必须先做归一化（见 \cref{sec:fusion}），否则某一路会独占结果。
+  \item \textbf{忽略时间}。图是静态快照，但用户兴趣随时间漂移。
+        边必须带时间戳，并做时间衰减；否则模型会把「三个月前的兴趣」当成当前兴趣。
+\end{enumerate}
+\end{pitfall}
+
+\section{多路召回与融合}
+\label{sec:fusion}
+
+\subsection{并行召回池的典型组成}
+
+没有任何单路召回能同时满足「覆盖广、延迟低、个性化强」。
+工业系统普遍采用\kw{多路并行召回}：多路各自独立取 top-$k$，合并后统一送粗排。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  every node/.style={font=\sffamily\tiny, align=center},
+  src/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+              minimum width=2.3cm, inner sep=3pt},
+  mid/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm,
+              minimum width=2.4cm, inner sep=3pt},
+  outbox/.style={draw=CrimsonDeep, fill=white, rounded corners=2pt, minimum height=7mm,
+              minimum width=2.6cm, inner sep=3pt}
+]
+\node[src] (r1) at (0,0) {i2i 协同};
+\node[src] (r2) at (0,-1.1) {双塔向量};
+\node[src] (r3) at (0,-2.2) {图召回};
+\node[src] (r4) at (0,-3.3) {热门/地域};
+\node[src] (r5) at (0,-4.4) {内容/标签};
+\node[src] (r6) at (0,-5.5) {新品/探索};
+
+\node[mid] (norm) at (3.6,-2.75) {分数归一化\\min-max / rank / 温度};
+\node[mid] (merge) at (6.6,-2.75) {合并去重\\配额与截断};
+\node[outbox] (send) at (9.6,-2.75) {统一候选池\\送粗排};
+
+\foreach \x in {r1,r2,r3,r4,r5,r6} \draw[-{Stealth}, SlateGray] (\x) -- (norm);
+\draw[-{Stealth}, NavyMid, thick] (norm) -- (merge);
+\draw[-{Stealth}, NavyMid, thick] (merge) -- (send);
+\node[right=2mm of send, text width=2.4cm, font=\sffamily\tiny, align=left, draw=AmberDeep, dashed, rounded corners=2pt, inner sep=3pt]
+  {每路保留\\独立配额 $k_p$\\用于归因与回滚};
+\end{tikzpicture}
+\caption{多路召回架构：并行取回、统一归一化、合并去重后进入粗排}
+\label{fig:multi-recall}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{多路召回的典型路数与配额（示范设计，实际以业务规模调整）}
+\label{tab:recall-routes}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{2.0cm} L{1.8cm} Y}
+\toprule
+\tabhead{召回通道} & \tabhead{单路取回} & \tabhead{延迟预算} & \tabhead{主要价值与失效场景} \\
+\midrule
+i2i 协同 & 500--2000 & 3--10\,ms & 稳定兜底，可解释；对新用户失效，被爆款污染 \\
+双塔向量 & 500--2000 & 5--20\,ms & 个性化强、覆盖广；丢交叉信息，ANN 有召回损失 \\
+图召回 & 200--1000 & 10--30\,ms & 挖掘高阶关联；维护成本高，易度数偏置 \\
+热门/地域 & 100--500 & 1--3\,ms & 冷启动兜底与时效内容；长期使用会降低多样性 \\
+内容/标签 & 200--1000 & 2--8\,ms & 覆盖新品与稀疏物品；精度依赖标签质量 \\
+新品/探索 & 50--300 & 1--5\,ms & 生态健康与新品冷启动；短期指标通常略降 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{分数归一化的三种做法}
+
+不同通道的分数尺度差异极大：i2i 分数可能在 $[0, 1]$ 且集中在 0.1 附近，
+双塔内积可能在 $[-5, 5]$，图召回的 PR 值可能是 $10^{-3}$ 量级。
+\textbf{如果直接相加，量级最大的那一路会独占结果}。三种常用归一化：
+
+\begin{align}
+\text{min-max:} \quad & \tilde s_{p} = \frac{s_{p} - \min_{c \in \mathcal{C}_p} s_c}{\max_{c \in \mathcal{C}_p} s_c - \min_{c \in \mathcal{C}_p} s_c},
+\label{eq:norm-minmax} \\[2pt]
+\text{rank:} \quad & \tilde s_{p} = 1 - \frac{\mathrm{rank}_p(c)}{\abs{\mathcal{C}_p}},
+\label{eq:norm-rank} \\[2pt]
+\text{softmax/温度:} \quad & \tilde s_{p} = \frac{\exp(s_p / \tau)}{\sum_{c \in \mathcal{C}_p} \exp(s_c / \tau)},
+\qquad \tau \in (0, 1] .
+\label{eq:norm-softmax}
+\end{align}
+
+\begin{insight}[归一化方式决定了「谁有话语权」]
+\begin{itemize}
+  \item \textbf{min-max 保留分数的相对距离}，但对异常值极敏感：一路里出现一个超高分数，
+        其余样本会被压到接近 0。工程上常先做截断（如取 99 分位数）再归一化。
+  \item \textbf{rank 归一化只保留序}，天然抗尺度差异，是\emph{多路融合最稳的选择}；
+        代价是丢失了置信度信息——「遥遥领先的第一名」和「险胜的第二名」被同等看待。
+  \item \textbf{温度 softmax} 把归一化与配额耦合起来：$\tau$ 越小分布越尖锐，
+        相当于让高置信度通道获得更多名额。工程上常用 $\tau$ 做「通道强弱」的在线调节旋钮。
+\end{itemize}
+最终分数通常是加权和 $S(c) = \sum_p \beta_p \tilde s_p(c) + \text{prior}(c)$，
+其中 $\beta_p$ 是通道权重、$\text{prior}(c)$ 是业务先验（如新品加权、地域加权）。
+\textbf{$\beta_p$ 的调参必须配合归因监控}：记录每个最终曝光物品来自哪一路，
+否则无法判断「效果变化是哪个通道贡献的」。
+\end{insight}
+
+\subsection{配额分配：多样性 vs 精度}
+
+多路融合的最后一个决策是\textbf{每路保留多少}。这是一个典型的「探索-利用」权衡：
+
+\begin{equation}
+\max_{\{k_p\}} \; \sum_{p} \E\big[ \text{Value}(p) \mid k_p \big]
+\quad \text{s.t.} \quad \sum_{p} k_p \le K, \; \; k_p \ge k_p^{\min} .
+\label{eq:quota}
+\end{equation}
+
+工程上有三种常见策略：
+（1）\textbf{固定配额}（如 $K = 3000$，双塔 1500、i2i 800、图 400、其他 300），实现最简、可预测；
+（2）\textbf{动态配额}，按通道近期表现的 \metric{CTR} 或「被粗排选中的比例」做乘性调整（类似 EXP3 的简化版），
+        并设置下界防止某路被永久饿死；
+（3）\textbf{流量分层}，对活跃用户给个性化通道更多配额，对新用户给热门/内容通道更多配额。
+
+\begin{keypoint}[多路融合的三条铁律]
+\begin{enumerate}
+  \item \textbf{先归一化，再合并}：绝不直接相加不同尺度的分数；
+  \item \textbf{每一路都要有配额下界}：否则效果差的通道会被逐渐饿死，丧失多样性兜底能力；
+  \item \textbf{必须记录来源}：召回通道 ID 要一路透传到日志，否则无法做单通道归因与回滚。
+\end{enumerate}
+\end{keypoint}
+
+\section{冷启动}
+
+\subsection{三类冷启动与三档策略}
+
+冷启动不是一个问题，而是三个：\textbf{新用户}（无行为）、\textbf{新物品}（无交互）、\textbf{新场景}（新入口/新地域）。
+
+对新用户，工业界的标准做法是\kw{三档策略}，按行为量分档：
+
+\begin{table}[htbp]
+\centering
+\caption{新用户的三档冷启动策略（分层阈值需按业务行为密度调整）}
+\label{tab:coldstart}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{2.6cm} L{2.0cm} Y}
+\toprule
+\tabhead{档位} & \tabhead{可用信号} & \tabhead{首选策略} & \tabhead{关键动作与风险} \\
+\midrule
+零行为 & 注册信息、设备、地域、来源渠道 & 热门 + 地域 + 渠道先验 & 用渠道特征做人群打包；
+风险是「热门霸屏」导致首日流失 \\
+1--5 次行为 & 少量点击（噪声大） & 内容/标签召回 + 探索流量 & 用类目先验做粗粒度兴趣推断；
+风险是过拟合到单次点击 \\
+5 次以上 & 行为序列可建模 & 双塔/序列召回 + 个性化排序 & 引入实时行为特征；
+风险是特征穿越与冷启动后衰减 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+对新物品，核心是\textbf{让它先获得曝光}。三种手段：
+（1）\textbf{内容侧特征}（类目、标签、标题 embedding、图像 embedding）进入物品塔，
+        使新品在「零交互」时也有可用向量；
+（2）\textbf{类目先验继承}，把所属类目的平均点击率作为初始打分的一部分；
+（3）\textbf{流量扶持}，固定的探索配额（如总曝光的 5\%--15\%，示范量级）
+        强制分配给新物品，并监控其上线首周的 \metric{CTR} 与完播率以决定是否继续扶持。
+
+\subsection{Explore-Exploit：从 epsilon-greedy 到 Thompson 采样}
+
+冷启动的本质是\kw{探索与利用的权衡}：把曝光给已知的好物品（利用），还是给未知物品（探索）。
+三种经典策略在推荐中的形式与代价：
+
+\begin{table}[htbp]
+\centering
+\caption{三种探索策略在推荐召回中的落地对比}
+\label{tab:explore}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{3.3cm} L{2.0cm} Y}
+\toprule
+\tabhead{策略} & \tabhead{选择规则} & \tabhead{实现复杂度} & \tabhead{特点与代价} \\
+\midrule
+epsilon-greedy & 以 $\epsilon$ 概率随机选，$1-\epsilon$ 选当前最优 &
+低 & 实现最简单；$\epsilon$ 固定则探索效率低，且不区分不确定性 \\
+UCB & 选 $\bar r_i + c\sqrt{\dfrac{\ln t}{n_i}}$ 最大者 &
+中 & 有理论保证；对非平稳环境适应性差，$c$ 难调 \\
+Thompson 采样 & 从后验采样参数，按采样值选最优 &
+中高 & 天然平衡探索与利用，贝叶斯框架优雅；需维护后验分布 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\kw{UCB} 的直觉非常清晰：$\bar r_i$ 是「已知的平均收益」，$\sqrt{\ln t / n_i}$ 是「不确定性的奖励」。
+一个物品被尝试得越少（$n_i$ 小），不确定性项越大，越容易被选中；
+随着 $t$ 增大，探索逐渐减少。\kw{Thompson 采样} 则对每个物品维护一个收益的后验分布
+（如 Beta 分布，用于点击率的 Bernoulli 反馈），每次从后验中采样一组参数并选最优——
+被尝试次数少的物品后验方差大，偶尔会被采出高分，从而实现探索。
+
+\begin{pitfall}[冷启动的四个常见错误]
+\begin{enumerate}
+  \item \textbf{用探索流量评估模型效果}。探索流量的分布与主流量不同，
+        如果把探索桶的数据混进 A/B 分析，会得到严重偏差的结论。
+        正确做法是\textbf{探索流量单独统计，或用 IPS/DR 等反事实估计方法校正}。
+  \item \textbf{给新物品的探索配额被「关系户」占用}。真实的探索配额分配经常被运营手动干预，
+        导致最终探索的是「想推的物品」而不是「需要被验证的物品」。必须留出模型自主分配的配额。
+  \item \textbf{只优化短期 CTR}。新品探索的收益是长期的（新供给进入正循环），
+        短期 \metric{CTR} 一定下降。护栏指标必须包含\kw{新物品 7 日留存率}、
+        \kw{新物品长尾占比}，否则探索机制会在季度考核中被砍掉。
+  \item \textbf{混淆「冷启动」与「召回」}。冷启动是\emph{特征缺失}问题，
+        需要的是内容特征 + 先验 + 探索机制；而不是简单地「多加一路热门召回」。
+\end{enumerate}
+\end{pitfall}
+
+\section{召回层的评估与监控}
+
+\subsection{离线评估的三个层次}
+
+\begin{enumerate}
+  \item \textbf{点级评估（point-wise）}：在固定候选集上比较新旧模型的 \metric{Recall@K}、\metric{NDCG@K}。
+        最易做，但最容易产生「离线涨、线上不涨」（见前面的陷阱盒）。
+  \item \textbf{候选集级评估（candidate-level）}：只看「最终成交/点击的物品是否被召回」，
+        即\kw{召回覆盖率（Recall of Recall）}。这是召回层最该看的指标，
+        因为它直接对应「上限」。
+  \item \textbf{反事实评估（counterfactual）}：用 IPS（逆倾向得分）与 DR（doubly robust）
+        估计新策略在历史日志上的期望收益 \cite{swaminathan2015counterfactual,saito2020doubly}。
+        它能部分修正曝光偏差，但对倾向得分模型的准确性敏感，
+        且当新策略与旧策略差异过大时方差会爆炸（\kw{支撑集不重叠}问题）。
+\end{enumerate}
+
+\subsection{在线监控：六个必须看的指标}
+
+\begin{keypoint}[召回层上线监控清单]
+\begin{enumerate}
+  \item \textbf{通道贡献率}：每个召回通道贡献的最终曝光占比。若某一路长期低于 5\%，
+        要么下线、要么排查是否被归一化压死。
+  \item \textbf{召回覆盖率}：最终有效点击/成交中，有多少来自召回池（目标应接近 100\%，
+        低于 90\% 说明存在「漏召」的严重问题）。
+  \item \textbf{多样性}：Top-100 结果的类目熵、作者集中度（如 Top-10 作者占比）。
+  \item \textbf{新鲜度}：新物品（7 日内上架）在曝光中的占比，以及新物品的 7 日存活率。
+  \item \textbf{延迟}：每一路的 p99 延迟与整体召回阶段 p99。任一路超时都要能降级跳过。
+  \item \textbf{向量检索健康度}：索引大小、构建耗时、ANN 与暴力检索的召回率偏差
+        （见下面的陷阱盒）。
+\end{enumerate}
+\end{keypoint}
+
+\begin{pitfall}[向量检索的「召回率幻觉」]
+双塔离线评估常报告 \metric{Recall@500} 很高，但线上效果不及预期。
+一个被反复忽视的原因是：\textbf{离线是用暴力内积算的，线上是用 ANN 索引检索的，两者不是同一个东西}。
+具体的失真来源有四类：
+\begin{enumerate}
+  \item \textbf{索引参数过激}。HNSW 的 \code{efSearch} 调小（如 32）或 IVF 的 \code{nprobe} 调小（如 8）
+        可以把延迟压到 1\,ms，但\kw{索引召回率} 可能只有 85\%--95\%；
+        也就是说有 5\%--15\% 的真近邻根本不在检索结果里。
+        排查方法：抽 1000 个用户，同时跑 ANN 与暴力检索，计算 \code{Recall@K} 的重合度（应 $>99\%$）。
+  \item \textbf{归一化不一致}。双塔用内积训练，却在检索前做了 L2 归一化
+        （或反过来：用余弦训练却在内积索引上检索），分数与索引度量不匹配，结果系统性偏移。
+        \textbf{训练用什么度量，检索就必须用什么度量}。
+  \item \textbf{量化误差}。IVF-PQ 把 128 维 float32 压到 8--32 字节，内存节省 16--64 倍，
+        但 PQ 是有损压缩，且\emph{短向量（如 $d=32$）上的量化损失比例更高}。
+        经验上 $d \ge 64$ 再做 PQ 比较安全；$d$ 小时优先考虑 SQ8 或 float16。
+  \item \textbf{索引与模型不同步}。模型每天更新，但索引可能两天才重建一次；
+        新物品的向量没进索引就等于不存在。必须监控「模型版本 vs 索引版本」的一致性与索引延迟。
+\end{enumerate}
+\textbf{结论}：双塔的离线评估必须区分「模型上限（暴力检索）」与「工程实现（ANN 检索）」两套数字，
+并在上线前把 ANN 召回率作为准入指标。相关工程细节见 \cref{ch:rag} 的向量索引部分与 \cref{ch:receng}。
+\end{pitfall}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 推荐系统是带约束的效用最大化问题；\textbf{召回决定可行域，因而决定效果上限}，
+        排序只负责在这个上限内做出好的序。
+  \item 显式反馈可做评分预测，隐式反馈只能做 Top-N 排序；两者的损失函数、指标与偏差处理完全不同。
+  \item 协同过滤的四个基础相似度（余弦、Jaccard、Pearson、共现）在工业上的适用场景不同；
+        \textbf{爆款污染必须用 IDF 式热门惩罚或 Swing 抑制}。
+  \item ItemCF 在工业界优于 UserCF，原因是物品更稳定、可离线计算、可解释、可截断预算；
+        实现上用「用户倒排 $\to$ 两两共现 $\to$ 归一化 $\to$ top-$k$ 截断」四步。
+  \item MF 只处理两类 ID 特征；FM 用低秩参数化把二阶交叉降到 $O(nd)$，
+        是「特征化召回」的数学基础；FFM 用 Field 概念进一步细分，代价是参数量乘以 Field 数。
+  \item BPR 把隐式反馈建模成 pairwise 偏好，sigmoid 型损失等价于 AUC 的可微代理，
+        $(1-\delta)$ 权重自带难例挖掘；负采样策略是效果的关键旋钮。
+  \item 双塔用「用户塔/物品塔分离 + 内积检索」换取毫秒级召回，
+        代价是\textbf{丢失交叉信息}；sampled softmax 必须做 logit 校正；MIND 与 TDM 是两条主要改进路线。
+  \item 图召回是 i2i 的高阶版本：PersonalRank 给出可解释的随机游走解释，
+        GraphSAGE/PinSage 提供归纳能力，LightGCN 证明了「只保留传播」就足够有效。
+  \item 多路融合的顺序是\textbf{先归一化、再合并、后配额}；rank 归一化最稳，
+        每路必须有配额下界且必须记录来源以支持归因。
+  \item 冷启动的解法是「内容特征 + 类目先验 + 探索机制」三件套；
+        探索流量必须单独统计，否则会污染实验结论。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item ItemCF 与 UserCF 的区别是什么？各自适合什么业务场景？为什么电商普遍选 i2i？
+  \item 如何计算物品相似度？爆款物品会带来什么问题，有哪些抑制手段？
+  \item 请推导 BPR 的损失函数，并说明它相比加权矩阵分解的优势。
+  \item FM 的二阶交叉项如何化简到线性复杂度？这个化简损失了什么表达能力？
+  \item 双塔模型为什么不能做用户-物品交叉特征？如果一定要引入交叉信息，你会怎么做？
+  \item sampled softmax 的 logit 校正项解决什么问题？不校正会有什么后果？
+  \item 多路召回如何做分数归一化与配额分配？如何监控每一路的贡献？
+  \item 新用户和新物品分别怎么做冷启动？探索流量的指标该怎么看？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+召回把候选从千万级压到千级，但它给出的分数只适合排序，不适合\textbf{精确预估每次点击的价值}。
+下一章 \cref{ch:ranking} 进入排序模型：从 LR + 特征工程、GBDT+LR，到 FM 家族与 DeepFM，
+再到 DIN 的注意力机制、多任务学习的 MMoE/PLE，以及位置偏差消偏与校准一致性——
+也就是「在召回给出的上限内，如何把最该展示的东西排到最前面」的完整技术栈。

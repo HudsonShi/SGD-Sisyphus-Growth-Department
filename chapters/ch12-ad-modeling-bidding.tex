@@ -1,0 +1,1442 @@
+\chapter{广告建模、出价与归因}
+\label{ch:admodel}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item pCTR 高估了会怎样？为什么在广告系统里「预估不准」不是精度问题，而是\textbf{财务问题}？
+  \item CVR 的转化事件可能延迟几小时到几天才回传，训练样本的标签在点击发生的当下是不存在的。短窗口截断会引入什么方向的偏差？为什么它常常先表现为「花不出钱」而不是「超支」？
+  \item CTCVR 与 CTR$\times$CVR 在什么条件下等价？ESMM 为什么能缓解样本选择偏差，它的假设在哪里失效？
+  \item 从 CPM/CPC 到 oCPC/oCPA，中间真正变化的是「谁来决定出价」。PID 控制与预算平滑分别控制什么量？为什么微分项在广告系统里通常要被关掉？
+  \item 最优出价为什么长成 $\text{价值}\times\text{转化率}/\text{折扣因子}$ 这个形状？折扣因子到底在补偿什么？预算与 ROI 双约束下它怎么由拉格朗日乘子给出？
+  \item 归因从「最后一次点击」到 Shapley 值，代价涨了多少倍？为什么 Shapley 值在渠道多于 12 个左右时就只能近似？
+  \item 点击欺诈有哪几大类？MRC 可见性标准的判定条件是什么？为什么作弊流量在赔付对账里永远对不齐？
+  \item 增量实验（PSA、geo holdout）与 MTA、MMM 三者的分工是什么？为什么说「MTA 是显微镜，MMM 是卫星照片，增量实验是标尺」？
+\end{enumerate}
+\end{insight}
+
+一次广告请求的完整生命只有几十到几百毫秒，但它背后串着一条很长的算法链条。
+把这条链拆开看，真正决定广告主最终 \metric{ROAS} 的只有四件事：
+
+\begin{equation}
+\text{广告效果} \;\approx\; \underbrace{\text{预估准}}_{\text{CTR/CVR}} \;\times\; \underbrace{\text{出价巧}}_{\text{bid}} \;\times\; \underbrace{\text{花钱稳}}_{\text{pacing}} \;\times\; \underbrace{\text{归因清}}_{\text{attribution}} .
+\label{eq:ad-chain}
+\end{equation}
+
+第 \cref{ch:ad} 章讲的是这条链条外面的「游戏规则」——生态角色、计费方式、拍卖机制、机制设计。
+本章讲链条本身：模型怎么建、价怎么出、预算怎么花、账怎么算。
+
+这两个层次的关系值得先说清楚。机制设计决定了算法的\textbf{目标函数形状}：
+在第二价格拍卖里，诚实报价是占优策略，出价算法几乎不需要「报价技巧」；
+而在第一价格化之后（\cite{krengel2019firstprice} 记录了 Google 2019 年把 Ad Exchange
+转向第一价格的过程），不做报价折扣（bidding shading）就等于系统性地多付钱。
+同一个预估模型，放在不同机制里需要完全不同的出价层。这是广告算法区别于推荐算法最重要的一点：
+\textbf{它不是一个纯预测问题，而是一个预测、控制与博弈的复合问题。}
+
+\begin{keypoint}[本章的四个反馈回路]
+广告系统里有四个必须同时稳定下来的闭环，任何一个不稳都会以「钱」的形式暴露出来：\\
+(1) \kw{预估回路}——模型预估值决定出价，出价决定拿到什么流量，拿到的流量又决定下一轮训练样本；\\
+(2) \kw{预算回路}——pacing 模块根据累积花费调整出价系数，出价系数反过来改变花费速度；\\
+(3) \kw{竞争回路}——你的出价改变其他广告主的获胜概率，从而改变市场的价格水平；\\
+(4) \kw{归因回路}——归因口径决定报表上的 ROI，报表决定预算分配，预算分配又改变流量结构。\\
+四个回路的共同特征是\textbf{时滞}：动作和可观测的后果之间隔着几分钟到几天。
+控制论里所有关于振荡、超调、失稳的结论，在这里都会原样出现。
+\end{keypoint}
+
+\section{CTR 与 CVR 预估}
+
+\subsection{广告预估与推荐排序的三个结构性差异}
+
+做惯了推荐排序的人转来做广告预估，第一反应往往是「把 NDCG 换成 AUC 就行了」。
+这个直觉会带来三个具体的错误，先列出来：
+
+\begin{itemize}
+  \item \textbf{目标不是排序，是标定后的期望收益。}
+        推荐精排只需要知道物品之间的相对顺序，一个单调变换不改变排序结果，所以模型输出是不是概率并不重要。
+        广告不一样：$\mathrm{eCPM} = \mathrm{pCTR} \times \mathrm{pCVR} \times \text{value} \times 1000$，
+        预估值直接参与\kw{定价}。一个系统性地高估 15\% 的 pCTR，
+        在排序上可能完全没有影响（因为所有候选都被同比例放大），但在成本上会实打实地多花 15\%。
+        这就是为什么广告系统的离线评估里，\metric{AUC} 之外必须有一个\kw{校准指标}。
+  \item \textbf{候选集是强约束、强异质的。}
+        推荐系统的候选来自全库，广告的候选来自「一个广告主加一个计划加一次投放意图」的组合，
+        数量少但每个候选的差异极大：出价方式不同、预算不同、创意状态不同、定向范围不同。
+        一条请求里可能同时有按点击计费的搜索广告、按曝光计费的品牌广告、按转化目标计费的智能出价广告。
+        打分模型必须输出可比较的量纲，否则混排无从下手。
+  \item \textbf{反馈是稀疏、延迟、多层级的。}
+        曝光之上有点击，点击之上有转化，转化之上还有退货、复购、留存。
+        层级越往上事件越稀疏、延迟越长。
+        用曝光样本训 CTR、用点击样本训 CVR 是最朴素的方案，但它踩中了\kw{样本选择偏差}这一整类问题。
+\end{itemize}
+
+\begin{casebox}[案例：预估偏差怎样变成超支（示范量级）]
+假设某计划日预算 5 万元，平均 \metric{CPC} 出价 1.2 元，日均点击数约 4.2 万次。
+若 pCTR 的校准曲线整体偏高 20\%，且出价完全由 pCTR 驱动，则单次点击的实际出价会接近 1.44 元，
+同样的预算只能买到约 3.5 万次点击，花费提前 3--4 小时触顶，一天中晚间的转化高峰被完全错过。
+表面上看是「超支」，实际上是\textbf{单位流量成本上升加上预算提前耗尽}的复合结果。
+对策不是直接砍预算，而是先修校准曲线：按预估分桶统计实际 CTR，对高估桶做单调回归校正，
+再看 \metric{CPC} 是否回到目标区间。数值为示范量级，不代表任何真实账户数据。
+\end{casebox}
+
+\subsection{特征体系：用户、广告、上下文与交叉}
+
+广告预估的特征可以按「信息属于谁」分成四组。这四组的可用性、时效性和失效模式都不一样，
+工程上最好在特征平台里就用不同的命名空间和更新链路隔开。
+
+\begin{table}[htbp]
+\centering
+\caption{广告预估的四类特征及其时效、失效模式与常见坑}
+\label{tab:ad-features}
+\small
+\begin{tabularx}{\linewidth}{L{1.9cm} L{4.3cm} L{2.3cm} Y}
+\toprule
+\tabhead{特征组} & \tabhead{典型特征} & \tabhead{时效} & \tabhead{常见失效模式} \\
+\midrule
+用户 & 人口属性、设备与系统、历史点击/转化率、行为序列、消费能力分层 &
+日级画像 + 分钟级实时行为 &
+序列长度变化导致分布漂移；新用户占比升高时 ID 类特征几乎全为空 \\
+\addlinespace
+广告 & 素材类型与尺寸、标题与文案 embedding、所属计划与出价方式、
+历史 CTR/CVR、落地页域名与页面质量 &
+分钟到小时级 &
+新广告冷启动无历史；素材被替换后历史统计仍挂在同一广告 ID 上，形成脏统计 \\
+\addlinespace
+上下文 & 时段、星期、请求页面类目、地理位置、天气、
+设备型号、流量来源与版位、是否首屏 &
+请求级，实时的 &
+时区与节假日口径不一致；跨端归因把同一人的不同设备拆成两个用户 \\
+\addlinespace
+交叉 & 用户类目偏好与广告类目的交叉、品类与时段的交叉、
+广告主与用户生命周期阶段的交叉、序列交叉 &
+请求级 + 离线统计 &
+交叉特征基数爆炸导致长尾不可学；线上哈希冲突与离线不一致 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+关于 \cref{tab:ad-features} 有四条实战经验：
+
+(1) \textbf{优先做「容量可控的交叉」，而不是「穷举的交叉」。}
+FM/FFM \cite{rendle2010fm,juan2017ffm} 与 DeepFM \cite{guo2017deepfm} 用隐向量内积或因子分解
+把二阶交叉的参数从 $O(n^2)$ 压到 $O(nd)$，这是工程上唯一可扩展的做法。
+DCN 系列的显式交叉层是另一条路，见 \cref{ch:ranking}。
+
+(2) \textbf{广告侧特征要区分「广告 ID 级」与「创意级」。}
+同一广告 ID 下换素材，历史统计要打折扣甚至清零，否则模型会持续给出错误预期。
+常见做法是给素材维度单独建一个统计表，用素材起始时间做衰减。
+
+(3) \textbf{上下文特征里，版位信息的影响常常被低估。}
+同一个广告位在信息流首位和第五位、在首屏和滚动两屏之后，CTR 可以差 5--10 倍。
+不做版位归一化，模型会把「好位置」的效应学成「好广告」的效应。
+
+(4) \textbf{用户特征的天花板由隐私政策决定。}
+第三方 Cookie 退场、iOS 的 ATT、以及各地数据合规要求，直接削掉了跨站行为特征的供给。
+这不是算法问题，是数据可得性问题；应对方向是从「跨站追踪」转向「站内第一方信号加上下文加模型定向」，
+详见 \cref{ch:ad} 的定向与隐私一节。
+
+\subsection{延迟反馈：CVR 建模里最贵的一课}
+
+\term{延迟反馈}{Delayed Feedback} 是 CVR 建模区别于 CTR 建模的根本难点。
+用户在 10:00 点击，10:40 下单，而模型在 10:00 这一秒就要给出 pCVR；
+如果训练样本在 10:05 就固化下来，这条样本的标签会被记为「未转化」——因为下单还没发生。
+用这种标签训出来的模型，系统性地低估 CVR。
+
+更麻烦的是这个低估不是均匀的，它\textbf{偏向于延迟短的转化}（冲动型、低价、站内直接下单），
+而低估延迟长的转化（跨设备、比价、高客单、需要客服介入）。
+模型的误差因此带上了一个业务含义明确的偏置方向。
+
+\begin{table}[htbp]
+\centering
+\caption{延迟反馈的五种处理范式与各自代价}
+\label{tab:delay-feedback}
+\small
+\begin{tabularx}{\linewidth}{L{2.6cm} L{4.0cm} L{1.8cm} Y}
+\toprule
+\tabhead{范式} & \tabhead{做法} & \tabhead{偏差方向} & \tabhead{适用与代价} \\
+\midrule
+固定窗口截断 & 点击后等待 $w$ 小时即固化标签，$w$ 通常取 1--24 小时 &
+低估 CVR，且低估随时间衰减 & 实现最简单；窗口越短偏差越大，训练与推理口径必须一致 \\
+\addlinespace
+归因窗口回填 & 采用平台默认窗口（常见为点击 7 天加浏览 1 天），到期后回填正标签 &
+近似无偏（在窗口内） & 需要样本流水线支持可变标签与重放；存储与重算成本高 \\
+\addlinespace
+延迟分布加权 & 用历史延迟分布 $f(\tau)$ 给未观测样本加权，做逆概率加权 &
+用模型修正模型 & 需要延迟分布稳定；广告主结算周期变化时分布会漂移 \\
+\addlinespace
+延迟反馈建模 & 显式建模「是否会转化」与「何时转化」，用正样本的延迟分布推导未观测样本的权重 &
+可做到一致性估计 & 参数量与训练复杂度上升；需要较强的延迟分布假设 \\
+\addlinespace
+生存分析视角 & 把转化时间 $T$ 视为随机变量，直接建模生存函数与风险率 &
+可输出任意时刻的条件概率 & 与「给多少钱、等多久」的业务问题天然对齐；实现复杂 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+延迟分布加权背后的数学很短。设点击后经过时间 $\tau$ 的转化概率为 $f(\tau)$，
+到当前观测时刻 $e$ 仍未转化的样本，其真实为负的概率不是 1，而是要在观测窗口内做折算。
+在「延迟分布与时滞无关」这一较强假设下，可以用观测到的转化延迟分布 $f$ 构造权重。
+\cite{saito2020doubly} 给出了缺失非随机（MNAR）条件下的无偏学习框架，
+其核心也正是用倾向权重把「被观测到的样本」重新加权回目标分布。
+
+用生存分析的语言写出来会更清楚。设 $T$ 为从点击到转化的时间，
+生存函数 $S(t) = \Prob(T > t)$，风险率
+$h(t) = \lim_{\Delta \to 0} \Prob(t \le T < t+\Delta \given T \ge t)/\Delta$。
+则单位时间内发生转化的瞬时概率为
+
+\begin{equation}
+\Prob(T \in [t, t+\dd t)) \;=\; S(t)\,h(t)\,\dd t, \qquad
+S(t) \;=\; \exp\!\left(-\int_0^{t} h(u)\,\dd u\right) .
+\label{eq:survival}
+\end{equation}
+
+工程上多数团队并不上生存模型，而是采用 \cref{tab:delay-feedback} 里的前三行组合：
+\textbf{用长窗口（7--30 天）的标签离线训练与离线评估，用短窗口的近似标签做近实时增量，
+两者之间的差用一个延迟校正系数桥接}。这个系数必须按品类、按渠道、按流量来源分别维护，
+因为不同来源的延迟分布差异极大——站内直接下单的延迟中位数可能是几分钟，
+而需要跨设备比价的高客单商品，中位数可能是几十小时。
+
+\begin{pitfall}[CVR 延迟反馈导致的「模型欠费」与预算超支]
+\textbf{现象}：新计划上线首日，后台显示的转化数远低于预期，模型给出的 pCVR 偏低，
+出价被压低，预算花不出去；运营手动提高出价系数后，预算又突然超支。
+
+\textbf{根因}：指标口径与训练口径的延迟不一致。
+报表上的转化数按点击时间归集但需要等结算，当天看到的数字是残缺的；
+训练样本按点击时间固化，早期未结算的样本被标成负样本。
+于是模型学到的 CVR 被系统性压低；而一旦提高出价系数，又恰好撞上那些
+「延迟长但终将转化」的高价值流量被抢进来，成本先到、转化后到，账面看起来就是超支。
+
+\textbf{排查方法}：(1) 按点击时间分桶对比 CVR 曲线，如果最近 3 天的曲线明显低于 30 天前同期，
+优先怀疑标签回填；(2) 监控转化延迟的分位数（p50/p90/p99）而不是均值，
+延迟分布的尾部变化比均值更早暴露问题；(3) 用长窗口标签重训一版离线模型，
+看离线 CVR 与线上报表的比值是否稳定，比值漂移就是口径漂移；
+(4) 对未结算样本做掩码而不是置负，样本权重随观测窗口增长而收敛。
+
+\textbf{预防}：把「标签可用率」当成和 AUC 同级的线上指标来监控；
+任何涉及 CVR 的策略改动（出价系数、定向放宽、落地页改版）都必须等至少一个完整归因窗口再评估。
+\end{pitfall}
+
+\subsection{多任务联合建模：CTCVR 与 ESMM 及其后续}
+
+先给出本章最重要的一个等式。记一次曝光为事件 $I$，点击为 $C$，转化为 $V$。
+在标准漏斗假设下（点击是转化的必要前置），有
+
+\begin{equation}
+\Prob(V \given I) \;=\; \Prob(C \given I)\;\Prob(V \given C, I)
+\quad\Longleftrightarrow\quad
+\CTR \times \CVR \;=\; \mathrm{CTCVR} .
+\label{eq:ctcvr}
+\end{equation}
+
+两种建模路线的分歧在于\kw{在哪个样本空间上定义损失}：
+
+\begin{itemize}
+  \item \textbf{分开建（baseline）}：CTR 模型在全部曝光样本上训练，CVR 模型只在被点击的样本上训练。
+        问题是点击样本是\kw{非随机子集}——用户点这条广告本身就说明了他对它有偏好，
+        这个偏好与转化强相关。只在点击样本上学的 CVR，无法代表「如果这条广告被点击了会不会转化」
+        在全体曝光上的期望。这就是\term{样本选择偏差}{Sample Selection Bias}。
+        它同时带来第二个问题：点击样本量比曝光样本量小一到两个数量级，
+        稀疏事件让 CVR 模型训练不足，也就是\term{数据稀疏}{Data Sparsity}。
+  \item \textbf{联合建（ESMM）}：CTR 塔和 CVR 塔共享底层 embedding，
+        但\textbf{两个塔都在全部曝光样本上计算 loss}——CTR 塔的标签是点击，
+        CTCVR 塔的标签是「曝光后是否转化」，CVR 只是两者相除得到的派生量。
+        设曝光空间为 $\Omega$，损失写成
+        \begin{equation}
+        \mathcal{L} \;=\; \frac{1}{\abs{\Omega}}\sum_{i \in \Omega}
+        \Big[ \ell\big(y_i^{\text{click}}, \hat{p}^{\text{CTR}}_i\big)
+        \;+\; \ell\big(y_i^{\text{ctcvr}}, \hat{p}^{\text{CTR}}_i \cdot \hat{p}^{\text{CVR}}_i\big) \Big].
+        \label{eq:esmm-loss}
+        \end{equation}
+\end{itemize}
+
+\eqref{eq:esmm-loss} 的三个性质值得记住：
+\textbf{一}，它把 CVR 的样本量从点击量扩大到曝光量，直接缓解了稀疏；
+\textbf{二}，全空间损失天然消除了点击子集的选择偏差（在同一分布上做经验风险最小化）；
+\textbf{三}，乘法结构把 $\hat{p}^{\text{CVR}} \le 1$ 变成自动约束——不需要额外的 sigmoid 截断或归一化。
+
+\begin{formulacard}[ESMM 的三个隐含假设与它们的失效条件]
+\textbf{假设 1：乘法结构成立。} 即 $\Prob(V \given I) = \Prob(C \given I)\Prob(V \given C)$。
+失效条件：存在「未点击但转化」的路径（浏览归因、跨设备、线下到店）。
+此时真实 CTCVR 被低估，且低估量随浏览归因占比升高而增大。
+
+\textbf{假设 2：两个塔共享的底层表示足够表达任务差异。}
+失效条件：CTR 与 CVR 的特征重要性差异很大（例如「便宜」提升 CTR、「质量」提升 CVR），
+共享底层会把两个任务的最优表示拉到折中点，出现\kw{跷跷板效应}（seesaw）。
+
+\textbf{假设 3：延迟反馈可以近似忽略或已校正。}
+失效条件：转化延迟的分布在不同流量来源之间差异很大（见 \cref{tab:delay-feedback}）。
+\end{formulacard}
+
+后续工作基本都在补这三条假设。方向上有三条主线：
+
+(1) \textbf{表示层解耦。}MMoE \cite{ma2018mmoe} 用多个专家网络加门控为每个任务动态组合专家；
+PLE \cite{tang2020ple} 更进一步，分出任务独享专家与共享专家两级门控，
+显式地把跷跷板效应限制在可控范围内。在广告场景里，点击与转化这两个任务的相关性并不高
+（点击多来自冲动，转化多来自决策），PLE 通常比 MMoE 更稳。
+但这些结构要放在 ESMM 的曝光空间全样本框架里，才能真正同时解决偏差与稀疏。
+
+(2) \textbf{迟滞与观测窗口显式建模。}把「样本被观测了多久」作为一维特征或门控信号输入模型，
+让模型对不同观测窗口下的样本给出不同的条件概率。本质上是用一个模型族近似生存函数 \eqref{eq:survival}。
+
+(3) \textbf{真正的多目标。}点击、转化、加购、收藏、退货、负反馈。
+多目标融合的常见方式是加权和 $v = \sum_k w_k \hat{p}_k \cdot v_k$，
+见 \cref{ch:ranking} 关于融合方式的讨论。广告场景的特殊之处在于权重 $w_k$ 与出价方式耦合：
+按转化计费时 $w_{\text{click}}$ 可以为 0，但 CTR 仍然必须作为中间量参与 CTR 与 CVR 的分解，
+否则 \eqref{eq:esmm-loss} 的乘法结构就断了。
+
+\subsection{校准与出价的关系}
+
+校准（calibration）的定义是：对任意 $q \in [0,1]$，
+
+\begin{equation}
+\Prob\big(y = 1 \given \hat{p} = q\big) \;=\; q .
+\label{eq:calibration}
+\end{equation}
+
+实际系统里没人能做到严格成立，所以用分桶统计来近似，并定义
+\term{期望校准误差}{Expected Calibration Error, ECE}：
+
+\begin{equation}
+\ECE \;=\; \sum_{b=1}^{B} \frac{n_b}{N}\,\abs{\, acc(b) - conf(b) \,},
+\label{eq:ece}
+\end{equation}
+
+其中 $n_b$ 是落入第 $b$ 个预估分桶的样本数，$acc(b)$ 是该桶的真实正例率，
+$conf(b)$ 是该桶的平均预估值。工程上通常取 $B = 15$ 或 $B = 20$ 个等频分桶。
+
+\begin{insight}[为什么广告必须校准，而推荐可以不校准]
+排序只关心\kw{序}，校准关心\kw{量纲}。推荐精排的输出经过 sigmoid 之后是单调的，
+任何单调变换（保序回归、温度缩放）都不改变 NDCG，所以校准问题在推荐里常常被容忍。
+广告出价直接对预估值做\kw{乘法}：$\mathrm{eCPM} = \mathrm{pCTR} \times \mathrm{pCVR} \times \text{value} \times 1000$。
+乘法对偏差是敏感的——如果 pCTR 整体偏高 10\%、pCVR 整体偏高 10\%，
+$\mathrm{eCPM}$ 就偏高 21\%，而排序结果可能一模一样。排序分不变、账单变了，
+这就是广告系统里「AUC 没掉但成本崩了」的标准剧本。\\
+推论：广告系统至少要同时盯三类指标——\metric{AUC/GAUC}（排序能力）、
+\metric{ECE} 与分桶偏差表（量纲正确性）、\metric{CPC/CPA} 与预算消耗率（业务后果）。
+三者缺一，你都会在某个时刻失去对系统的判断力。
+\end{insight}
+
+常用的校准手段有三档，按复杂性递增：
+
+\begin{itemize}
+  \item \textbf{全局线性校正}：$\hat{p}' = clip(a\hat{p} + b)$，用近期数据最小二乘拟合 $a, b$。
+        最简单，能修掉系统性偏移，但修不掉「头部高估、尾部低估」这种形状错误。
+  \item \textbf{保序回归}：在「校准后必须是单调函数」的约束下最小化平方误差，
+        可以得到一条单调的分段常数校正曲线。自由度高、容易过拟合，必须用独立校准集并限制分段数。
+  \item \textbf{分桶校准表加平滑}：按特征维度（品类、渠道、版位、新老客）分别维护校准系数，
+        对样本量不足的桶做贝叶斯平滑（向全局系数收缩）。
+        这是工业界最常用的一档，因为它的失败模式可解释、可回滚、可人工干预。
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{校准误差如何改变 eCPM 排序：两个候选、同样的 AUC、不同的账单（示范量级）}
+\label{tab:calib-ecpm}
+\small
+\begin{tabularx}{\linewidth}{L{2.2cm} R{1.6cm} R{1.6cm} R{1.7cm} R{1.9cm} Y}
+\toprule
+\tabhead{候选} & \tabhead{真实 pCTR} & \tabhead{预估 pCTR} & \tabhead{真实 pCVR} &
+\tabhead{真实 eCPM} & \tabhead{系统决策后果} \\
+\midrule
+广告 A（高位流量） & 0.030 & 0.045 & 0.010 & 0.30 元 & 被高估 50\%，被系统优先展示，实际收益只有预期的三分之二 \\
+\addlinespace
+广告 B（长尾流量） & 0.020 & 0.012 & 0.040 & 0.80 元 & 被低估 40\%，长期拿不到量，高转化流量被系统性放弃 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\cref{tab:calib-ecpm} 的关键读法：两个候选的\kw{相对排序}在预估空间里是 A 高于 B，
+在真实空间里是 B 高于 A——而全局 \metric{AUC} 在这种「系统性分群偏差」面前几乎不会报警。
+所以校准诊断必须\kw{分组做}：按渠道、按版位、按新老客、按品类分别画可靠性曲线。
+只画一条全局曲线，等于把所有的偏差平均掉了。
+
+\section{出价策略}
+
+\subsection{从 CPM/CPC 到 oCPC/oCPA：谁来决定出价}
+
+理解出价演进最好的方式，不是背名词，而是问一个问题：\kw{出价这个动作，由谁在什么时刻发出？}
+
+\begin{itemize}
+  \item \textbf{CPM（固定千次曝光）}：出价由人预先设定，与流量质量无关。
+        广告主承担全部风险，适合纯品牌曝光。
+  \item \textbf{CPC（固定单次点击）}：人设定一个点击价格上限，系统在拍卖时用
+        $\mathrm{eCPM} = \text{CPC} \times \mathrm{pCTR} \times 1000$ 与其他广告比较。
+        此时系统已经需要 pCTR——CPC 时代正是 CTR 预估模型大规模工业化的起点。
+  \item \textbf{oCPC（优化 CPC）}：广告主只给一个目标转化成本（tCPA），
+        系统在每次请求里自己算出价。这里的「优化」指的不是优化点击，而是
+        \textbf{用转化目标反过来指导点击出价}：出价由转化价值决定，而不是由点击价格决定。
+  \item \textbf{oCPA 与 tCPA}：与 oCPC 同源，差别在计费点（转化计费）和约束的表达方式。
+        本质上都是「广告主给目标，系统给价」。
+  \item \textbf{智能出价与 Target ROAS}：约束从单一成本目标扩展为
+        「在预算内最大化转化数」或「在 ROAS 下界内最大化 GMV」。
+        这时系统要同时处理预算约束与 ROI 约束，进入后文的拉格朗日框架。
+\end{itemize}
+
+出价的\textbf{结构}也可以分成三档，这个分类比名词更有用：
+
+\begin{enumerate}
+  \item \textbf{线性出价}：$\text{bid} = k \cdot v$，$v$ 是这次转化的预估价值，$k$ 是全局系数。
+        简单、稳定、可解释，是绝大多数系统的默认形态。
+  \item \textbf{纠偏出价}：在线性出价上加一个偏差修正项，用于补偿预估值不准或竞争环境变化。
+        修正项可以来自残差回归，也可以来自历史成交价的分布匹配。
+  \item \textbf{非线性与学习式出价}：出价是状态（剩余预算、时段、竞争强度、用户价值分层）的函数，
+        由强化学习或上下文赌博机学出来。表达能力最强，风险也最高。
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  bx/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=10mm,
+             text width=2.9cm, inner sep=3pt},
+  ex/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=10mm,
+             text width=2.9cm, inner sep=3pt},
+  ob/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=10mm,
+             text width=3.3cm, inner sep=3pt}
+]
+\node[bx] (target) {广告主目标\\tCPA / tROAS / 日预算};
+\node[ex, right=7mm of target] (model) {预估模块\\pCTR、pCVR、价值 $v$};
+\node[bx, right=7mm of model] (bid) {出价模块\\$\mathrm{bid} = v \cdot \mathrm{pCVR} / \kappa_t$};
+\node[bx, below=9mm of bid] (auction) {拍卖与计费\\eCPM 排序、一价或二价};
+\node[ob, left=7mm of auction] (cost) {观测回路\\花费速率、CPA、ROAS};
+\node[ob, left=7mm of cost] (pid) {控制器\\PID 或拉格朗日对偶上升\\调整 $\kappa_t$ 与影子价格};
+\draw[-{Stealth}, SlateGray] (target) -- (model);
+\draw[-{Stealth}, SlateGray] (model) -- (bid);
+\draw[-{Stealth}, SlateGray] (bid) -- (auction);
+\draw[-{Stealth}, SlateGray] (auction) -- (cost);
+\draw[-{Stealth}, TealDeep] (cost) -- (pid);
+\draw[-{Stealth}, CrimsonDeep, dashed] (pid.north) |- ([xshift=-1.0cm]bid.south);
+\node[draw=SlateGray, dashed, rounded corners=2pt, inner sep=3pt, font=\sffamily\tiny,
+      below=2mm of model, text width=4.0cm]
+     {回路时滞 $L$ 为分钟到小时级；控制周期必须大于 $L$};
+\end{tikzpicture}
+\caption{oCPC 出价闭环控制图：目标到预估、出价、拍卖、观测、控制器}
+\label{fig:ocpc-loop}
+\end{figure}
+
+\cref{fig:ocpc-loop} 是本章的骨架。请特别注意那条从控制器指回出价模块的虚线，
+以及虚线下方标注的\kw{回路时滞} $L$。控制周期 $T_c$ 与控制增益的选择都受 $L$ 支配：
+当 $T_c$ 远小于 $L$ 时，控制器会对着过期的信息反复调整，产生振荡；
+当 $T_c$ 远大于 $L$ 时，系统反应迟钝，会在错误的轨道上跑很久。
+工业界经验值是 $T_c$ 取 $L$ 的 2--3 倍，同时对调整幅度做速率限制。
+
+\subsection{PID 控制与预算平滑 pacing}
+
+\term{预算平滑}{Budget Pacing} 要解决的问题可以一句话说清：
+\kw{预算是一天的，流量是一秒一秒来的，而流量和价值在一天内的分布极不均匀。}
+
+设日预算为 $B$，投放时间窗为 $[0, T]$（通常 $T = 24$ 小时），
+到时刻 $t$ 的累积花费为 $C(t)$。三个层次的 pacing 策略：
+
+\begin{itemize}
+  \item \textbf{匀速}：目标累积曲线 $C^{*}(t) = B \cdot t / T$。
+        实现最简单。但如果流量或转化率在夜间是低谷、晚间是高峰，
+        匀速会在低价值时段把预算烧掉大部分，等高峰来临时无钱可花。
+  \item \textbf{按流量分布配速}：设预测的流量占比累积函数为 $F(t)$，取 $C^{*}(t) = B \cdot F(t)$。
+        这能保证预算不在低谷期耗尽，但忽略了「同样一次曝光在不同时段的价值不同」。
+  \item \textbf{按价值分布配速}：设单位曝光价值累积预测为 $G(t)$，取 $C^{*}(t) = B \cdot G(t)$。
+        理论最优（在预算约束下最大化总价值），但 $G(t)$ 的预测误差会直接转化成配速误差，
+        且会显著加剧竞争——如果所有广告主都用同一套价值曲线，高峰期的价格会被推高。
+\end{itemize}
+
+\begin{formulacard}[pacing 的三个实用结论]
+\textbf{(1) 目标累积曲线必须是单调递增的。}
+$C^{*}(t)$ 若出现非单调（例如预测模型抖动），控制器会被要求把已经花掉的钱吐回来，
+表现为出价剧烈震荡。
+
+\textbf{(2) 控制量最好是乘性系数，而不是绝对出价。}
+即 $\mathrm{bid}_t = \kappa_t \cdot v \cdot \mathrm{pCVR}$，$\kappa_t \in [\kappa_{\min}, \kappa_{\max}]$。
+乘性系数与量纲无关，能自动适应不同计划之间出价水平差异巨大的现实；
+上下界钳制则提供了失控时的安全绳。
+
+\textbf{(3) 对偶视角：预算的影子价格随时间变化。}
+把日预算写成约束 $\int_0^T spend(t)\,\dd t \le B$，
+拉格朗日乘子 $\lambda$ 就是「多一块钱预算能带来多少额外价值」。
+所以 $\kappa_t$ 本质上是 $1/(1+\lambda_t)$——预算充裕、时段还长时 $\lambda$ 小、$\kappa$ 大；
+临近截止且花费超标时 $\lambda$ 大、$\kappa$ 小。这解释了为什么越接近日终出价越低，
+也解释了为什么跨日边界必须做平滑——否则每天 23:59 到 00:00 会出现一次出价阶跃。
+\end{formulacard}
+
+PID 控制器把上述直觉形式化。设 $e(t) = C^{*}(t) - C(t)$ 为累积花费的偏差，
+$\kappa_t$ 为出价系数：
+
+\begin{equation}
+\kappa_t \;=\; \kappa_{0} \;+\; K_p\, \frac{e(t)}{B}
+\;+\; K_i \int_0^{t} \frac{e(s)}{B}\,\dd s
+\;+\; K_d\, \frac{\dd}{\dd t}\!\left(\frac{e(t)}{B}\right),
+\label{eq:pid}
+\end{equation}
+
+其中除以 $B$ 是为了让三个增益与预算规模无关（无量纲化），
+这样同一组 $K_p, K_i, K_d$ 可以跨计划复用。三项的分工：
+
+\begin{itemize}
+  \item \textbf{比例项 $K_p$}：对当前偏差做即时反应，是最主要的驱动力。
+        太大导致振荡，太小导致响应迟钝。
+  \item \textbf{积分项 $K_i$}：消除\kw{稳态误差}。
+        如果系统长期稳定地花不完（例如预估值整体偏低），比例项会在零附近收敛、
+        留下一个恒定偏差；积分项会持续累积，把这个偏差推平。
+        代价是\textbf{积分饱和}：当预算已被钳制、或者流量骤降导致
+        $e(t)$ 长期很大时，积分项会累积到一个很大的值，等条件恢复后要很久才能退回来，
+        期间出价严重异常。工程上必须做抗饱和处理（clamping）。
+  \item \textbf{微分项 $K_d$}：对偏差的变化率做反应，用于抑制超调。
+        但广告系统的观测信号本身就带噪（转化回传延迟、流量随机波动），
+        微分会\kw{放大噪声}。因此实践中 $K_d$ 常常直接设为 0，
+        只在有非常干净的近实时信号（例如曝光与点击同秒回传）时才启用。
+\end{itemize}
+
+\begin{pitfall}[pacing 调参的四个典型翻车方式]
+\textbf{(1) 控制周期小于反馈时滞。}
+每 1 分钟调整一次出价，但花费数据要 10 分钟才稳定——控制器看到的是三个版本前的世界，
+结果是持续过冲。修正：把控制周期设为时滞的 2--3 倍，并对观测值做指数平滑。
+
+\textbf{(2) 积分饱和未处理。}
+计划在上午 6 点到 9 点因流量低谷花不出去，$e(t)$ 持续为正，积分项累积到上限；
+9 点后流量恢复，出价系数仍被顶在高位，半小时内花掉全天预算的 60\%。
+修正：对 $e(t)$ 做限幅（例如只取 $\pm 10\%$），并用条件积分（偏差过大时暂停积分）。
+
+\textbf{(3) 多计划共用一套系数。}
+pacing 系数应按计划维护，但很多系统为了省事做成账户级统一系数。
+结果是预算大的计划绑架了所有计划的出价：一个计划超支，全账户出价被压低，
+低预算计划的曝光量被误伤。修正：系数必须按计划（至少按出价策略）分组，
+共享的只能是控制器的超参数。
+
+\textbf{(4) 跨日阶跃。}
+午夜零点把累积花费归零、系数复位到 1.0，如果前一日尾盘系数被压到 0.6，
+零点后会出现一次 67\% 的出价跳升，直接抢下大量高价流量。
+修正：对系数做跨日滑动（例如用过去 3 天同一时段的系数做先验初始化）。
+\end{pitfall}
+
+\begin{lstlisting}[style=growth, language=Python, caption={日预算 PID pacing 模拟：对比不同增益参数的交付稳定性（示范量级）}]
+import math
+
+# A synthetic intraday traffic curve: low at night, peak in the evening.
+def traffic_weight(h):
+    return 0.35 + 0.65 * math.exp(-((h - 20.0) ** 2) / 18.0)
+
+def simulate(budget=50000.0, kp=0.8, ki=0.35, kd=0.0,
+             steps=96, max_widen=1.60, min_widen=0.40):
+    dt = 24.0 / steps                      # each step is 15 minutes
+    cum_goal, cum_spend = 0.0, 0.0
+    widen, integral, prev_err = 1.0, 0.0, 0.0
+    spent_curve, widen_curve = [], []
+    # Precompute the traffic mass so the goal curve follows supply.
+    total = sum(traffic_weight(i * dt) for i in range(steps))
+    for i in range(steps):
+        h = i * dt
+        cum_goal += budget * traffic_weight(h) / total
+        # Spend of this slot: proportional to supply and to the bid widening.
+        potential = budget * traffic_weight(h) / total
+        spend = min(potential * widen, budget - cum_spend)
+        spend = max(spend, 0.0)
+        cum_spend += spend
+        err = (cum_goal - cum_spend) / budget
+        integral += err * dt
+        deriv = (err - prev_err) / dt
+        prev_err = err
+        widen = 1.0 + kp * err + ki * integral + kd * deriv
+        widen = max(min_widen, min(max_widen, widen))
+        spent_curve.append(cum_spend)
+        widen_curve.append(widen)
+    return cum_spend, spent_curve, widen_curve
+
+for kp, ki, kd in [(0.8, 0.35, 0.0), (1.6, 0.60, 0.0), (0.8, 0.35, 0.25)]:
+    final, curve, widen = simulate(kp=kp, ki=ki, kd=kd)
+    under = max(0.0, 50000.0 - final) / 50000.0
+    # Overshoot is read as the share of budget delivered before hour 12.
+    early = curve[48] / 50000.0
+    print("kp=%.2f ki=%.2f kd=%.2f | final=%.0f | underspend=%.1f%% | "
+          "first-half share=%.1f%% | widen range=[%.2f, %.2f]"
+          % (kp, ki, kd, final, under * 100, early * 100, min(widen), max(widen)))
+\end{lstlisting}
+
+这段脚本的价值不在于它能预测真实系统，而在于它把三个调参直觉变成可观察的量：
+\textbf{欠量率}（末尾花不出去多少）、\textbf{前半程占比}（是否抢跑）、
+\textbf{系数波动区间}（是否振荡）。判断一组增益是否可用，看的是这三个量的组合，
+而不是单看「最终花完了没有」——很多振荡的控制器最终也能花完预算，
+但过程中会在某些时段把价格推高 50\% 以上，代价体现在 \metric{CPA} 上而不是消耗率上。
+
+\subsection{线性出价与最优出价}
+
+先把两个常见的出价公式并排写出来，因为它们的差别就是本章最核心的一个推导：
+
+\begin{equation}
+\text{线性出价：}\quad b \;=\; \alpha \cdot v \cdot \mathrm{pCVR},
+\qquad
+\text{最优出价：}\quad b^{*} \;=\; \frac{v \cdot \mathrm{pCVR}}{\kappa},
+\label{eq:bid-linear-vs-optimal}
+\end{equation}
+
+其中 $v$ 是这次转化对广告主的期望价值（可以是客单价乘毛利率，也可以是 \metric{LTV} 的折现值），
+$\mathrm{pCVR}$ 是模型给出的转化概率，$\alpha$ 与 $\kappa$ 都是折扣因子，但它们的来历完全不同：
+$\alpha$ 是人为设定的出价系数，$\kappa$ 是从优化问题里解出来的。
+
+\cite{zhang2016ocpc} 给出的经典结果是：在给定预算、且已知最优出价关于价值的线性形式时，
+最大化总转化价值的最优出价正比于 $v \cdot \mathrm{pCVR}$，比例系数由预算约束的
+对偶变量决定。下面用更一般的语言重推一遍，因为\textbf{推导过程本身比结论有用得多}。
+
+设出价为 $b$，这次拍卖的获胜概率为 $w(b)$（关于 $b$ 单调递增），
+单次获胜的期望价值为 $\rho \equiv v \cdot \mathrm{pCVR}$。
+按第一价格计费（第二价格情形是它的特例），一次机会的期望利润为
+
+\begin{equation}
+\Pi(b) \;=\; w(b)\,\big(\rho - b\big) .
+\label{eq:profit}
+\end{equation}
+
+对 $b$ 求导并令其为零：
+
+\begin{equation}
+\frac{\dd \Pi}{\dd b} \;=\; w'(b)(\rho - b) - w(b) \;=\; 0
+\quad\Longrightarrow\quad
+\frac{\rho - b^{*}}{b^{*}} \;=\; \frac{w(b^{*})}{b^{*}\,w'(b^{*})} \;\equiv\; \frac{1}{\varepsilon},
+\label{eq:first-order-bid}
+\end{equation}
+
+其中 $\varepsilon \equiv \dfrac{b\,w'(b)}{w(b)}$ 是获胜概率关于出价的弹性。
+整理得
+
+\begin{equation}
+b^{*} \;=\; \frac{\rho}{1 + 1/\varepsilon} \;=\; \rho \cdot \frac{\varepsilon}{1+\varepsilon} \;\equiv\; \frac{v \cdot \mathrm{pCVR}}{\kappa},
+\qquad \kappa \equiv 1 + \frac{1}{\varepsilon} .
+\label{eq:optimal-bid}
+\end{equation}
+
+\eqref{eq:optimal-bid} 就是「最优出价等于价值乘转化率除以折扣因子」的完整来历。
+它解释了三件事：
+
+\textbf{一、为什么折扣因子大于 1（即出价低于价值）。}
+$\varepsilon > 0$，所以 $\kappa = 1 + 1/\varepsilon > 1$。
+出价低于价值不是保守，而是\textbf{为了在下一次机会里保留购买力}：
+出得越高，赢的机会越多，但每次的盈余越薄；最优解在两者之间取平衡。
+
+\textbf{二、折扣因子到底在补偿什么。}把 $\kappa$ 的三个来源分开看：
+\begin{itemize}
+  \item \textbf{竞争弹性}：其它广告主的出价分布越集中、你的出价对胜率的影响越平缓，
+        弹性 $\varepsilon$ 越大，$\kappa$ 越接近 1。在竞争激烈、赢率对出价极敏感的市场里，
+        $\varepsilon$ 小、$\kappa$ 大，出价必须更保守。
+  \item \textbf{预算约束的影子价格}：当预算成为紧约束时，$\kappa$ 变小（出价更保守），
+        因为每多花一块钱的边际价值下降。这正是上一节的 $\kappa_t$——
+        两个看似无关的模块（pacing 与出价）在这里被同一个符号统一了。
+  \item \textbf{计费机制}：第二价格拍卖下诚实报价是最优策略，$\kappa = 1$；
+        第一价格拍卖下必须做报价折扣 \cite{krengel2019firstprice}。
+        机制变化会直接改变 $\kappa$ 的合理量级，这也是为什么平台从二价转一价时，
+        很多投放团队的 \metric{CPC} 在两周内出现了明显的结构性偏移。
+\end{itemize}
+
+\textbf{三、为什么 pCVR 的估计误差比 pCTR 更危险。}
+\eqref{eq:optimal-bid} 对 $\mathrm{pCVR}$ 是\kw{线性}的，对 $v$ 也是线性的，
+但 $v$ 通常是人工设定或离线统计的常量，而 $\mathrm{pCVR}$ 是模型输出。
+因此在出价误差这一项上，pCVR 的方差几乎原封不动地传导到成本上。
+再叠加 CVR 事件本身稀疏（转化率常在 $10^{-3}$ 到 $10^{-2}$ 量级）、
+延迟反馈严重（见 \cref{tab:delay-feedback}），pCVR 是整条链上最脆弱的输入。
+结论：\textbf{如果只能给一个模块加人力，应该加在 CVR 的标签体系与校准上，而不是出价策略上。}
+
+\subsection{多约束出价：预算与 ROI 双约束的拉格朗日解法}
+
+单一预算约束的情形在上节已经解决。真实业务几乎总是多约束的：
+一个账户既要花完预算（不能欠量），又要守住 \metric{ROAS} 下界（不能亏本），
+有时还要满足频控与素材多样性约束。统一工具是拉格朗日对偶。
+
+设一次机会 $i$ 的预估价值为 $\rho_i = v_i \cdot \mathrm{pCVR}_i$，
+出价 $b_i$ 对应的获胜概率为 $w_i(b_i)$，计费为 $cost_i(b_i)$。约束集为
+
+\begin{equation}
+\max_{\{b_i\}} \; \sum_{i} w_i(b_i)\,\big(\rho_i - cost_i(b_i)\big)
+\qquad \text{s.t.} \quad
+\begin{cases}
+\displaystyle \sum_i w_i(b_i)\,cost_i(b_i) \;\le\; B, & (\lambda_B) \\[2mm]
+\displaystyle \sum_i w_i(b_i)\,\rho_i \;\ge\; R \sum_i w_i(b_i)\,cost_i(b_i), & (\lambda_R)
+\end{cases}
+\label{eq:dual-primal}
+\end{equation}
+
+其中 $R$ 是 \metric{ROAS} 下界，$\lambda_B \ge 0$ 与 $\lambda_R \ge 0$ 是相应的乘子。
+第一条约束是「不能超支」，第二条是「每一块钱花出去要带回至少 $R$ 块钱的价值」。
+写出拉格朗日函数并对 $b_i$ 求导，可得逐次机会近似独立的等价形式：
+
+\begin{equation}
+b_i^{*} \;\approx\; \frac{\rho_i}{1 + \lambda_B + \lambda_R\, g_i}
+\;\equiv\; \rho_i \cdot D, \qquad D = \frac{1}{1 + \lambda_B + \lambda_R\, g_i},
+\label{eq:bid-dual}
+\end{equation}
+
+其中 $g_i \ge 0$ 是这次机会相对 ROI 目标的稀缺程度
+（转化价值高、成本低的机会 $g_i$ 小，出价被压得少；反之 $g_i$ 大，出价被压得多）。
+不需要把 \eqref{eq:bid-dual} 当成精确解（原问题非凸，对偶间隙存在），
+需要的是它的\kw{结构性含义}：
+
+\begin{itemize}
+  \item $\lambda_B$ 起\kw{等比缩放}作用——超支就整体压价，欠量就整体抬价。
+        它作用于全部流量，不理解流量的好坏。
+  \item $\lambda_R$ 起\kw{选择性倾斜}作用——它让高转化价值的流量拿到相对更高的出价，
+        低价值流量被压得更低。这正是 ROI 约束要求的「把钱花在刀刃上」。
+  \item 两个乘子必须\kw{在线自适应}。流量结构、竞争强度、转化延迟每天都在变，
+        离线固定一组 $\lambda$ 一周内就会失效。标准的对偶上升（dual ascent）迭代为
+        \begin{equation}
+        \lambda_B \leftarrow \left[\lambda_B + \eta_B \left(\frac{\text{今日累计花费}}{B} - \frac{t}{T}\right)\right]^{+},
+        \qquad
+        \lambda_R \leftarrow \left[\lambda_R + \eta_R \left(R - \widehat{\ROAS}_{\text{近期}}\right)\right]^{+},
+        \label{eq:dual-ascent}
+        \end{equation}
+        其中 $[\cdot]^{+} = \max(\cdot, 0)$ 保证乘子非负，$\eta$ 是学习率
+        （一般取足够小以避免振荡，且必须与 \eqref{eq:pid} 的 pacing 控制器协调——
+        两者都在压价，如果同时大幅动作会双重过度反应）。
+\end{itemize}
+
+\begin{toolbox}[双约束出价的落地参数清单]
+\begin{itemize}
+  \item \textbf{对偶变量的更新频率}：5--15 分钟一次。
+        低于 5 分钟时，花费与 ROI 的观测噪声会主导更新方向；
+        高于 30 分钟则一天只有几十次迭代，对偶上升根本来不及收敛。
+  \item \textbf{学习率} $\eta_B, \eta_R$：取 0.05--0.3 量级起步，
+        并用「每次调整后折扣因子 $D$ 的变化不超过 5\%」作为硬约束。
+  \item \textbf{折扣因子的钳制区间}：$D \in [0.4, 1.2]$ 是常见区间。
+        上界小于 1（不鼓励溢价）对多数业务更安全；下界保护欠量风险，
+        因为一旦长期 $D$ 很低，系统会陷入「花不出去、样本变少、模型更不准、更花不出去」的死循环。
+  \item \textbf{ROI 的观测口径}：必须写清楚是点击口径还是曝光口径、
+        含退货还是不含退货、含税还是不含税、首单还是含复购。
+        这四个维度任选组合，同一个账户的 ROAS 能差出一倍以上，
+        而 $\lambda_R$ 是直接由这个数字驱动的。
+  \item \textbf{护栏}：单计划单日出价系数变化幅度上限、单日预算消耗上限，
+        以及「$\lambda_R$ 连续 6 小时触顶」的告警——那意味着当前出价能力已经无法满足 ROI 目标，
+        该做的是调整目标或换素材，而不是继续压价。
+\end{itemize}
+\end{toolbox}
+
+\begin{casebox}[案例：oCPC 出价系数从 1.0 到 1.3 的三周调优记录（示范量级）]
+某电商账户在站内广告上使用 oCPC，初始出价系数 1.0。目标是在不放宽 ROI 要求的前提下提高消耗。
+调优按「改一次、观察三天、数据稳定再动」的节奏推进：
+
+\begin{center}
+\small
+\begin{tabular}{ccccc}
+\toprule
+\tabhead{周次} & \tabhead{系数} & \tabhead{消耗完成率} & \tabhead{CPA 相对基线} & \tabhead{观察到的现象} \\
+\midrule
+基线 & 1.00 & 68\%  & 1.00$\times$ & 稳定欠量，晚间高峰拿不到量 \\
+第 1 周 & 1.10 & 84\%  & 1.06$\times$ & 消耗上升，CPA 小幅上浮，仍在阈值内 \\
+第 2 周 & 1.20 & 96\%  & 1.14$\times$ & 消耗接近达标，但周末出现单日超支 \\
+第 3 周 & 1.30 & 103\% & 1.23$\times$ & 超支，且 CPA 越过预警线，需要回调 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{结论与教训}：(1) 出价系数存在\kw{明确的拐点}，本例在 1.20 附近；
+超过拐点后消耗的边际增量很小，而 CPA 的边际恶化很快。
+(2) 拐点位置不是常数，它随竞争环境和流量结构移动，
+所以应该用「消耗完成率对 CPA」的响应曲线来定位拐点，而不是沿用历史值。
+(3) 真正的解法不是在系数上继续试探，而是回到上游：
+提高 pCVR 的校准质量、扩展高质量流量的覆盖面（新素材、新定向），
+把「同样的出价能买到更多价值」这件事做实。
+\end{casebox}
+
+\subsection{强化学习出价：建模、收益与风险}
+
+把出价放进强化学习框架是很自然的想法：出价本质上是一个\kw{序贯决策}问题——
+现在多花钱会影响未来的选择集。
+
+\textbf{MDP 建模}。状态 $s_t$ 至少包含：剩余预算比例、当日剩余时间比例、
+最近的消耗与转化速率、当前请求的预估值与流量特征、竞争强度代理变量（如近期成交价分位数）。
+动作 $a_t$ 取折扣因子 $D_t$（或等价地取对未来预算影子价格的估计）。奖励 $r_t$ 需要小心设计：
+
+\begin{equation}
+r_t \;=\; \underbrace{\rho_t \cdot \mathbf{1}\{\text{win}\}_t}_{\text{当期转化价值}}
+\;-\; \underbrace{\mu \left(\frac{C_t}{B} - \frac{t}{T}\right)^{\!2}}_{\text{配速偏离惩罚}}
+\;-\; \underbrace{\nu \cdot \mathbf{1}\{\widehat{\ROAS}_t < R\}}_{\text{ROI 越界惩罚}} .
+\label{eq:rlb-reward}
+\end{equation}
+
+\eqref{eq:rlb-reward} 的形式说明了一件事：\textbf{RL 出价的奖励函数其实就是把
+pacing 与 ROI 约束写成了软惩罚}。这是理解它与 PID、对偶方法关系的钥匙——
+它们求解的是同一个问题，只是 RL 用采样和函数逼近，对偶方法用解析结构与在线迭代。
+
+\begin{insight}[RL 出价的真实价值与它的天花板]
+\textbf{价值在哪里}：当状态空间高维、约束非线性、且环境有可学习的规律时
+（例如「周末晚间的竞争强度总是先高后低」这类非平稳模式），
+RL 可以学到人工规则写不出的时序策略；它也能自然处理多步之后才见效的决策，
+例如前半天故意压低出价、为晚间高峰留出预算。\\
+\textbf{天花板在哪里}：RL 出价的效果上界\kw{不超过模拟器的保真度}。
+离线 RL 需要一个能反映真实竞争环境的模拟器，
+而竞争环境由其他所有广告主的策略共同决定——这是一个\kw{多智能体非平稳环境}，
+任何静态日志都无法覆盖反事实的结果。
+\cite{dudik2011ee} 的\kw{双重稳健估计}{Doubly Robust} 给出了在
+「倾向模型正确」或「奖励模型正确」二者之一成立时即无偏的离线评估方法，
+这是目前实践中做 off-policy evaluation 最常用的工具；
+\cite{swaminathan2015counterfactual} 则从方差角度给出了更实用的加权方案。
+但即便评估无偏，覆盖不足（日志里没出现过的高出价动作无法评估）依然是硬约束。\\
+\textbf{实践中的正确姿势}：把 RL 当成\kw{参数调节层}，而不是\kw{决策层}。
+底层保持规则化的安全包络（出价上下界、日预算硬顶、ROI 熔断），
+RL 只在包络内部调整折扣因子的目标值，并且必须与一个 A/B 对照组长期并行。
+一旦 RL 分支的 \metric{CPA} 在两周尺度上落后于规则分支，就自动切回规则分支。
+\end{insight}
+
+RL 出价的四个具体风险，按严重程度排序：
+
+\begin{enumerate}
+  \item \textbf{模拟器偏差被放大成系统性亏损}。离线训练的 RL 策略倾向于探索日志中未覆盖的高出价动作，
+        因为模拟器会乐观地认为这些动作能赢得更多高价值流量。
+        上线后的现实是这些流量早已被更强的竞争者占据，结果是高价买到低质流量。
+        缓解：对动作空间做强约束（只允许在规则策略附近 $\pm 10\%$ 内调整），
+        并用双重稳健估计筛选候选策略。
+  \item \textbf{延迟反馈被计成「未转化」}。见 \cref{tab:delay-feedback}：
+        RL 的奖励信号若在转化回传之前就结算，会把高质量的延迟转化流量判成负样本，
+        学习结果与 CVR 模型的偏差方向一致、相互强化。
+  \item \textbf{非平稳与策略漂移}。市场在变、竞争对手在变、平台规则在变。
+        一个在第二季度数据上训练的策略到第三季度就可能反向。
+        缓解：限定训练窗口、加入近期数据强加权、设置策略性能的滚动基线告警。
+  \item \textbf{合规与政策风险}。平台的自动出价政策通常对人为操纵配速、
+        规避预算限制、高频修改出价有明确限制。
+        任何 RL 出价方案在上线前必须以平台官方最新文档为准做一次政策审查，
+        这在跨境投放场景下尤其重要（不同地区的广告政策与数据合规要求不同）。
+\end{enumerate}
+
+\section{预算与流量分配}
+
+\subsection{从单计划 pacing 到全局分配}
+
+单计划的 pacing 是控制问题，全局的预算分配是优化问题。
+一个账户下有 $K$ 个计划，总预算 $B$，每个计划 $k$ 的投入产出关系为 $V_k(c_k)$
+（花费 $c_k$ 带来的转化价值）。标准分配问题是
+
+\begin{equation}
+\max_{\{c_k\}} \; \sum_{k=1}^{K} V_k(c_k)
+\qquad \text{s.t.} \quad \sum_{k=1}^{K} c_k \le B, \quad c_k \ge 0 .
+\label{eq:budget-alloc}
+\end{equation}
+
+若 $V_k$ 是凹函数（边际收益递减），KKT 条件给出最优解的经典形式：
+
+\begin{equation}
+V_k'(c_k^{*}) \;=\; \lambda \quad \text{对所有 } c_k^{*} > 0, \qquad
+\sum_k c_k^{*} = B .
+\label{eq:kkt-alloc}
+\end{equation}
+
+读法：\kw{把所有预算分配到各计划的边际收益相等的那一点}。
+$\lambda$ 是全局的影子价格。若某计划的边际收益低于 $\lambda$，
+就应该减少它的预算，把额度给边际收益更高的计划。
+
+实践的三个修正：
+
+\begin{itemize}
+  \item \textbf{预算不可无限细分。}平台侧通常有最小日预算、以及修改预算的频率限制。
+        连续解 \eqref{eq:kkt-alloc} 要落地成离散的档位调整，并加滞后（hysteresis）
+        防止预算在两个计划之间来回搬。
+  \item \textbf{$V_k$ 是估计出来的，而且是有偏的。}
+        用历史数据拟合的 $V_k$ 会系统性高估历史上花得多的计划——
+        因为它们拥有更充分的探索。这是典型的\kw{选择偏差}在预算分配层面的复现。
+        缓解：对探索不足的计划做\kw{乐观初始化}（乐观面对不确定性，类似 bandit 的 UCB 思路），
+        并保留一部分预算作为固定的探索额度。
+  \item \textbf{跨计划的相互作用常被忽略。}同一个账户的两个计划可能争夺同一批用户，
+        边际收益不是独立的。若不做去重和频控，$V_k$ 的可加性假设就破了。
+        应对方式是在分配问题里显式加入「同一用户被两个计划触达」的惩罚项。
+\end{itemize}
+
+\subsection{流量预测与机会成本}
+
+pacing、分配、出价三件事都依赖\kw{对未来流量的预测}。预测的粒度通常是
+「未来 15 分钟乘版位乘定向条件」的可竞得曝光量与价格分布。
+\cite{hyndman2021forecasting} 给出了一个实用的分层框架：基线、周期与事件。
+
+\begin{itemize}
+  \item \textbf{基线}：用近 4 周的同一星期几、同一时段的中位数作为基线。
+        中位数比均值稳健，能抗单日异常（大促、故障）。
+  \item \textbf{周期}：日内曲线（早晚双峰）、周内曲线（工作日与周末差异）分别建模。
+        多数广告业务的周内模式比日内模式更稳定，因此周内因子可以先验固定，
+        只用近期数据微调日内因子。
+  \item \textbf{事件}：大促、节假日、竞品活动、天气、突发新闻。
+        这部分无法靠时间序列自动学到，必须走事件日历加人工修正。
+        跨境业务还要处理\kw{多地区节假日叠加}——一个账户可能同时在投美国、欧洲、东南亚，
+        三地的购物节完全错开。
+\end{itemize}
+
+\term{机会成本}{Opportunity Cost} 在广告系统里有一个非常具体的含义：
+\kw{把这一次曝光给 A 广告，就失去了给 B 广告的机会}。
+因此在预算受限时，决策准则不是「A 的 eCPM 高不高」，
+而是「A 的 eCPM 是否高于这次曝光的影子价格 $\lambda_t$」。
+把 $\lambda_t$ 显式引入排序，等价于在排序阶段就完成了预算分配的近似——
+这也是工业界「排序与 pacing 一体化」趋势的来源：
+与其在排序之后按比例砍掉一部分候选，不如在打分时就用
+$\text{score} = \mathrm{eCPM} - \lambda_t \cdot \text{cost}$ 做联合优化。
+
+\subsection{合约广告与竞价广告的混合分配}
+
+真实媒体侧同时面对两类需求：
+
+\begin{itemize}
+  \item \textbf{合约广告（保量投放）}：广告主提前买断一部分流量，
+        媒体承诺保量交付（例如「每天 200 万次曝光，CPM 30 元」）。
+        收入确定，但媒体的灵活性下降、且可能以低于市场的价格卖掉了优质流量。
+  \item \textbf{竞价广告}：逐次拍卖，价格由市场决定。
+        收入上限高，但有量价波动风险。
+\end{itemize}
+
+媒体的分配问题因此是一个\kw{带保量约束的收益最大化}问题：
+
+\begin{equation}
+\max \; \underbrace{\sum_{j \in \mathcal{G}} p_j^{\text{fix}} x_j}_{\text{合约收入}}
+\;+\; \underbrace{\E\!\left[\sum_{i \in \mathcal{A}} \max_{b}\, b_i\, w_i(b_i)\right]}_{\text{竞价期望收入}}
+\qquad \text{s.t.} \; \sum_{j \in \mathcal{G}} x_j \le \text{可用流量} .
+\label{eq:guaranteed-mix}
+\end{equation}
+
+工程上的四步解法：
+
+(1) \textbf{预留}：先为合约广告预留流量。预留量要留有余量，
+因为流量预测有误差，而违约（欠量交付）的惩罚通常远高于多留一点的风险。
+
+(2) \textbf{机会成本定价}：为一个合约曝光机会定价时，用的不是固定 CPM，
+而是「这次曝光放到竞价市场里期望能卖多少」——即机会成本。
+这个价格随时间和用户质量波动，正是合约广告中「优质流量永远不够分」的数学原因。
+
+(3) \textbf{动态让路}：当竞价市场的价格瞬时高于合约单价时，
+让部分流量走竞价（在合约保量允许的范围内）。
+这一步的实现要点是\textbf{保量的进度必须与时间进度对齐}：
+如果合约进度超前，就可以多让路给竞价；如果落后，就收紧让路。
+
+(4) \textbf{违约对冲}：接近合约周期末仍欠量时，用竞价流量补量——
+即在竞价里以高于合约单价的价格买回流量交付给合约广告主，
+此时媒体在这部分上是亏的，所以对冲策略要提前 2--3 天启动，而不是等到最后一天。
+
+\subsection{广告与自然结果的混排}
+
+搜索与信息流的最终一屏是自然结果与广告的混合列表。这是产品体验与商业收入的直接冲突点，
+也是最容易做错的地方。三条准则：
+
+\textbf{准则一：比较的是「同一位置的总价值」，不是「谁的分高」。}
+自然结果的分数是相关性，广告的分数是 eCPM，两者量纲不同，直接比较没有意义。
+正确做法是把自然结果的长期价值折算成可比单位：
+$v_{\text{org}} = \text{长期留存收益} \times \Prob(\text{本次点击带来留存})$。
+这个折算系数在实践中是最难定的部分，通常用「广告位插入后自然结果的 CTR 折损」
+与「用户次日、次周留存的变化」在 A/B 中反向标定。
+
+\textbf{准则二：竞价深度必须有护栏。}
+把广告位的数量当作可以自由上调的变量，短期收入一定会涨、长期留存一定会掉。
+标准护栏：首屏广告位数量上限、广告占列表比例上限、
+以及一组体验指标（跳出率、滑动深度、次留、负反馈率）的硬约束。
+这些护栏必须写进排序系统的约束里，而不是写在产品文档里——
+写在文档里的护栏在季度收入压力下一定会被突破。
+
+\textbf{准则三：广告与自然结果并非纯粹竞争。}
+存在两类正外部性：广告带来的商业意图信号可以用于改进自然结果排序（要合规使用）；
+自然结果的高质量内容会提升用户对整体结果的信任，从而提高广告点击率。
+因此「广告插入对自然结果的伤害」在部分场景下可能被高估，
+但这个结论必须由 A/B 实验给出，而不是靠论证。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  kp/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=8mm,
+             text width=2.1cm, inner sep=3pt},
+  us/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=8mm,
+             text width=2.3cm, inner sep=3pt},
+  ob/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=8mm,
+             text width=2.4cm, inner sep=3pt},
+  ar/.style={-{Stealth}, thick, SlateGray}
+]
+% Row 1: single touch
+\node[kp] (t1) {点击 A};
+\node[us, right=10mm of t1] (t2) {点击 B};
+\node[ob, right=10mm of t2] (t3) {转化};
+\draw[ar] (t1) -- (t2);
+\draw[ar] (t2) -- (t3);
+\node[right=6mm of t3, text width=3.4cm] (r1)
+  {\textbf{单触点}：全部功劳给 last click B 或 first click A};
+% Row 2: rule based
+\node[kp, below=11mm of t1] (u1) {点击 A};
+\node[us, right=10mm of u1] (u2) {点击 B};
+\node[ob, right=10mm of u2] (u3) {点击 C};
+\node[ob, right=10mm of u3] (u4) {转化};
+\draw[ar] (u1) -- (u2);
+\draw[ar] (u2) -- (u3);
+\draw[ar] (u3) -- (u4);
+\node[right=6mm of u4, text width=3.4cm] (r2)
+  {\textbf{规则多触点}：线性、时间衰减、U 型按规则拆分};
+% Row 3: data driven
+\node[kp, below=11mm of u1] (v1) {路径集合};
+\node[us, right=10mm of v1] (v2) {去掉某渠道后的转化下降};
+\node[ob, right=10mm of v2] (v3) {平均边际贡献};
+\node[ob, right=10mm of v3] (v4) {Shapley 分摊};
+\draw[ar] (v1) -- (v2);
+\draw[ar] (v2) -- (v3);
+\draw[ar] (v3) -- (v4);
+\node[right=6mm of v4, text width=3.4cm] (r3)
+  {\textbf{数据驱动}：按所有合作次序的边际贡献取平均};
+% Row 4: incremental
+\node[kp, below=11mm of v1] (w1) {随机分流};
+\node[us, right=10mm of w1] (w2) {对照组看到公益广告};
+\node[ob, right=10mm of w2] (w3) {差值即增量};
+\node[ob, right=10mm of w3] (w4) {因果效应};
+\draw[ar] (w1) -- (w2);
+\draw[ar] (w2) -- (w3);
+\draw[ar] (w3) -- (w4);
+\node[right=6mm of w4, text width=3.4cm] (r4)
+  {\textbf{增量式}：唯一能回答「不投会怎样」的方法};
+\end{tikzpicture}
+\caption{归因模型对比示意：从单触点到增量实验，精度与实施成本同步递增}
+\label{fig:attribution-compare}
+\end{figure}
+
+\section{归因}
+
+\subsection{单触点与多触点规则模型}
+
+\term{归因}{Attribution} 要回答的问题只有一个：\kw{这次转化应该记在谁头上？}
+所有归因模型的差别，都在于「谁」的定义和「记多少」的规则。
+
+\begin{itemize}
+  \item \textbf{最后一次点击（last click）}：把百分之百的功劳给转化前最后一次点击。
+        它偏向\kw{收割型渠道}（品牌词搜索、再营销、直接流量），
+        因为这些渠道恰好出现在决策末端。它的流行不是因为正确，而是因为简单、
+        且与「点击后归因窗口」的平台默认口径一致。
+  \item \textbf{首次点击（first click）}：全部给第一次点击，偏向\kw{拉新型渠道}（内容、社媒种草）。
+  \item \textbf{线性（linear）}：路径上所有触点均分。偏向触点多的渠道，
+        并系统性稀释关键的单点贡献。
+  \item \textbf{时间衰减（time decay）}：按 $2^{-\Delta t / h}$ 之类的半衰期函数加权，
+        $h$ 是半衰期（常用 1--7 天）。它在线性与 last click 之间插值，
+        是工业界最常用的折中规则。
+  \item \textbf{位置法（U 型）}：首末触点各拿较大份额（常见各 40\%），
+        中间触点均分剩余 20\%。适合「认知加转化」两段式漏斗，
+        但对「中段才是真功臣」的场景（例如比价与评测内容）会严重低估。
+\end{itemize}
+
+规则模型的共同问题是\textbf{规则由人定、不能从数据里学}。
+它们可以作为过渡方案和基线，但不应作为长期决策依据。
+一个实用的诊断方法：把不同规则下的渠道份额做成一张对比表，
+如果两个渠道的排名在规则之间来回翻转，说明数据本身不足以区分它们的贡献，
+此时应该做增量实验而不是换规则。
+
+\subsection{数据驱动归因：Shapley 值与马尔可夫链}
+
+\term{Shapley 值}{Shapley Value} \cite{shapley1953value} 是合作博弈论里
+「公平分配总收益」的唯一解，满足对称性、有效性、虚拟参与者和可加性四条公理。
+搬到归因场景：把渠道集合 $N = \{1, \ldots, n\}$ 当作参与者，
+把一次转化的总收益当作 1，渠道 $i$ 的 Shapley 值定义为
+
+\begin{equation}
+\phi_i(v) \;=\; \sum_{S \subseteq N \setminus \{i\}}
+\frac{\abs{S}!\,\big(n - \abs{S} - 1\big)!}{n!}
+\Big[ v\big(S \cup \{i\}\big) - v(S) \Big],
+\label{eq:shapley}
+\end{equation}
+
+其中 $v(S)$ 是只保留渠道集合 $S$ 时的期望转化率（或转化数），
+$v(\varnothing) = 0$。中括号里那一项是渠道 $i$ 加入联盟 $S$ 的\kw{边际贡献}；
+前面的系数是「在所有 $n!$ 种加入顺序中，$S$ 恰好排在 $i$ 之前的顺序占比」。
+所以 \eqref{eq:shapley} 的直观含义是：
+
+\begin{equation}
+\phi_i \;=\; \E_{\pi \sim Unif(\mathcal{S}_n)}
+\Big[ v\big(S_i^{\pi} \cup \{i\}\big) - v\big(S_i^{\pi}\big) \Big],
+\label{eq:shapley-perm}
+\end{equation}
+
+即\textbf{随机均匀取一个渠道的加入顺序，渠道 $i$ 在这种顺序下的边际贡献的期望}。
+
+\term{计算复杂度}{Computational Complexity} 是 Shapley 值归因最大的现实障碍。
+精确计算 \eqref{eq:shapley} 需要对 $2^{n}$ 个子集各算一次 $v(S)$，
+单次求值又需要遍历全部转化路径。因此：
+
+\begin{itemize}
+  \item \textbf{朴素精确算法}：时间 $O(2^{n} \cdot m)$，$m$ 为路径数；
+        空间 $O(2^{n})$。$n = 20$ 时是百万级子集，$n = 25$ 时已经超出单机可算范围。
+        实践中 $n \le 12$ 左右才谈得上精确计算（$2^{12} = 4096$ 个子集）。
+  \item \textbf{蒙特卡洛置换采样}：从 \eqref{eq:shapley-perm} 出发，
+        随机采样 $M$ 个置换，复杂度降为 $O(M \cdot n)$，误差以 $O(1/\sqrt{M})$ 收敛。
+        $M$ 取几千到几万时，渠道份额的估计误差通常可以压到 1 个百分点以内。
+        这是工业界的默认解法。
+  \item \textbf{近似与结构化}：利用路径稀疏性（实际出现的子集远少于 $2^{n}$）做剪枝；
+        或在「渠道贡献近似可加」的假设下退化为线性回归系数
+        （即营销组合模型的回归解，见下节）。
+        代价是牺牲了 Shapley 的公理性质。
+\end{itemize}
+
+\begin{insight}[Shapley 值不是万能的：它有三个前提]
+\textbf{(1) 它分配的是相关性贡献，不是因果贡献。}
+$v(S)$ 是从历史路径数据里统计出来的转化率。
+如果渠道 A 的曝光与渠道 B 的点击强相关（用户看过 A 才更容易被 B 触达），
+Shapley 会把这份共有的功劳在 A、B 之间分摊，但分摊的依据是相关性结构，
+不是「如果没有 A，B 还能带来多少转化」。要回答后者，必须做增量实验。\\
+\textbf{(2) 它要求补集上的 $v(S)$ 可估。}
+历史数据里几乎不存在「只投 A、不投 B 也不投 C」的样本，
+所以 $v(S)$ 实际上要靠模型外推。外推的可靠性随 $S$ 远离观测数据而迅速下降。
+工程上的常见做法是用一个\kw{简化模型}（如独立假设下的逻辑回归）
+去拟合 $v(S)$，再用它算 Shapley 值——此时结果的可靠性等价于这个模型的外推能力。\\
+\textbf{(3) 路径定义与窗口的选择会改变结论。}
+一次转化的判定涉及去重规则（同一用户多次点击同一渠道算几次）、
+跨设备合并、以及归因窗口长度。这些口径变化的效应，
+在部分场景下比换归因模型本身还大。\\
+结论：Shapley 值比规则模型好，但它仍然是\kw{观测性}方法。
+正确的组合是——用 Shapley 值做日常的渠道份额监测（高频、细粒度、便宜），
+用增量实验定期标定整个多触点归因体系（低频、粗粒度、贵），
+用营销组合模型提供全局与长期的视角（最粗、最慢、最稳）。
+\end{insight}
+
+\textbf{马尔可夫链归因}是另一条数据驱动路线，视角完全不同。
+把用户路径看作马尔可夫链上的状态转移，渠道是状态，转化与流失是吸收态。
+用历史路径估计转移概率矩阵 $P$，渠道 $i$ 的移除效应定义为：
+
+\begin{equation}
+\mathrm{RE}(i) \;=\; 1 - \frac{\Prob(\text{转化} \given \text{移除了渠道 } i)}{\Prob(\text{转化})} .
+\label{eq:markov-removal}
+\end{equation}
+
+它的直觉比 Shapley 更直接——把这条渠道拿掉，整体转化率会掉多少，
+因此它天然带着一点因果的味道。但它的估计同样基于观测数据的转移结构，
+移除一条渠道之后用户的行为会怎么改变，马尔可夫链并不知道
+（用户可能改走另一个渠道，而不是直接放弃）。
+
+\textbf{生存模型}视角（见 \eqref{eq:survival}）则把归因变成时间问题：
+在给定的一套触点序列之后，转化发生的时间分布是什么？
+它天然支持「触点衰减」与「归因窗口该设多长」这两个问题，
+并且可以直接输出「如果窗口从 7 天改成 30 天，各渠道份额会怎么变」。
+在长决策周期的品类（大家电、B2B、教育）里，这个视角比前两者更贴近业务。
+
+\begin{table}[htbp]
+\centering
+\caption{归因方法对比：假设、数据需求、复杂度与失效模式}
+\label{tab:attribution-methods}
+\small
+\begin{tabularx}{\linewidth}{L{2.0cm} L{2.8cm} L{2.3cm} L{1.7cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{核心假设} & \tabhead{数据需求} & \tabhead{复杂度} & \tabhead{典型失效模式} \\
+\midrule
+Last / First click & 转化由一个触点决定 & 仅需点击与转化日志 & $O(m)$ & 系统性高估末端收割渠道，低估拉新渠道 \\
+\addlinespace
+线性 / 时间衰减 / U 型 & 功劳按预设规则拆分 & 同上，需完整路径 & $O(m n)$ & 规则不可验证；中段渠道被错误低估 \\
+\addlinespace
+Shapley 值 & 渠道贡献可由合作博弈描述 & 需覆盖多种渠道组合 & 精确 $O(2^{n} m)$，采样 $O(Mn)$ & 依赖外推估计 $v(S)$；相关不等于因果 \\
+\addlinespace
+马尔可夫链 & 用户行为可近似为马尔可夫过程 & 需完整路径与状态定义 & $O(m n^{2})$ 估矩阵 & 移除后的行为变化无法从观测数据推断 \\
+\addlinespace
+生存与风险率模型 & 转化时间服从可建模的分布 & 需带时间戳的转化 & $O(m)$ 拟合 & 分布假设过强；删失处理不当会引入偏差 \\
+\addlinespace
+增量实验（PSA / geo） & 随机化可消除混杂 & 需随机分流或地域对照 & 与投放规模同阶 & 外部效度受限；市场规模小时灵敏度不足 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{增量式归因：geo 实验、PSA 与转化提升测试}
+
+以上所有方法都在同一个陷阱里：\kw{它们都在观测数据上做分解，
+而观测数据里的「渠道到转化」关系混杂着用户自选择}。
+高转化意愿的用户会主动搜索品牌词、会点再营销广告，
+于是这些渠道看起来效果极好。这不是渠道的功劳，是用户的功劳。
+
+唯一能打破这层混杂的方法是\term{随机化实验}{Randomized Experiment}。广告场景下有三种做法：
+
+\begin{itemize}
+  \item \textbf{PSA（公益广告）对照}：把一部分用户随机分配到
+        「看到公益广告」的对照组。对照组与实验组在用户构成上一致，
+        差异只能来自广告本身。\cite{dudik2011ee,swaminathan2015counterfactual} 提供了
+        在无法完全随机时用倾向得分与双重稳健估计做校正的工具。
+        局限：PSA 组的用户仍然进入了广告位，会影响自然结果与竞价的生态；
+        且在小规模账户上样本量难以支撑灵敏度。
+  \item \textbf{Geo holdout（地域对照）}：按地域随机分组，
+        实验组投放、对照组停投，比较两组的转化差值。
+        优点是可以在账户级别直接执行（不需要平台配合）、干扰较小、可长期运行。
+        缺点是地域之间天然存在差异（经济水平、渠道结构、竞争强度），
+        必须做\kw{合成控制}{Synthetic Control} 或用匹配方法构造可比对照组；
+        且跨地域的溢出效应（用户跨区购物、物流覆盖变化）会污染结果。
+  \item \textbf{转化提升测试（Conversion Lift Test）}：平台侧提供的官方增量实验工具，
+        按用户 ID 随机分流，一组看到广告、一组看到自然内容。
+        这是目前公认最接近因果真值的做法，但需要平台支持，
+        并且要接受平台给出的实验设计与样本量约束。以平台官方最新文档为准。
+\end{itemize}
+
+\term{营销组合模型}{Marketing Mix Modeling, MMM} 与
+\term{多触点归因}{Multi-Touch Attribution, MTA} 的分工，可以概括成一句话：
+
+\begin{keypoint}[MMM 与 MTA 的分工]
+\textbf{MTA 是显微镜}：基于用户级路径，粒度细、更新快，
+但它只看得到\kw{可追踪}的触点，无法覆盖线下、口碑、品牌广告、
+以及跨设备不可合并的部分；它对隐私政策的变化极度敏感。\\
+\textbf{MMM 是卫星照片}：基于\kw{聚合}的周级或月级数据
+（各渠道投入对总销售额），用带广告存量（adstock，即滞后与衰减效应）
+和饱和曲线（边际收益递减）的回归模型估计各渠道的边际贡献。
+它天然包含线下与品牌投入，抗隐私政策变化，能看长期效应；
+但粒度粗、样本量小（一年只有 52 个周数据点）、
+对共线性极其敏感（各渠道预算常年同涨同跌时，回归系数不可识别）。\\
+\textbf{增量实验是标尺}：它的作用不是替代前两者，而是\kw{定期校准 MTA 与 MMM 的偏差}。
+标准做法是每年做 3--6 次 geo 实验或 PSA 实验，
+用实验测得的真实增量去校正 MTA 的渠道份额与 MMM 的响应曲线系数。\\
+三者的正确关系不是竞争，而是\textbf{不同频率与分辨率的互补}：
+MTA 回答「今天该把预算往哪个渠道挪」，MMM 回答「明年的预算结构应该怎样」，
+增量实验回答「我们的测量体系本身准不准」。
+\end{keypoint}
+
+\subsection{反作弊与流量质量}
+
+\term{无效流量}{Invalid Traffic, IVT} 按识别难度分成两类：
+
+\begin{itemize}
+  \item \textbf{GIVT（一般无效流量）}：不需要精细分析就能识别的无效流量。
+        典型来源包括爬虫与非人类流量、被识别的数据中心 IP、
+        以及已知的作弊基础设施黑名单。它通常由规则与名单拦截。
+  \item \textbf{SIVT（复杂无效流量）}：需要精细分析与持续监测才能识别的无效流量。
+        典型形态包括\kw{点击欺诈}（人为刷点击）、
+        \kw{点击农场}（低成本的真人批量点击）、
+        \kw{广告堆叠与隐藏}（把广告藏在不可见区域骗取曝光）、
+        \kw{激励性点击}（用奖励诱导用户点击）、
+        \kw{域名伪造与像素作弊}。
+\end{itemize}
+
+识别特征可以按信号来源分成四组，这四组的取证成本与误伤率差异很大：
+
+\begin{table}[htbp]
+\centering
+\caption{作弊识别的四类信号、典型阈值思路与误伤风险（阈值为示范量级）}
+\label{tab:ivt-signals}
+\small
+\begin{tabularx}{\linewidth}{L{1.8cm} L{4.5cm} L{2.6cm} Y}
+\toprule
+\tabhead{信号组} & \tabhead{典型特征} & \tabhead{判定思路} & \tabhead{误伤风险} \\
+\midrule
+设备与网络 & IP 段聚集、数据中心 ASN、设备指纹重复、
+UA 与屏幕尺寸、语言、时区不自洽 & 与已知 IDC 段和黑名单比对；设指纹冲突率阈值 &
+中低；企业内网与 VPN 用户可能被误判 \\
+\addlinespace
+行为时序 & 点击间隔方差过小（机械节律）、
+页面停留极短、滚动与鼠标事件缺失、点击位置集中在像素级同一点 &
+方差检验加序列模式匹配 & 中；脚本化辅助工具与无障碍工具用户易误伤 \\
+\addlinespace
+转化异常 & 转化率高到不合常理、转化集中在少数设备、
+注册后立即下单且无浏览行为、退款率异常高 &
+与同品类基线做对比，偏离超过若干倍即进入人工复核 & 低；转化是最贵的信号，作弊者难以伪造真实付费 \\
+\addlinespace
+流量结构与来源 & 单一版位贡献整个渠道的量、渠道流量曲线与全站曲线不相关、
+来源域名新注册、referrer 与落地页不一致 &
+相关性检验加域名年龄与备案信息核查 & 低；但需要媒体侧数据配合 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\cref{tab:ivt-signals} 有两条重要提醒。
+\textbf{第一，转化信号是最贵的信号。}造假者可以伪造曝光和点击，
+但要伪造真实付费转化的成本极高（涉及真实交易、退款、税务）。
+因此「转化率异常高加上退款率异常高加上复购为零」这组三连，
+是识别低质流量的高置信度证据。
+\textbf{第二，误伤率必须监控。}任何反作弊规则都会误伤一部分正常用户
+（隐私工具用户、企业网络、无障碍辅助工具用户）。
+上线规则时必须同时监控「判定为作弊的流量中的申诉通过率」，
+申诉通过率突然升高说明阈值过紧。
+
+\textbf{MRC 可见性标准}是展示广告计量的基础口径（以 MRC 官方最新文档为准）：
+一次展示广告的曝光要计为\kw{可见展示}，须满足
+\kw{像素要求}（至少 50\% 的广告像素面积进入浏览器视口）
+与\kw{时间要求}（展示类广告连续可见至少 1 秒，视频类广告连续可见至少 2 秒）。
+视频广告的可见曝光还有连续 2 秒的具体执行口径差异
+（有的按播放时长计、有的按可见时长计），这些口径差异是跨平台对账对不齐的主要原因之一。
+
+\begin{pitfall}[「账对不齐」的四个真实原因，以及为什么它们不是 bug]
+\textbf{现象}：媒体后台、DSP 后台、第三方监测、广告主内部数据仓库的
+曝光、点击、转化数字互相对不上，差异常在 5\% 到 20\%，大促期间更高。
+
+\textbf{四个原因，都不是技术缺陷}：\\
+(1) \kw{计数单位不同}——曝光去重规则不同（按请求去重还是按用户去重）、
+点击去重窗口不同（30 分钟还是 24 小时）；\\
+(2) \kw{时间归属不同}——按点击时间归集还是按转化时间归集，
+跨日边界会让同一天的报表出现两个版本；\\
+(3) \kw{过滤规则不同}——各方各自的 IVT 过滤名单与过滤时点不同，
+媒体侧过滤过的流量可能在 DSP 侧仍然计数；\\
+(4) \kw{归因窗口不同}——7 天点击加 1 天浏览与 30 天点击的差值
+在高延迟品类里可以达到两位数百分比。
+
+\textbf{正确做法}：不要试图让四个数字相等，而要\kw{定义一套对账口径}并逐层解释差值——
+媒体原始计数、过滤 IVT 后、有效可见曝光、平台归因转化、内部去重转化、财务确认收入。
+每一层的差值都应该有一个可解释的期望区间；超出区间的当日就要人工介入。
+把对账差值的分布当成一个监控指标，比追求单一数字对得齐更有价值。
+\end{pitfall}
+
+\subsection{创意与商品选择}
+
+\term{动态创意优化}{Dynamic Creative Optimization, DCO} 解决的组合爆炸问题很直观：
+一个计划有 5 个标题乘 4 张主图乘 3 个行动号召，共 60 种组合。
+人无法逐一测试，机器可以。但 DCO 有三个真实的坑：
+
+\begin{itemize}
+  \item \textbf{探索预算的分配}。60 个组合各给多少曝光？
+        这是上下文赌博机（contextual bandit）问题：
+        用 Thompson 采样或 UCB 在「利用当前最优」与「探索未知组合」之间平衡。
+        见 \cref{ch:ranking} 关于探索与利用的讨论。
+  \item \textbf{组合爆炸下的样本稀释}。如果组合数继续增长到几百上千，
+        每个组合分到的曝光量不足以在合理时间内做出统计判断。
+        解法是\kw{分层组合}——先固定两个维度，只优化一个维度，再逐步放开；
+        或对素材元素（而不是完整组合）建模，用元素级效应组合预测未见组合的表现。
+  \item \textbf{归因困难}。一个转化可能来自用户在多次曝光中看到的不同组合，
+        按「最后一次曝光的组合」归因会系统性偏向出现在决策末端的那一组。
+        这与多触点归因是同一个问题在不同层级上的复现。
+\end{itemize}
+
+\textbf{素材自动生成}近年从模板填充走向生成模型：
+用图像生成模型产出主图变体、用语言模型批量产出标题与卖点文案。
+它的工程价值在于把素材产能从「设计师每天 5 张」提升到「每天数百张变体」，
+从而让 DCO 有足够的探索空间。但必须注意三条边界：
+\kw{品牌一致性}（自动生成的素材可能偏离品牌调性）、
+\kw{合规性}（不能出现虚假承诺、不能使用未授权的肖像或商标、
+跨境场景下还要满足各地区的广告法与数据合规要求）、
+\kw{平台政策}（很多平台对自动化生成的素材有审核与标注要求，以官方最新文档为准）。
+
+\textbf{创意疲劳监测}需要一个可执行的度量，而不是「感觉点击率在掉」。
+标准做法是固定受众与版位，追踪同一素材的 CTR 随累积曝光量的变化，
+取 CTR 下降到峰值 80\% 时的累积曝光量作为\kw{疲劳半衰点}。
+疲劳半衰点通常随受众规模与频次上限变化，因此在报表上应该按受众规模分档呈现。
+检测到疲劳后，标准动作序列是：降低该素材的频次上限、投放同主题的新素材变体、
+把预算转移到表现仍在上升的素材上——而不是直接关停整个计划
+（关停会让系统丢掉已经积累的模型先验）。
+
+\textbf{商品选择与投放的联动}是电商场景特有的一环，它的核心逻辑是
+「不是所有的商品都值得买流量」。一个实用的筛选框架是四因子相乘：
+
+\begin{equation}
+\text{投放优先级} \;\propto\; \underbrace{\text{毛利率}}_{\text{能不能赚}} \times
+\underbrace{\text{转化率}}_{\text{容不容易卖}} \times
+\underbrace{\text{库存深度}}_{\text{敢不敢推}} \times
+\underbrace{\text{退货率倒数}}_{\text{卖了会不会亏回来}} .
+\label{eq:sku-priority}
+\end{equation}
+
+四个因子缺一不可：高毛利但转化差的商品适合做长周期的内容种草；
+转化好但库存浅的商品不能放量（放量后断货会直接损伤账户权重）；
+转化与毛利都好但退货率高的商品（例如尺码争议大的服装类目），
+实际 \metric{ROAS} 可能远低于账面值——\kw{退货必须在报表口径里被扣掉}，
+否则投放决策会系统性地偏向「看起来卖得好、实际亏得多」的商品。
+选品与供应链的完整讨论见 \cref{ch:supply}。
+
+\begin{lstlisting}[style=growth, language=Python, caption={Shapley 值归因：精确枚举与蒙特卡洛置换采样两种实现}]
+import itertools, random, math
+from collections import defaultdict
+
+def channel_conversion_rates(paths):
+    """paths: list of (frozenset_of_channels, converted_flag). -> dict for v(S)."""
+    obs = defaultdict(lambda: [0, 0])          # subset -> [conversions, total]
+    for chans, conv in paths:
+        for r in range(len(chans) + 1):
+            for sub in itertools.combinations(sorted(chans), r):
+                key = frozenset(sub)
+                obs[key][0] += conv
+                obs[key][1] += 1
+    return {k: (c / t if t else 0.0) for k, (c, t) in obs.items()}
+
+def shapley_exact(channels, v):
+    """Exact Shapley values: O(2^n * n) evaluations of v."""
+    n = len(channels)
+    phi = {c: 0.0 for c in channels}
+    for c in channels:
+        others = [x for x in channels if x != c]
+        for r in range(len(others) + 1):
+            for sub in itertools.combinations(others, r):
+                s = frozenset(sub)
+                w = (math.factorial(r) * math.factorial(n - r - 1)) / math.factorial(n)
+                phi[c] += w * (v.get(s | {c}, 0.0) - v.get(s, 0.0))
+    return phi
+
+def shapley_sampling(channels, v, iterations=20000, seed=7):
+    """Monte Carlo permutation sampling: O(iterations * n)."""
+    rng = random.Random(seed)
+    acc = {c: 0.0 for c in channels}
+    for _ in range(iterations):
+        order = channels[:]
+        rng.shuffle(order)
+        s = frozenset()
+        for c in order:
+            acc[c] += v.get(s | {c}, 0.0) - v.get(s, 0.0)
+            s = s | {c}
+    return {c: acc[c] / iterations for c in channels}
+
+# A tiny synthetic path log: 3 channels, some paths convert.
+paths = [
+    ({"search", "social"}, 1), ({"search"}, 0), ({"social", "email"}, 1),
+    ({"email"}, 0), ({"search", "email"}, 1), ({"social"}, 0),
+    ({"search", "social", "email"}, 1), ({"search", "social"}, 1),
+]
+v = channel_conversion_rates(paths)
+chans = ["search", "social", "email"]
+print("exact     :", {k: round(x, 4) for k, x in shapley_exact(chans, v).items()})
+print("sampled   :", {k: round(x, 4) for k, x in shapley_sampling(chans, v).items()})
+print("subset evals for n=20:", 2 ** 20 * 20, "vs sampling 20000*20")
+\end{lstlisting}
+
+这段代码刻意把两种实现的复杂度并排打印出来，因为\kw{「$2^{n}$ 到底有多大」是
+Shapley 值归因最需要建立的数量直觉}。$n = 10$ 时是 1024 个子集、可以精确算；
+$n = 15$ 时是 32768 个、仍可算但每次都要遍历全量路径；
+$n = 20$ 时是 104 万个子集乘 20 个渠道的枚举，
+在渠道数继续增长、路径数据量达到亿级之后，精确计算在单机上就不可行了。
+蒙特卡洛采样把这一项换成了 $M \times n$，可靠性由 $\sqrt{M}$ 保证——
+这是从理论上正确走向工程上可用的标准路径。
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 广告算法的链条是「预估准、出价巧、花钱稳、归因清」。
+        与推荐排序最大的差别在于\kw{预估值直接参与定价}，
+        因此校准（ECE、分桶偏差）与排序能力（AUC/GAUC）同等重要。
+  \item 广告特征分四组：用户、广告、上下文、交叉。
+        交叉特征必须走因子分解或显式交叉层以控制基数；
+        版位信息与素材级统计是工程上最容易忽略、后果最直接的两块。
+  \item CVR 的延迟反馈是本章最贵的一个坑。
+        五种处理范式（截断、回填、分布加权、延迟反馈建模、生存分析）各有偏差方向与代价；
+        工程上是「长窗口训练加短窗口近似加延迟校正系数」的组合，
+        并用标签可用率作为一级监控指标。
+  \item CTCVR 等于 CTR 乘 CVR 是广告建模的中心等式。
+        ESMM 通过在\kw{曝光全空间}上计算损失，同时缓解样本选择偏差与数据稀疏；
+        它的三个隐含假设（乘法结构、共享表示充分、延迟可忽略）分别对应三条改进主线。
+  \item 出价的演进是「谁来决定出价」的演进：CPM 与 CPC（人定）、
+        oCPC 与 oCPA（系统按转化目标定）、智能出价（在预算与 ROI 双约束下定）。
+  \item PID 与预算平滑是同一个问题的两个名字。
+        比例项管响应、积分项管稳态误差（必须抗饱和）、
+        微分项在噪声环境下通常应当关闭；控制周期必须大于反馈时滞。
+  \item 最优出价 $b^{*} = v \cdot \mathrm{pCVR} / \kappa$ 来自期望利润的一阶条件，
+        折扣因子 $\kappa = 1 + 1/\varepsilon$ 补偿的是竞争弹性、预算影子价格与计费机制。
+        多约束下，预算乘子做等比缩放、ROI 乘子做选择性倾斜，由对偶上升在线更新。
+  \item RL 出价的价值在时序策略与非平稳模式，天花板在模拟器保真度；
+        实践定位应是\kw{参数调节层}而非决策层，
+        必须配安全包络、双重稳健离线评估与长期 A/B 对照。
+  \item 归因模型的精度与成本同步递增：单触点、规则多触点、数据驱动、增量实验。
+        Shapley 值精确计算是 $O(2^{n} m)$，
+        $n \le 12$ 才谈得上精确，工业界默认用蒙特卡洛置换采样（$O(Mn)$）。
+        \textbf{所有基于观测数据的归因都分不清「渠道的功劳」与「用户的功劳」}，
+        只有随机化实验能给出因果贡献。
+  \item MTA 是显微镜、MMM 是卫星照片、增量实验是标尺。
+        正确关系是不同频率与分辨率的互补，而不是互相替代。
+  \item 反作弊分 GIVT 与 SIVT；四类信号里转化异常是最贵也最难伪造的一类。
+        MRC 可见性的判定是「50\% 像素加展示类 1 秒、视频类 2 秒」。
+        对账对不齐是口径差异的必然结果，正确做法是分层解释差值而非追求单一数字相等。
+  \item DCO 的核心是探索预算的分配；创意疲劳要用「CTR 降至峰值 80\% 时的累积曝光量」
+        来量化；商品投放优先级是毛利率、转化率、库存深度、退货率的联合判断，
+        其中\kw{退货率必须进入报表口径}。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item ESMM 为什么能缓解样本选择偏差？它用「曝光全空间」计算 loss 的关键在哪一步？
+        它的乘法结构假设在什么场景下会失效，你会怎么检测？
+  \item CVR 存在严重延迟反馈时，你如何设计训练样本与标签体系？
+        请说清短窗口截断的偏差方向，以及为什么它常常先表现为「花不出钱」。
+  \item pCTR 的 AUC 没变但 CPA 上升了 20\%，你会按什么顺序排查？
+        请列出你需要的指标与至少三种可能的原因。
+  \item 推导最优出价 $b^{*} = v \cdot \mathrm{pCVR}/\kappa$，
+        并解释 $\kappa$ 的取值受哪些因素影响。第一价格化之后 $\kappa$ 应该变大还是变小？
+  \item 一个账户同时有日预算约束和 ROAS 下界约束，你怎么设计出价算法？
+        两个拉格朗日乘子分别起什么作用，如何在线更新，如何避免与 pacing 控制器互相打架？
+  \item PID pacing 的三个增益分别控制什么？为什么微分项在实践中通常设为 0？
+        积分饱和会造成什么现象，怎么处理？
+  \item 请写出 Shapley 值归因的公式，说明它的计算复杂度，并解释为什么工业界普遍用
+        蒙特卡洛置换采样而不是精确枚举。采样误差如何随迭代次数变化？
+  \item 老板问「这个渠道到底带来了多少增量」，你手上只有多触点归因报表。
+        你会怎么回答？需要补做什么实验，实验设计的三个关键点是什么？
+  \item 媒体后台的曝光数比你们内部数仓多 15\%，你会怎么定位差异？
+        请给出至少四个可能的口径差异来源。
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+到这里，广告的「内部机制」已经讲完：模型怎么估、价怎么出、预算怎么花、账怎么算。
+但所有这些算法的效果，最终都要落在具体的媒体平台上——
+平台的出价产品形态、竞价环境、政策约束与报表口径，会直接决定同一套算法能发挥出多少。
+接下来我们离开机制的内部，进入第 5 部分「流量获取：SEO、GEO 与付费投放」，
+先看自然流量的地基如何搭建（\cref{ch:seo}），
+再回到付费侧逐平台拆解 Google、Meta 与 TikTok 的投流实操
+（\cref{ch:google}、\cref{ch:meta}），并把本章的出价与归因方法落到真实账户上。

@@ -1,0 +1,988 @@
+\chapter{搜索引擎原理与实现}
+\label{ch:search}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 用户输入三个词，系统为什么能在几十毫秒内从上亿文档里挑出最相关的十条？倒排索引到底长什么样？
+  \item 为什么 BM25 在深度学习时代还没有被淘汰？它和语言模型、和 LTR 是什么关系？
+  \item 查询理解（分词、纠错、改写、意图分类、查询扩展）各自解决什么损失，代价是什么？
+  \item 电商搜索和网页搜索差在哪里？为什么「同款比价」「类目预测」「zero-result」是电商的命门？
+  \item 只看 \metric{CTR} 优化搜索会发生什么？离线 nDCG 涨了，线上为什么不涨？
+\end{enumerate}
+\end{insight}
+
+搜索引擎是信息检索（Information Retrieval, IR）最成熟的工程形态。推荐系统面对的是「模糊、难表达」的意图，
+搜索引擎面对的则是「明确、已被用户用文字表达出来」的意图。这个差别带来两个后果：一是搜索有了一个天然的监督信号
+（query 与文档的词面重叠），二是用户对搜索的容错率极低——他在推荐流里划过去三条不感兴趣的内容不会有情绪，
+但他在搜索框里翻了二十条没找到想要的东西，就会直接离开，而且很可能不再回来。
+
+本章的组织方式是「自底向上」：先把索引这个物理基础讲透，再讲打分模型的数学，然后是查询理解这一层「把用户的话翻译成机器能匹配的东西」，
+接着是多级排序架构与电商特化，最后落到评价体系。整章的每一步我们都会反复追问同一个问题：
+\textbf{这一步是在「理解意图」还是在「匹配供给」？为此付出了什么代价？}
+
+\section{整体架构与离线在线链路}
+
+\subsection{搜索系统的六段式流水线}
+
+工业级搜索引擎可以粗略拆成六段：\kw{爬取/接入} $\to$ \kw{解析} $\to$ \kw{索引} $\to$ \kw{检索} $\to$ \kw{排序} $\to$ \kw{展现}。
+前两段加索引是\term{离线链路}{Offline Pipeline}，后面三段是\term{在线链路}{Online Pipeline}，
+两条链路通过「索引快照 + 特征仓库」这个接口耦合。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  box/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7.5mm,
+              inner sep=3pt, text width=1.75cm, align=center, font=\sffamily\scriptsize},
+  obox/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7.5mm,
+              inner sep=3pt, text width=1.75cm, align=center, font=\sffamily\scriptsize},
+  hdr/.style={font=\sffamily\scriptsize\bfseries\color{NavyDeep}}
+]
+\node[hdr] (h1) at (-2.6,0.95) {离线链路};
+\node[obox] (a) at (-4.6,0.2) {采集/爬取};
+\node[obox] (b) at (-2.6,0.2) {解析\\清洗去重};
+\node[obox] (c) at (-0.6,0.2) {构建索引\\正排+倒排};
+\node[hdr] (h2) at (3.3,0.95) {在线链路};
+\node[box] (d) at (1.4,0.2) {查询理解};
+\node[box] (e) at (3.4,0.2) {多路召回};
+\node[box] (f) at (5.4,0.2) {粗排/精排};
+\node[box] (g) at (7.4,0.2) {重排展现};
+\draw[-{Stealth}, thick, TealDeep] (a) -- (b);
+\draw[-{Stealth}, thick, TealDeep] (b) -- (c);
+\draw[-{Stealth}, thick, NavyMid] (d) -- (e);
+\draw[-{Stealth}, thick, NavyMid] (e) -- (f);
+\draw[-{Stealth}, thick, NavyMid] (f) -- (g);
+\draw[-{Stealth}, very thick, CrimsonDeep, dashed] (c.south) to[out=-90,in=-90] node[midway, below=1pt, font=\sffamily\tiny\color{CrimsonDeep}] {索引快照 / 特征} (e.south);
+\node[draw=RuleGray, fill=white, rounded corners=2pt, inner sep=3pt, font=\sffamily\tiny, text width=4.4cm, align=left] at (2.4,-1.9)
+  {SLA 预算示例：查询理解 5 ms，召回 20 ms，粗排 15 ms，精排 40 ms，重排 10 ms，网络与渲染 60 ms};
+\end{tikzpicture}
+\caption{搜索引擎的离线链路与在线链路，以及典型的延迟预算分配（示范量级）}
+\label{fig:search-arch}
+\end{figure}
+
+\subsection{离线链路的四个隐形成本}
+
+初学者往往以为离线链路就是「跑个 Spark 写进 ES」。真实的成本藏在四个地方：
+
+\begin{itemize}
+  \item \textbf{去重与规范化}。同一商品被多个卖家重复上架、同一网页有多个 URL 变体（参数顺序、大小写、跟踪参数）。
+        不做规范化，倒排索引里会有大量重复文档，直接稀释相关性并浪费存储。电商场景下这一步通常要结合
+        标题指纹（SimHash/MinHash）与图片指纹（感知哈希）双通道。
+  \item \textbf{字段与权重的设计}。文档不是一个扁平的词袋：标题、类目、品牌、属性、详情、评论、销量，
+        每一段的匹配应该有不同的权重与不同的分析器。字段设计一旦上线，改动的迁移成本极高，属于典型的一次性架构决策。
+  \item \textbf{索引构建的时间窗口}。全量重建索引期间，线上还在服务旧索引；这要求索引可切换（见 \cref{sec:search-dynamic}）。
+  \item \textbf{标注与评估数据}。相关性标注是搜索团队最贵也最容易欠债的资产。没有标注集，后面所有的离线评估都无从谈起。
+\end{itemize}
+
+\subsection{在线链路的延迟预算}
+
+搜索的在线链路是一个\kw{级联}（cascade）结构：越靠后模型越复杂、候选越少。
+延迟预算的分配原则是「按候选量摊薄算力」。假设召回 2000 条、粗排 300 条、精排 50 条、展现 10 条，
+那么精排只要能在 40 ms 内打分 50 条即可，单条打分预算是 0.8 ms——这个量级决定了精排模型不能是大型交叉编码器逐条前向。
+
+\begin{keypoint}[级联的本质是「漏斗 + 早停」]
+\textbf{级联排序不是「叠加多个模型」，而是用一系列逐渐昂贵的筛选器把候选量压到算力允许的规模。}
+每一级的职责不同：召回负责\emph{不遗漏}（追求 Recall@K），粗排负责\emph{廉价近似}（追求与精排的排序相关性），
+精排负责\emph{精确效用}（追求 AUC/GAUC），重排负责\emph{全局约束}（多样性、打散、坑位、业务规则）。
+把这几件事混在一个模型里做，通常两头不讨好。
+\end{keypoint}
+
+\section{索引：搜索引擎的物理基础}
+\label{sec:search-index}
+
+\subsection{正排索引与倒排索引}
+
+\term{正排索引}{Forward Index} 是「文档 $\to$ 它包含什么」：给定 doc\_id，快速取出标题、类目、属性、词列表。
+\term{倒排索引}{Inverted Index} 是它的逆映射：「词项 $\to$ 包含它的文档列表」。后者才是检索的加速器。
+
+倒排索引由两部分组成：\kw{词典}（Dictionary / Term Dictionary，也叫 term index）与\kw{倒排列表}（Posting List）。
+词典本身通常是 FST（有限状态转换器）或前缀树，做前缀查找与模糊查找；posting list 是有序的 doc\_id 序列，
+加上词频、位置、字段标记等载荷。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=3mm,
+  term/.style={draw=VioletDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=6.5mm,
+               inner sep=4pt, text width=1.5cm, align=center, font=\sffamily\scriptsize},
+  pl/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=6.5mm,
+             inner sep=3pt, text width=6.4cm, align=left, font=\sffamily\scriptsize}
+]
+\node[term] (t1) at (0,0) {苹果 dict ptr};
+\node[pl, right=4mm of t1] (p1) {\code{(doc 12, tf 3, pos 1,5,9)} $\to$ \code{(doc 45, tf 1, pos 2)} $\to$ \code{(doc 78, ...)}};
+\node[term] (t2) at (0,-0.85) {手机 dict ptr};
+\node[pl, right=4mm of t2] (p2) {\code{(doc 12, tf 2, pos 2,6)} $\to$ \code{(doc 33, tf 5, pos 1,3,7,8,11)} $\to$ \code{(doc 45, ...)}};
+\node[term] (t3) at (0,-1.7) {价格 dict ptr};
+\node[pl, right=4mm of t3] (p3) {\code{(doc 33, tf 1, pos 2)} $\to$ \code{(doc 45, tf 4, pos 3,4,5,8)}};
+\node[draw=RuleGray, fill=white, rounded corners=2pt, inner sep=3pt, font=\sffamily\tiny, text width=9.6cm, align=left] at (4.2,-2.75)
+  {doc\_id 用差值（delta）存储；查询「苹果 手机 价格」= 三条 posting list 求交，再按 BM25 打分};
+\draw[-{Stealth}, SlateGray] (t1) -- (p1);
+\draw[-{Stealth}, SlateGray] (t2) -- (p2);
+\draw[-{Stealth}, SlateGray] (t3) -- (p3);
+\end{tikzpicture}
+\caption{倒排索引：词典项指向有序的 posting list，posting 内含文档 ID、词频与位置}
+\label{fig:search-inverted}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{正排索引与倒排索引的分工}
+\label{tab:forward-inverted}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{3.1cm} L{3.3cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{正排索引} & \tabhead{倒排索引} & \tabhead{典型用途} \\
+\midrule
+主键 & doc\_id & term & 两者用 doc\_id / term\_id 互相对齐 \\
+查询模式 & 按文档取字段 & 按词项取文档集合 & 召回用倒排，特征回填与过滤用正排 \\
+存储量级 & 与文档数成正比 & 与「文档数 $\times$ 平均词数」成正比 & 倒排通常比正排大，但压缩后可控 \\
+压缩手段 & 列存、字典编码 & 差值编码 + VByte / PForDelta & 倒排的压缩收益远大于正排 \\
+更新代价 & 单文档可原地更新 & 追加容易、删除需要墓碑标记 & 倒排几乎不做原地更新 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Posting list 压缩：VByte 与 PForDelta}
+
+posting list 里 doc\_id 是严格递增的，所以存差值（delta）比存原始 ID 划算得多。
+若文档总数为 $N$，平均每条 posting 的差值期望约为 $N / df$（$df$ 为文档频率），
+高频词的差值小、更容易压得紧。差值还需要一个变长整数编码：
+
+\begin{equation}
+\text{VByte}(x) = \text{把 } x \text{ 拆成 7 位一组，低位组在前，每组最高位置 1 表示「后面还有字节」，最后一组最高位置 0} .
+\label{eq:vbyte}
+\end{equation}
+
+一个字节的有效载荷是 7 位，因此 $x$ 需要 $\lceil \log_2 (x+1) / 7 \rceil$ 个字节。
+当 $x$ 大多在 $[0,127]$ 时，一条 posting 只占 1 字节，压缩率极高；但遇到稀疏长尾词，差值可能很大，
+VByte 会退化到 4--5 字节。\term{PForDelta}{Patched Frame-of-Reference Delta} 的思路是「先批量定一个基准位宽，再对少数异常值单独打补丁」：
+把 128 个差值分成一块，取能覆盖 90\% 值的最小位宽 $b$，块内绝大多数值用 $b$ 位存，
+超出范围的异常值放进 exception 列表单独用 VByte 存。这样既保证了解压时可以定长批量解码（对 SIMD 友好），
+又避免了被极端值拖累整体位宽。
+
+\begin{table}[htbp]
+\centering
+\caption{常见 posting list 压缩方案的取舍}
+\label{tab:compression}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{1.9cm} L{3.2cm} Y}
+\toprule
+\tabhead{方案} & \tabhead{压缩率} & \tabhead{解码速度特征} & \tabhead{适用场景} \\
+\midrule
+差值 + VByte & 中等 & 逐字节变长解码，分支难预测 & 通用默认，实现简单 \\
+差值 + PForDelta & 较高 & 定长块批解码，SIMD 友好 & 高频词、需要低延迟的召回 \\
+差值 + Simple8b & 较高 & 按选择器查表，块内定长 & 中等预算下的折中方案 \\
+Roaring Bitmap & 高（稀疏时） & 位运算求交极快 & 过滤条件、标签集合的求交 \\
+原始 doc\_id & 低 & 直接读取 & 只在极短 posting list 上做 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+压缩率与解码速度是一对直接冲突的目标：压得越紧，解码时需要的分支与位操作越多。
+实践中搜索系统的做法是\emph{分层}：对文档频率超过阈值的高频词用 PForDelta 甚至位图，
+对长尾低频词用 VByte 甚至原始整数——因为低频词的 posting 太短，压缩带来的收益抵不过解压的固定开销。
+
+\subsection{跳表、布尔求交与短语查询}
+
+多条 posting list 求交的标准做法是「\kw{跳跃式求交}」（galloping / leapfrog intersection）：
+两个指针同步推进，遇到不相等时在较长的那条上做指数探测跳转。为了进一步加速，会每隔 $B$ 条 posting 建一个\term{跳表}{Skip List}指针，
+指向跨度为 $B$ 的后续 posting。$B$ 的取值是一个经典取舍：
+
+\begin{equation}
+\text{查询代价} \approx \underbrace{\frac{L}{B}}_{\text{跳表比较次数}} + \underbrace{B}_{\text{跳转后线性扫描}} ,
+\qquad B^{*} = \sqrt{L} ,
+\label{eq:skipcost}
+\end{equation}
+
+其中 $L$ 是 posting list 长度。$B$ 太小则跳表自身占内存，太大则落地扫描变慢，经验上取 $\sqrt{L}$ 附近，
+工业实现常直接固定为 32 或 64 以换取实现简单与缓存友好。
+
+位置索引让短语查询成为可能。「苹果 手机」作为一个短语，不能只在文档里分别出现，还要求位置相邻。
+于是 posting 中额外存储词的位置列表，匹配时做位置对齐判断：
+
+\begin{equation}
+\exists\, p \in \mathrm{pos}(t_1, d),\; q \in \mathrm{pos}(t_2, d) \quad \text{使得} \quad q - p = 1 .
+\label{eq:phrase}
+\end{equation}
+
+位置信息的存储代价不小：通常会让倒排索引体积增加 30\% 到 50\%（示范量级，取决于词数与位置粒度）。
+因此很多系统只在标题等关键字段存位置，正文只存词频。
+
+\begin{pitfall}[「加了位置索引就一定更快」]
+\textbf{现象}：为了支持短语查询，团队把位置信息加到所有字段，索引体积翻倍，年轻化机器内存不够，召回延迟反而上升。\\
+\textbf{根因}：位置索引解决的是「能不能做短语匹配」，不是「能不能更快地做短语匹配」。
+它增加了 I/O 与内存压力，只有当短语查询占比高、且短语约束能显著裁掉候选时，净收益才为正。\\
+\textbf{排查方法}：按 query 类型分层统计延迟与收益（短语型 / 词袋型 / 导航型），
+对短语型做 A/B：开位置索引与不开，比较召回候选量与最终相关性指标。
+若短语约束裁掉的候选不到 10\%，收益通常不足以覆盖内存成本。
+\end{pitfall}
+
+\subsection{动态索引、分片与副本}
+\label{sec:search-dynamic}
+
+索引不能每次上新都全量重建。工业界的标准做法是\kw{分层索引}：
+(1) 一个大的\emph{主索引}，不可变，服务绝大多数查询；
+(2) 一个或多个小的\emph{增量索引}，容纳近期新增与更新的文档，通常是内存索引；
+(3) 一个\emph{删除表}（tombstone），标记被删除的 doc\_id，查询时过滤。
+
+查询时并行查主索引与增量索引，再合并结果。当增量索引积累到一定规模（例如达到主索引的 10\%--20\%），
+后台做一次合并（merge），把增量索引折进主索引。合并的代价是 I/O 密集型的，所以通常安排在流量低谷，
+并且合并期间旧索引持续服务，合并完成后原子切换指针。
+
+分片（sharding）解决容量与吞吐问题，副本（replica）解决可用性与读扩展问题。
+
+\begin{table}[htbp]
+\centering
+\caption{分片策略与它们的代价}
+\label{tab:sharding}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{2.6cm} L{3.0cm} Y}
+\toprule
+\tabhead{策略} & \tabhead{切分依据} & \tabhead{优点} & \tabhead{代价 / 风险} \\
+\midrule
+按文档切分 & doc\_id 哈希 & 实现简单，负载均衡 & 每个分片都要算全量 top-K 再归并，深翻页代价高 \\
+按词项切分 & term 哈希 & 单次词项查询只打一个分片 & 多词查询要跨分片归并，负载随 query 变化剧烈 \\
+按时间切分 & 时间窗口 & 冷热分离，旧索引可只读压缩 & 时间偏斜导致热点；跨期查询要合并 \\
+按业务维度切分 & 站点 / 类目 / 语言 & 隔离性好，可独立扩缩容 & 跨维度查询需要联邦式归并 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+分片的经典难题是「深翻页」与「top-K 归并」。当用户翻到第 100 页，每个分片都必须返回它本地的第 1000 条，
+协调节点才能确定全局第 1000 条。因此几乎所有电商搜索都会在第 3--5 页之后停止提供精确排序，
+改为「缩小条件」或「放宽条件重查」。
+
+\begin{toolbox}[搭建增量索引的检查清单]
+\begin{enumerate}
+  \item \textbf{主键与去重键}：doc\_id 必须全局唯一且稳定；更新走「新增 + 删除标记」而不是原地改写。
+  \item \textbf{删除可见性}：删除表必须参与归并过滤，且要保证「删除后立刻不可见」的 SLA（通常要求秒级）。
+  \item \textbf{合并触发条件}：按增量索引大小（如达到主索引 15\%）与时间（如每 30 分钟）双条件触发，避免小文件过多。
+  \item \textbf{切换原子性}：索引版本号 + 原子指针切换，切换失败要能一键回滚到上一版本。
+  \item \textbf{回灌能力}：任何一次索引变更都必须能从数仓原始数据重放出来，否则线上事故无法复现。
+  \item \textbf{体积监控}：按字段统计索引体积与位置信息占比，设告警阈值。
+  \item \textbf{降级策略}：主索引不可用时，退化为「只查增量索引 + 缓存热词结果」。
+\end{enumerate}
+\end{toolbox}
+
+\section{检索模型：从布尔到 BM25 到语言模型}
+\label{sec:search-model}
+
+\subsection{布尔模型与它的天花板}
+
+布尔模型把文档表示为词项集合，查询是词项上的布尔表达式，命中的文档集合就是结果。
+它的优点是精确、可解释、求交可以极快；缺点是\kw{没有排序}——一个包含全部查询词的文档
+和一个只包含部分查询词的文档，在结果里没有区别。更严重的是布尔模型对\emph{词频、文档长度、词项重要性}一律无视，
+而这三者恰恰是相关性的主要来源。
+
+\subsection{向量空间模型与余弦相似度}
+
+\term{向量空间模型}{Vector Space Model, VSM}\cite{salton1975vsm} 把 query 与文档都映射到 $|V|$ 维词项空间，
+用\term{余弦相似度}{Cosine Similarity}衡量夹角。词项权重由 \term{TF-IDF}{Term Frequency--Inverse Document Frequency} 给出：
+
+\begin{equation}
+\text{tf-idf}(t, d) = \underbrace{\frac{f_{t,d}}{\max_{t'} f_{t',d}}}_{\text{归一化词频}} \cdot
+\underbrace{\log \frac{N}{n_t}}_{\text{逆文档频率}} ,
+\label{eq:tfidf}
+\end{equation}
+
+\begin{equation}
+\cos(\vec{q}, \vec{d}) = \frac{\inner{\vec{q}}{\vec{d}}}{\norm{\vec{q}}_2 \, \norm{\vec{d}}_2}
+= \frac{\sum_{t \in q \cap d} w_{t,q} \, w_{t,d}}
+{\sqrt{\sum_{t \in q} w_{t,q}^2} \, \sqrt{\sum_{t \in d} w_{t,d}^2}} .
+\label{eq:cosine}
+\end{equation}
+
+余弦相似度的核心好处是「长度无关」：长文档不会因为词多就占便宜。
+但纯 VSM 有一个明显缺陷——它假设词项之间\emph{正交}，无法表达「苹果」与「iPhone」的语义接近，
+这正是后来 LSI\cite{deerwester1990lsi} 与稠密向量检索要解决的问题（见 \cref{ch:rag}）。
+
+\subsection{BM25：词频饱和与长度归一化}
+
+\term{BM25}{Best Matching 25}\cite{robertson1994okapi,robertson2009bm25} 是目前最广泛使用的词袋检索函数，
+它可以从概率检索框架推导出来，也可以当作「带饱和与长度惩罚的加权词重叠」。其标准形式为：
+
+\begin{equation}
+\text{BM25}(q, d) = \sum_{t \in q} \text{IDF}(t) \cdot
+\frac{f_{t,d} \cdot (k_1 + 1)}{f_{t,d} + k_1 \cdot \left(1 - b + b \cdot \dfrac{\abs{d}}{\text{avgdl}}\right)} ,
+\label{eq:bm25}
+\end{equation}
+
+\begin{equation}
+\text{IDF}(t) = \log \frac{N - n_t + 0.5}{n_t + 0.5} .
+\label{eq:bm25idf}
+\end{equation}
+
+三个参数的含义必须能脱口而出：
+
+\begin{itemize}
+  \item $k_1$（通常取 1.2 到 2.0）：控制\kw{词频饱和}的拐点。$k_1$ 越大，词频增长带来的收益越持久；
+        当 $f_{t,d} \to \infty$ 时，因子趋近 $k_1 + 1$，即词频收益封顶。这比 TF-IDF 的线性词频更符合直觉：
+        一个词出现 3 次比出现 1 次重要得多，但出现 30 次并不比出现 10 次重要 3 倍。
+  \item $b$（通常取 0.75）：控制\kw{长度归一化}强度。$b=0$ 时完全不做长度惩罚，$b=1$ 时完全按长度比例惩罚。
+        长文档天然更容易命中查询词，$b$ 就是用来抵消这种「长度红利」的。
+  \item $\text{avgdl}$：语料平均文档长度，是归一化的尺度基准。它必须随索引一起统计并持久化，
+        否则跨分片打分不可比。
+\end{itemize}
+
+\begin{formulacard}[BM25 的三个直觉]
+\textbf{(1) 稀有词更重要}（IDF）；\textbf{(2) 词频有上限}（$k_1$ 饱和）；
+\textbf{(3) 长文档不该占便宜}（$b$ 归一化）。
+调参经验：标题短、字段权重要求高时，电商搜索常把 $b$ 调低到 0.3--0.5，甚至对不同字段用不同 $b$；
+技术文档、法律文书这类长度方差大的语料，$b$ 反而要调高。
+\end{formulacard}
+
+\subsection{查询似然与 Dirichlet 平滑}
+
+语言模型检索\cite{ponte1998ql} 换了一个视角：不问「文档里有多少查询词」，而问
+「\emph{如果这篇文档是一个语言模型，它生成这个查询的概率有多大}」。这就是 \term{查询似然}{Query Likelihood}：
+
+\begin{equation}
+P(q \mid d) = \prod_{t \in q} P(t \mid d) ,
+\label{eq:ql}
+\end{equation}
+
+其中 $P(t \mid d)$ 必须做\kw{平滑}，否则任何未在文档中出现的查询词都会让整个概率归零。
+最常用的是 \term{Dirichlet 平滑}{Dirichlet Smoothing}，它把文档模型与语料模型做贝叶斯插值：
+
+\begin{equation}
+P(t \mid d) = \frac{f_{t,d} + \mu \, P(t \mid C)}{\abs{d} + \mu} ,
+\qquad P(t \mid C) = \frac{\sum_{d'} f_{t,d'}}{\sum_{t'} \sum_{d'} f_{t',d'}} ,
+\label{eq:dirichlet}
+\end{equation}
+
+$\mu$（常见取值 1000 到 2500，示范量级）相当于「先验的伪词数」：$\mu$ 越大，
+文档自身的观测越被稀释，模型越靠近语料背景分布，等价于更强的长度归一化。
+取对数后按查询词求和，得到可加的打分函数，这正是它工程上可行的原因：
+
+\begin{equation}
+\log P(q \mid d) = \sum_{t \in q} \log \frac{f_{t,d} + \mu P(t \mid C)}{\abs{d} + \mu} .
+\label{eq:dirlog}
+\end{equation}
+
+\begin{insight}[BM25 与查询似然的关系不是「谁替代谁」]
+把 Dirichlet 平滑的查询似然展开，并做一次「查询词出现 / 不出现」的二值化近似，
+再引入词频饱和与词项权重，就回到了 BM25 的形式。两者的差别更多在假设与调参直觉上：
+\textbf{BM25 用 $k_1, b$ 显式控制饱和与长度惩罚；查询似然用 $\mu$ 一个旋钮同时调节这两件事}（这既是优雅也是不灵活）。
+工业系统常做的是「两者都跑，取并集召回，再用同一个排序模型统一打分」——即把 \cref{sec:search-model} 的所有分数当作特征，
+而不是当作最终排序依据。这正是 LTR 的出发点。
+\end{insight}
+
+\section{学习排序（LTR）与 LambdaMART}
+
+\subsection{为什么不能手工调权重}
+
+手工融合 BM25 分、字段命中分、销量分、价格接近度、点击率预估，权重靠人拍，问题有三：
+(1) 特征维度一多，人无法给出正确权重；(2) 不同 query 类型（导航/信息/交易）的最优权重完全不同；
+(3) 权重无法随数据分布漂移自动调整。\term{学习排序}{Learning to Rank, LTR} 就是把「打分函数」交给监督学习。
+LTR 有三种范式\cite{manning2008ir,chapelle2014simple}：
+
+\begin{table}[htbp]
+\centering
+\caption{LTR 三种范式的对比}
+\label{tab:ltr}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{2.6cm} L{2.9cm} Y}
+\toprule
+\tabhead{范式} & \tabhead{输入样本} & \tabhead{损失目标} & \tabhead{优点与代价} \\
+\midrule
+Pointwise & 单条 (query, doc) 的相关性等级或点击 & 回归 / 分类，如 MSE、LogLoss & 实现最简，可复用 CTR 模型；但忽略同一 query 内文档的相对关系，与排序指标脱节 \\
+\addlinespace
+Pairwise & 文档对 $(d_i, d_j)$，$y_i$ 优于 $y_j$ & 分类排序对，如 RankNet\cite{burges2005ranknet}、RankSVM\cite{joachims2006svmrank} & 直接建模相对偏好，比 pointwise 更贴近排序；样本量膨胀为 $O(n^2)$，需采样 \\
+\addlinespace
+Listwise & 整个候选列表及其多级标签 & 直接优化列表指标或其代理，如 LambdaMART\cite{wu2010lambdamart}、ListNet\cite{cao2007listnet} & 与 nDCG 等指标最一致，效果通常最好；实现复杂、需要按 query 分组训练 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{LambdaMART 的 lambda 梯度直觉}
+
+LTR 的困难在于：nDCG 这类指标对模型分数是\emph{不可导}的（它只依赖排序，不依赖分数大小）。
+LambdaMART 的巧妙之处在于：\textbf{不去直接优化 nDCG，而是定义「如果交换这两篇文档的位置，nDCG 会改变多少」，
+用这个改变量当作该文档对的梯度权重}。
+
+具体地，对同一 query 下的文档对 $(i, j)$，令 $s_i, s_j$ 为模型分数，定义：
+
+\begin{equation}
+\lambda_{ij} = \frac{-\sigma}{1 + e^{\sigma (s_i - s_j)}} \cdot \abs{\Delta \text{nDCG}_{ij}} ,
+\qquad \Delta \text{nDCG}_{ij} = \text{nDCG}(\text{交换 } i, j \text{ 后}) - \text{nDCG}(\text{交换前}) ,
+\label{eq:lambda}
+\end{equation}
+
+其中 $\sigma$ 是 sigmoid 斜率（控制对分数差的敏感度）。文档 $i$ 的总 lambda 是它与同 query 内所有文档对的贡献之和：
+
+\begin{equation}
+\lambda_i = \sum_{j:\, (i,j) \in \mathcal{P}} \lambda_{ij} ,
+\qquad w_i = \sum_{j} \frac{\partial \lambda_{ij}}{\partial s_i} \quad (\text{二阶导，即 Hessian 对角近似}) .
+\label{eq:lambdasum}
+\end{equation}
+
+然后用这两个量作为梯度提升树（GBDT）的梯度与 Hessian 来拟合新树，即 LambdaMART = LambdaRank 的梯度 + MART 的树。
+这个构造的直觉可以用一句话概括：
+
+\begin{keypoint}[lambda 的三条直觉]
+\textbf{(1) 排序错了才产生梯度。} 若 $y_i > y_j$ 且 $s_i \gg s_j$（已经排对且差距大），
+$\sigma(s_j - s_i)$ 趋于 $-\infty$，sigmoid 项趋近 0，梯度消失——不惩罚已排好的对。
+\textbf{(2) 位置越靠前，权重越大。} $\abs{\Delta \text{nDCG}}$ 由位置折扣决定，
+交换 top-2 与交换 top-50 的代价完全不同，所以模型优先修正头部错误。
+\textbf{(3) 与指标直接挂钩。} 换一个指标（如交换后 MRR 的变化量），只需替换 $\abs{\Delta}$ 的计算，框架不变。
+这也意味着：\emph{用错指标就会训出错的模型}。如果业务真正在意的是转化而非相关性，
+就应该用 $\Delta$GMV 而不是 $\Delta$nDCG 做 lambda。
+\end{keypoint}
+
+\begin{pitfall}[LTR 上线后在线指标不涨的四种典型原因]
+\begin{enumerate}
+  \item \textbf{训练标签有偏}。用点击日志当相关性标签，会系统性高估「标题党」与「位置好」的文档
+        （位置偏差\cite{varian2007position}）。需要位置去偏或引入人工标注。
+  \item \textbf{特征穿越}。训练时用到了在线不可得或当日才聚合的特征，离线指标虚高，线上退化。
+  \item \textbf{级联耦合}。LTR 只在召回给出的候选上排序，召回没覆盖的优质文档永远拿不到分数。
+        离线 nDCG 是在「理想候选集」上算的，线上是在「召回候选集」上算的。
+  \item \textbf{指标错配}。离线优化 nDCG，业务在意的是长点击与转化，二者在电商里经常冲突
+        （最相关的商品不一定是用户最终买的那个）。
+\end{enumerate}
+\end{pitfall}
+
+\section{查询理解：把用户的话翻译成机器能匹配的东西}
+\label{sec:search-qu}
+
+\subsection{中文分词、词典与新词发现}
+
+英文检索天然按空格切词，中文没有词边界，所以\term{分词}{Word Segmentation} 是中文搜索的第一道工序。
+主流方法有三类：
+
+\begin{itemize}
+  \item \textbf{基于词典的最短/最长匹配}。实现简单、速度极快，但对未登录词与歧义切分无能。
+        实践中常用双向最大匹配 + 歧义消解规则作为兜底。
+  \item \textbf{基于序列标注}。把分词看作对每个字打 BMES 标签，
+        用 HMM 或 CRF\cite{lafferty2001crf} 建模。CRF 的特征工程能力强、边界准确率高，是 2013--2018 年的主流。
+  \item \textbf{基于神经网络}。BiLSTM-CRF 或直接用预训练模型（见 \cref{ch:nlp}）做序列标注，
+        在领域数据充足时效果最好，但延迟与算力成本明显更高，通常用于离线训练与线上蒸馏小模型。
+\end{itemize}
+
+搜索分词与通用分词有一个关键差别：\textbf{搜索分词必须保存多种切分路径}。
+「北京大学」既可以切为「北京大学」，也可以切为「北京 / 大学」。用户搜「北京 大学」时，
+如果把索引侧只按「北京大学」建索引，就会漏召回。因此检索系统的索引侧通常建立
+\kw{二元组（bigram）索引 + 关键实体词典索引}的组合：既保留细粒度召回能力，又通过词典保证实体的完整性。
+
+\term{新词发现}{New Word Discovery} 常用「左右邻字熵 + 内部凝固度（互信息）」的统计方法筛候选，
+再由人工或模型确认后写入词典。这是搜索团队的一项长期运营工作，因为电商的品类词与流行语迭代极快。
+
+\begin{equation}
+\text{凝固度}(w) = \min_{w = xy} \frac{P(w)}{P(x) P(y)} ,
+\qquad \text{自由度}(w) = \min\left( H(\text{left}(w)),\, H(\text{right}(w)) \right) .
+\label{eq:newword}
+\end{equation}
+
+凝固度衡量「这几个字黏在一起」的程度，自由度衡量「它能出现在多种上下文里」的程度。
+两者都高的候选，才是真正的新词；只满足一的往往是固定短语或命名实体的一部分。
+
+\subsection{拼写纠错：编辑距离与噪声信道}
+
+纠错的关键不是「找到相似的串」，而是「判断用户到底想打什么」。\term{编辑距离}{Edit Distance / Levenshtein Distance}
+是候选生成的基础，它定义为把串 $a$ 变成串 $b$ 的最少单字符操作数（插入、删除、替换）：
+
+\begin{equation}
+D(i, j) = \min \begin{cases}
+D(i-1, j) + 1 & \text{删除} \\
+D(i, j-1) + 1 & \text{插入} \\
+D(i-1, j-1) + \big[ a_i \ne b_j \big] & \text{替换或匹配}
+\end{cases}
+\label{eq:editdist}
+\end{equation}
+
+边界条件 $D(i,0)=i$，$D(0,j)=j$，答案为 $D(\abs{a}, \abs{b})$，时间与空间复杂度均为 $O(\abs{a}\abs{b})$。
+中文场景更常用拼音编辑距离与字形（四角编码、笔画）编辑距离，因为中文错字的主要来源是同音与形近。
+
+候选生成之后，用\term{噪声信道模型}{Noisy Channel Model} 做决策：
+
+\begin{equation}
+\hat{w} = \argmax_{w} \; \underbrace{P(w)}_{\text{语言模型：这句话像人话吗}} \cdot \underbrace{P(x \mid w)}_{\text{信道模型：用户怎么会打成这样}} .
+\label{eq:noisychannel}
+\end{equation}
+
+$P(w)$ 用 n-gram 语言模型或神经语言模型估计，$P(x \mid w)$ 通常由编辑操作概率或拼音混淆矩阵给出。
+工程上常见做法是用 n-gram 索引（如字符 bigram 索引）快速召回编辑距离不超过 2 的候选，
+再用 \cref{eq:noisychannel} 打分排序，最后加一道「纠错收益门槛」：
+只有当纠正后的 query 在日志中的历史点击表现显著更好时才真正纠正，否则只做「您是不是想找……」的软提示。
+
+\subsection{同义改写、意图分类与查询扩展}
+
+\kw{同义词与改写}（Query Rewriting）解决词面不匹配。三类常见改写：
+(1) \emph{同义词典}，如「手机 / 移动电话 / cellphone」，准确率高但覆盖有限，需要持续运营；
+(2) \emph{点击共现挖掘}，同一个 query 下用户点击了含词 $t$ 的文档，就把 $t$ 作为该 query 的扩展词，
+数据驱动但噪声大；(3) \emph{生成式改写}，用序列到序列模型或大模型生成改写候选，
+覆盖最好，但有幻觉风险，必须加相关性校验。
+
+\kw{意图分类}把查询分为导航型（用户就想打开某个确定的站点/店铺）、信息型（想了解知识）、
+交易型（想买）。分类结果直接决定排序策略：导航型应把该实体的官方页提到第一，
+交易型应加强价格、库存、销量特征，信息型应加强内容质量与时效特征。
+工业界常用「query 类型 $\to$ 独立模型 / 独立权重」的\emph{多专家}结构，而不是一个模型打天下。
+
+\kw{查询扩展}（Query Expansion）最经典的实现是 \term{伪相关反馈}{Pseudo-Relevance Feedback, PRF}，
+其中 RM3\cite{lavrenko2001rm} 应用最广。它的流程是：先用原查询检索出 top-$k$ 篇文档当作「伪相关」，
+用这些文档估计一个扩展语言模型，再与原查询模型做插值：
+
+\begin{equation}
+P(w \mid q') = (1 - \alpha) \, P(w \mid q) + \alpha \sum_{d \in \mathcal{F}} \frac{P(w \mid d) \, P(q \mid d)}{\sum_{d' \in \mathcal{F}} P(q \mid d')} ,
+\label{eq:rm3}
+\end{equation}
+
+$\alpha$ 通常取 0.5 到 0.7（示范量级），$\mathcal{F}$ 是伪反馈文档集合。
+RM3 的收益与风险都很典型：它能把「苹果手机电池续航」扩展进「续航能力」「待机时间」等同义表达，
+提高召回；但如果初始 top-$k$ 跑偏（\kw{查询漂移}，query drift），
+扩展词会把噪声带进来，反而恶化结果。因此上限必须加约束：只取 top-$m$ 个扩展词，
+且扩展词必须与原查询在点击图中存在共现关系。
+
+\kw{实体识别与知识图谱挂载}（NER + KG Linking）是把 query 从「一串词」变成「结构化意图」的关键。
+识别出「iPhone 15」是产品实体、「128G」是属性值、「和 256G 对比」是关系意图之后，
+就可以走结构化检索路径，直接在属性索引上做精确过滤，并且天然支持
+「同款合并」「参数对比卡片」这类电商特有的展现形式。
+
+\section{召回与排序：多路召回、粗排、精排、重排}
+\label{sec:search-cascade}
+
+\subsection{多路召回}
+
+单路召回一定有盲区，工业系统普遍采用多路并行召回，每路负责一类信号：
+
+\begin{table}[htbp]
+\centering
+\caption{电商搜索的多路召回设计（示范配置）}
+\label{tab:multirecall}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.2cm} L{2.4cm} Y}
+\toprule
+\tabhead{召回通道} & \tabhead{技术手段} & \tabhead{典型配额} & \tabhead{覆盖的意图} \\
+\midrule
+词项匹配 & 倒排索引 + BM25，标题/类目/属性加权 & 500--800 & 字面精确意图，是召回的主力 \\
+\addlinespace
+语义向量 & 双塔模型 + ANN 检索\cite{karpukhin2020dpr,johnson2019faiss} & 200--400 & 同义、改写、长尾口语化表达 \\
+\addlinespace
+图谱/实体 & 品牌-品类-属性图上的规则与图检索 & 100--200 & 品牌导航、属性约束、系列产品 \\
+\addlinespace
+个性化 & 用户历史兴趣、店铺偏好 & 100--200 & 「我常买的店 / 尺码」等个性化约束 \\
+\addlinespace
+业务兜底 & 热销榜、新品、活动商品池 & 50--150 & 冷启动、zero-result 兜底、大促曝光 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+多路融合有两种做法：一是\kw{分数归一化后加权}（各通道分数做 min-max 或 z-score 归一化再加权求和），
+二是\term{倒数排名融合}{Reciprocal Rank Fusion, RRF}：$\text{RRF}(d) = \sum_r 1/(k + \text{rank}_r(d))$，
+$k$ 常取 60。RRF 只依赖排名不依赖分数尺度，跨通道更稳健，是工程上最省心的默认选择（详见 \cref{ch:rag}）。
+
+\subsection{粗排与精排}
+
+粗排的目标是「用 1/10 的算力达到精排 90\% 的排序质量」。主流做法有两类：
+\emph{双塔 + 内积近似}（把精排模型蒸馏进双塔，线上用向量内积替代交叉特征），
+以及\emph{轻量特征 + 小模型}（只保留最关键的几十个特征，用 GBDT 或浅层 NN 打分）。
+
+精排是效果的主战场。当前主流是\term{交叉编码器}{Cross-Encoder}：把 query 与文档拼在一起送入
+BERT 类模型做交互编码\cite{nogueira2019monobert}，效果显著优于双塔，但代价是
+\textbf{每个 (query, doc) 对都要做一次完整前向}，无法预计算。复杂度对比很直观：
+
+\begin{equation}
+\text{双塔} = \underbrace{O(\abs{d})}_{\text{离线预计算，只算一次}} + \underbrace{O(\abs{q})}_{\text{线上算 query 一次}} ,
+\qquad \text{交叉编码器} = O\big((\abs{q} + \abs{d})^2\big) \ \text{每对} .
+\label{eq:crosscost}
+\end{equation}
+
+因此在精排位置上通常只放 50--200 个候选；更激进的方案是把交叉编码器放在最后一个极小候选集（top-10 到 top-30）做重排。
+
+\subsection{重排与结果聚合}
+
+重排（Re-ranking）处理的是\emph{列表级}目标，而非单文档相关性：多样性（避免前十全是同一店铺）、
+打散（同款聚合为一个卡片）、坑位约束（广告位、活动位）、时效性（新品优先）、
+以及电商特有的 \term{SPU 聚合}{Standard Product Unit Aggregation}——把同一款商品的不同卖家、
+不同规格聚合成一个卡片，卡片内按价格与服务质量排序。这是一个纯业务驱动的步骤，模型再强也替代不了规则。
+
+\section{电商搜索的特化问题}
+
+\subsection{类目预测、属性抽取与同款比价}
+
+\kw{类目预测}是电商搜索的第一道召回约束。用户搜「连衣裙」时，如果类目预测把结果限到女装，
+就能砍掉 90\% 以上的无关候选，召回压力骤降。类目预测的难点在于层级（一级/二级/三级类目）、
+商品标题噪声大（堆砌关键词）、以及长尾类目样本极少。常用做法是「文本分类 + 类目路径约束 + 置信度兜底」：
+置信度低于阈值时不做硬过滤，只做加权。
+
+\kw{属性抽取}从标题与详情中抽「品牌、型号、容量、颜色、材质、尺码」等结构化字段。
+抽取质量直接决定三类功能能不能用：属性筛选（左侧筛选栏）、参数对比、以及结构化排序特征。
+抽取方法从模板/词典匹配到序列标注（CRF / BERT-NER）不等，长尾属性的 F1 通常明显低于头部属性，
+必须按属性类别分别设指标门槛。
+
+\kw{同款比价}建立在「商品对齐」之上：先判断两个 SKU 是不是同一款商品（同款判定），
+再按价格、店铺评分、物流时效排序。同款判定的信号有品牌 + 型号 + 关键属性是否一致、
+标题相似度、图片相似度（感知哈希 / 向量检索）。这里最容易犯的错是把「兼容款 / 配件」
+误判为同款——「iPhone 15 手机壳」和「iPhone 15 手机」绝不能合并。
+
+\begin{casebox}[案例：电商搜索的类目预测与同款聚合（示范案例）]
+某电商平台的搜索团队发现，query「airpods pro」的 top-10 结果里混进了大量配件
+（保护壳、耳塞套、充电线）。复盘发现三个叠加问题：
+\begin{enumerate}
+  \item \textbf{类目预测倾向「泛化」}。模型在训练时把「配件」类目的样本也当作了正例（因为标题里都含 airpods），
+        导致该 query 的类目预测结果过于宽泛，硬过滤形同虚设。
+  \item \textbf{同款判定缺少「主体 vs 配件」的先验}。判定规则只看品牌与型号是否一致，
+        没有引入「配件类目必须从属于主体类目」的约束。
+  \item \textbf{排序特征里缺少「配件惩罚」}。精排模型看到了「完全匹配标题」这个强特征，
+        而配件标题往往比主机更完整地包含型号串，于是配件反而得分更高。
+\end{enumerate}
+对应的修复是三条并行的改动：(1) 类目预测改为多标签 + 置信度阈值，
+低置信度时不硬过滤而是把主体类目商品加权；(2) 同款聚合引入类目从属关系约束，
+配件类目单独成卡片并置于主体之后；(3) 精排加「类目一致性」与「标题中型号位置」两个特征，
+并引入人工标注的「主体/配件」二分类作为辅助任务。
+
+\textbf{这个案例的可迁移结论}：电商搜索里绝大多数「相关性事故」不是单一模型的问题，
+而是\emph{类目体系、商品对齐、排序特征三层同时失效}的结果。排查时要把这三层分开度量，
+否则永远找不到真正的瓶颈。以上为公开行业通识与教学的示范复盘，不代表任何具体平台的线上数据。
+\end{casebox}
+
+\subsection{商品标题的分词与权重}
+
+商品标题是典型的「关键词堆砌」文本：「2024新款苹果iPhone15手机壳液态硅胶防摔全包保护套男女通用」。
+它有三个特征：(1) 没有语法结构，词序信息弱；(2) 核心商品词（手机壳）常出现在偏后位置；
+(3) 富含属性词（液态硅胶、防摔、全包）。
+
+因此电商搜索的分词策略通常是：
+(1) 用领域词典保证「iPhone15」「液态硅胶」「全包」这些词的完整性；
+(2) 对同一标题同时建「精确词索引」与「bigram 索引」，兼顾精度与召回；
+(3) 做\emph{词权重}（term weighting）——标题中不同位置的词权重不同，
+通常「品牌 + 类目 + 型号」权重最高，属性词次之，修饰词（新款、包邮、正品）最低，
+甚至进入停用词表。
+
+一个可用的启发式位置权重是「前置加权 + 型号保护」：
+
+\begin{equation}
+w(t, d) = \text{IDF}(t) \cdot \Big( 1 + \gamma \cdot \max\Big(0, 1 - \frac{\text{pos}(t)}{L_d}\Big) \Big) \cdot \big( 1 + \eta \cdot \mathbf{1}[t \in \text{型号词典}] \big) ,
+\label{eq:termweight}
+\end{equation}
+
+$\gamma$ 控制位置加权的强度（常取 0.3--0.6），$\eta$ 控制型号词的保护权重，$L_d$ 是标题长度。
+这个公式不是理论最优，但工程上便宜、可解释、容易和 BM25 组合。
+
+\subsection{销量、评分、价格如何进入排序}
+
+三类信号进入排序的方式完全不同：
+
+\begin{itemize}
+  \item \textbf{销量/热度}：通常取对数后作为特征（$\log(1 + \text{sales})$），
+        因为销量分布是重尾的，直接用原始值会让头部商品压倒一切，也会让新品永远起不来。
+  \item \textbf{评分}：必须与评论数联合使用（Wilson 下界或贝叶斯平滑到全局均值），
+        否则「1 条 5 星」会打败「10000 条 4.8 星」。这是典型的\emph{小样本比率}问题。
+  \item \textbf{价格}：绝对价格没有意义（用户不会因为便宜就买不相关的商品），
+        通常用「与该 query 下价格分布的相对位置」作为特征，或直接建「价格分桶偏好」的交叉特征。
+\end{itemize}
+
+\subsection{Zero-result 与兜底策略}
+
+\term{无结果}{Zero-result} 是搜索体验最致命的失败：用户明确表达了意图，系统却什么都没给。
+处理顺序应该是\kw{逐级放宽}：
+
+\begin{enumerate}
+  \item \textbf{先查是不是分词/归一化问题}。很多 zero-result 是「分词把词切碎了」或「同义词没配上」，
+        而不是真的没有商品。这一层的修复率往往最高。
+  \item \textbf{放宽硬过滤条件}。把类目过滤、属性过滤、库存过滤按时效与置信度分级放宽，
+        优先保留「有货 + 类目高置信」，其余转为排序加权。
+  \item \textbf{丢弃低权重词项}（term dropping）。按 IDF 从高到低保留核心词，逐个丢弃修饰词重查，
+        直到有结果或只剩一个词。
+  \item \textbf{纠错与改写}。触发拼写纠错或生成式改写，给出「您是不是想找 X」并直接展示 X 的结果。
+  \item \textbf{语义召回兜底}。用向量召回在不依赖字面匹配的情况下找回语义相近的商品。
+  \item \textbf{兜底推荐}。以上都失败时，展示同类目热销或个性化推荐，并明确提示「未找到完全匹配的商品」，
+        绝不能让用户面对一个空白页。
+\end{enumerate}
+
+\begin{insight}[Zero-result 率是一个被严重低估的核心指标]
+它同时反映三类问题：\textbf{供给缺口}（真的没有这个商品）、\textbf{理解缺口}（分词/纠错/同义词没覆盖）、
+\textbf{索引缺口}（商品在库但没建进索引或字段缺失）。
+把 zero-result query 按这三类打标并分别交给采购、算法、工程三个团队，是搜索团队最高性价比的日常工作之一。
+经验上，理解缺口与索引缺口的修复成本远低于供给缺口，但收益往往更大。
+\end{insight}
+
+\section{评价体系：离线、在线与人机协同}
+\label{sec:search-eval}
+
+\subsection{离线指标：标注相关性、nDCG 与 MAP}
+
+离线评估的前提是\kw{相关性标注}：给定 (query, doc) 对，标注员打相关性等级（常用 0--4 或 0--3）。
+标注集要覆盖 query 类型分层（导航/信息/交易、头部/腰部/长尾），否则指标会被头部词主导。
+
+\term{累计增益}{Discounted Cumulative Gain, DCG} 与 \term{nDCG}{Normalized DCG} 是最常用的排序指标：
+
+\begin{equation}
+\text{DCG@}K = \sum_{i=1}^{K} \frac{2^{rel_i} - 1}{\log_2 (i + 1)} ,
+\qquad \text{nDCG@}K = \frac{\text{DCG@}K}{\text{IDCG@}K} ,
+\label{eq:ndcg}
+\end{equation}
+
+其中 IDCG@$K$ 是理想排序（把标注按相关性降序排列）的 DCG，因此 nDCG 落在 $[0, 1]$，可跨 query 平均。
+$2^{rel} - 1$ 的指数形式让高相关性等级获得更陡的收益，位置折扣 $\log_2(i+1)$ 让头部权重更大。
+
+\term{平均精度均值}{Mean Average Precision, MAP} 关注「相关文档是否被排到前面」：
+
+\begin{equation}
+\text{AP}(q) = \frac{1}{\abs{R_q}} \sum_{k=1}^{n} \text{prec@}k \cdot \mathbf{1}[\, \text{doc}_k \in R_q \,] ,
+\qquad \text{MAP} = \frac{1}{\abs{Q}} \sum_{q \in Q} \text{AP}(q) ,
+\label{eq:map}
+\end{equation}
+
+$R_q$ 是 query $q$ 的相关文档集合，prec@$k$ 是前 $k$ 条里的相关比例。
+MAP 与 nDCG 的差别在于：MAP 假设相关性是二值的，nDCG 支持多级；MAP 对缺漏的相关文档更敏感。
+
+当每个 query 只有一个正确答案时（导航型查询、问答型查询），用 \term{平均倒数排名}{Mean Reciprocal Rank, MRR}：
+
+\begin{equation}
+\text{MRR} = \frac{1}{\abs{Q}} \sum_{q \in Q} \frac{1}{\text{rank}_q} ,
+\label{eq:mrr}
+\end{equation}
+
+$\text{rank}_q$ 是第一个正确答案的位置。MRR 只关心「第一个对的排第几」，对后续排序完全不敏感，
+因此适合「只要找到就行」的场景，不适合电商这种需要整体列表质量的场景。
+
+\begin{formulacard}[三个离线指标各管什么]
+\textbf{nDCG}：整体列表质量，支持多级相关性，最通用（搜索离线主指标）。
+\textbf{MAP}：二值相关性下的整体质量，对召回缺漏敏感。
+\textbf{MRR}：首个正确答案的位置，适合导航与问答。
+补充：\textbf{Recall@K} 单独度量召回覆盖率，是级联系统里诊断「是召回的问题还是排序的问题」的关键手段。
+\end{formulacard}
+
+\subsection{在线指标：CTR、长点击与满意度}
+
+离线指标与线上业务之间永远隔着三层（数据分布、位置偏差、业务目标），所以在线指标不可替代：
+
+\begin{itemize}
+  \item \metric{CTR}（点击率）：$=$ 点击数 / 曝光数。灵敏、样本量大，但极易被标题党与图片诱导操纵，
+        且存在强烈的\emph{位置偏差}\cite{varian2007position}——第 1 位的点击率天然高于第 5 位，
+        跨版本比较 CTR 必须做位置去偏或只比较同位置。
+  \item \metric{长点击率}{Long Click Rate}：点击后停留超过阈值（如 30 秒）或完成加购/下单的比例。
+        它是「点击质量」的守门员，能有效惩罚只吸引点击但不满足需求的文档。
+  \item \textbf{跳出与快速返回}：用户点进去 2 秒内返回，是强负反馈信号（\emph{good abandonment} 除外，
+        即用户已经看到了答案，此时快速返回反而是成功）。
+  \item \textbf{无结果率 / 零点击率}：前者反映供给与理解缺口，后者反映「结果不满意」。
+  \item \textbf{会话级指标}：query 改写次数（在一次会话里反复改词说明第一次没搜到）、
+        会话时长、会话内转化率。会话级指标比单次请求指标更接近用户真实感受。
+  \item \textbf{线上业务指标}：搜索引导 GMV、转化率、客单价、退货率。这是最终的北极星，
+        但方差大、对短期改动不敏感，需要足够的实验周期。
+\end{itemize}
+
+\begin{pitfall}[只看 CTR 优化搜索，会走向标题党与信息茧房]
+\textbf{现象}：精排模型把 CTR 作为唯一目标，几轮迭代后 CTR 显著上升，
+但长点击率下降、加购率下降、退货率上升、用户会话内 query 改写次数增加。\\
+\textbf{根因}：CTR 是\emph{注意力}指标而不是\emph{满足度}指标。模型很快学会「什么标题和主图更吸引点击」，
+而不是「什么商品更能满足需求」。这在电商里会形成恶性循环：低质商品靠标题党拿到曝光，
+拿到曝光就拿到更多点击样本，模型进一步确信它该被排前面——典型的\term{反馈回路偏差}{Feedback Loop Bias}
+与 Goodhart 定律的现实版本\cite{goodhart1975}。\\
+\textbf{排查方法}：(1) 把目标改成多目标加权，至少包含 CTR、长点击、加购/下单三层；
+(2) 单独监控「CTR 涨但长点击不涨」的商品集合，看是否是少数类目或少数店铺贡献；
+(3) 加入「相关性门槛」：相关性低于阈值的商品直接限制曝光上限，不参与 CTR 竞争；
+(4) 做反事实评估或随机探索，让模型有机会看到未被当前策略曝光的商品，切断反馈回路。
+\textbf{一句话总结}：CTR 是廉价的代理指标，代理指标的宿命是被优化到失真。必须同时看「点击之后发生了什么」。
+\end{pitfall}
+
+\subsection{人工评估与 LLM-as-judge 的偏差}
+
+人工评估是黄金标准，但贵、慢、一致性难保证。标注员之间的一致率（Cohen's kappa 或 Krippendorff's alpha）
+低于 0.6 时，指标本身就不可信。因此人工评估要配详细的标注手册与定期校准。
+
+近两年大量团队用 \term{大模型作为评审}{LLM-as-judge} 替代或补充人工评估。它的优势是便宜、快、
+可覆盖长尾 query，但有四类系统性偏差必须在报告里显式说明：
+
+\begin{itemize}
+  \item \textbf{位置偏差}：交换候选顺序会导致判定翻转。标准做法是对每个样本做两次正反顺序评估并取平均。
+  \item \textbf{长度与格式偏差}：更长的、格式更漂亮的答案/摘要更容易被判为好，即使信息量相同。
+  \item \textbf{自我偏好}：同一家族的模型倾向于给自己生成的答案更高分。
+  \item \textbf{领域盲区}：对需要专业知识的判断（药品、法律、精密参数）错误率显著上升。
+\end{itemize}
+
+工程上的合理用法是「LLM 做粗筛 + 人工做抽检校准」：用 LLM 对全量数据打标，
+再用 1\%--5\% 的人工标注估计 LLM 与人的一致率（或计算与人工标签的 Spearman 相关）。
+一致率不达标时，LLM 的绝对分数不可用于上线决策，只能用于版本间的相对比较。
+另外要注意，用 LLM 评估时如果评估提示词泄露了「这是新版本」，会产生期望偏差，必须做盲化。
+
+\begin{keypoint}[评价体系的三层结构]
+\textbf{第一层（离线）}：标注相关性 + nDCG/MAP/MRR + Recall@K，用于快速迭代与回归测试，
+但只能反映「理想候选集上的排序质量」。
+\textbf{第二层（在线）}：CTR + 长点击 + 转化 + 会话级指标，是真正的决策依据，
+必须做位置去偏、必须多目标、必须看长周期。
+\textbf{第三层（人机协同）}：人工评估校准 + LLM 大规模打标，解决长尾覆盖与成本问题，
+但必须报告一致率与偏差。
+三层缺一层都会出事：只有离线会脱离业务，只有在线会被短期指标绑架，只有人工则永远跑不快。
+\end{keypoint}
+
+\section{工程落地：一个最小可用的倒排索引与 BM25}
+
+\subsection{用 SQL 做离线评估与召回诊断}
+
+在写模型代码之前，先用 SQL 把「哪些 query 的排序质量最差」这件事查出来，是搜索迭代最高性价比的起点。
+下面的查询假设有一张人工标注表 \code{label(query, doc\_id, rel)}（\code{rel} 取 0 到 3）
+和一张线上日志表 \code{impression(query, doc\_id, position, clicked, dwell\_ms)}，
+按 query 计算 nDCG@10，并找出「离线 nDCG 高但线上长点击低」的候选集：
+
+\begin{lstlisting}[style=growth, language=SQLx, caption={按 query 计算 nDCG 并交叉对照长点击}]
+WITH ranked AS (
+    SELECT l.query,
+           l.doc_id,
+           l.rel,
+           ROW_NUMBER() OVER (PARTITION BY l.query ORDER BY i.position) AS pos
+    FROM label l
+    JOIN impression i ON i.query = l.query AND i.doc_id = l.doc_id
+),
+dcg AS (
+    SELECT query,
+           SUM((POWER(2, rel) - 1) / LOG(2, pos + 1)) AS dcg10
+    FROM ranked
+    WHERE pos <= 10
+    GROUP BY query
+),
+idcg AS (
+    SELECT query, SUM((POWER(2, rel) - 1) / LOG(2, rk + 1)) AS idcg10
+    FROM (
+        SELECT query, rel,
+               ROW_NUMBER() OVER (PARTITION BY query ORDER BY rel DESC) AS rk
+        FROM label
+    ) t
+    WHERE rk <= 10
+    GROUP BY query
+),
+quality AS (
+    SELECT d.query, d.dcg10 / NULLIF(i.idcg10, 0) AS ndcg10
+    FROM dcg d JOIN idcg i ON i.query = d.query
+),
+online AS (
+    SELECT query,
+           AVG(CASE WHEN clicked THEN 1.0 ELSE 0.0 END)              AS ctr,
+           AVG(CASE WHEN dwell_ms >= 30000 THEN 1.0 ELSE 0.0 END)    AS long_click
+    FROM impression
+    GROUP BY query
+)
+SELECT q.query, q.ndcg10, o.ctr, o.long_click
+FROM quality q
+JOIN online o ON o.query = q.query
+WHERE q.ndcg10 >= 0.8 AND o.long_click < 0.15
+ORDER BY o.ctr DESC
+LIMIT 200;
+\end{lstlisting}
+
+这个查询的价值在于\emph{它把两种信号对齐到了同一个粒度}（query 级）。
+返回的 200 个 query 就是「离线看起来很好、线上点击很多但没人真正满意」的集合，
+通常能直接定位到标题党、类目混淆或图片与实物不符三类问题。
+
+\subsection{一个最小可用的 Python 实现}
+
+下面用 Python 写一个可跑通的最小实现，覆盖「建索引、求交、BM25 打分」三件事。
+它的目标是让你能手算一遍打分过程，而不是替代 Elasticsearch。
+
+\begin{lstlisting}[style=growth, language=Python, caption={最小倒排索引 + BM25（内存版）}]
+# Minimal in-memory inverted index with BM25 scoring.
+import math
+from collections import defaultdict
+
+class InvertedIndex:
+    def __init__(self, k1=1.2, b=0.75):
+        self.k1, self.b = k1, b
+        self.postings = defaultdict(dict)   # term -> {doc_id: tf}
+        self.doc_len = {}                   # doc_id -> length
+        self.docs = {}                      # doc_id -> raw text
+        self.total_len = 0
+
+    def add(self, doc_id, terms):
+        self.docs[doc_id] = terms
+        self.doc_len[doc_id] = len(terms)
+        self.total_len += len(terms)
+        for t in terms:
+            self.postings[t][doc_id] = self.postings[t].get(doc_id, 0) + 1
+
+    @property
+    def n_docs(self):
+        return len(self.doc_len)
+
+    @property
+    def avgdl(self):
+        return self.total_len / max(1, self.n_docs)
+
+    def idf(self, term):
+        n_t = len(self.postings.get(term, {}))
+        return math.log((self.n_docs - n_t + 0.5) / (n_t + 0.5) + 1e-9)
+
+    def search(self, query_terms, top_k=10):
+        # Step 1: intersect posting lists (conjunctive candidate generation).
+        lists = [set(self.postings.get(t, {})) for t in query_terms]
+        if not lists:
+            return []
+        cands = set.intersection(*lists)
+        # Step 2: score candidates with BM25.
+        scored = []
+        for d in cands:
+            s = 0.0
+            for t in query_terms:
+                f = self.postings[t].get(d, 0)
+                if f == 0:
+                    continue
+                denom = f + self.k1 * (1 - self.b + self.b * self.doc_len[d] / self.avgdl)
+                s += self.idf(t) * f * (self.k1 + 1) / denom
+            scored.append((s, d))
+        scored.sort(reverse=True)
+        return scored[:top_k]
+\end{lstlisting}
+
+\begin{toolbox}[搜索系统上线前的故障演练清单]
+\begin{enumerate}
+  \item \textbf{索引切换演练}：在流量低谷强制切换索引版本，验证切换耗时、内存峰值与回滚路径。
+  \item \textbf{单分片故障}：随机下线一个分片，验证是否自动降级为「部分结果 + 提示」，而不是整体报错。
+  \item \textbf{长尾 query 压测}：用日志里最长的 1\% query 做压测，因为它们的分词路径最多、召回通道最多。
+  \item \textbf{大促流量倍数}：按历史峰值 3--5 倍做全链路压测，重点关注缓存击穿后的后端冲击。
+  \item \textbf{精排超时}：注入精排延迟，验证是否降级为粗排结果（而不是返回空白）。
+  \item \textbf{模型热更新}：验证新旧模型并行打分与一致性校验，避免切换瞬间的分数断层。
+  \item \textbf{Zero-result 兜底}：构造一批不可能命中的 query，验证兜底链路与文案是否正常。
+\end{enumerate}
+\end{toolbox}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 搜索引擎是「索引 + 打分 + 理解 + 评价」四件事的组合：
+        倒排索引解决\emph{找得到}，打分模型解决\emph{排得准}，查询理解解决\emph{听得懂}，评价体系解决\emph{改得对}。
+  \item 倒排索引的性能来自三件事：词典的高效前缀查找、posting list 的差值编码与压缩
+        （VByte 简单、PForDelta 高效）、以及跳表与位置索引支撑的求交与短语匹配。
+        压缩率与解码速度天然冲突，实践上按文档频率分层选策略。
+  \item 动态索引靠「不可变主索引 + 内存增量索引 + 删除表 + 定期合并 + 原子切换」实现近实时更新；
+        分片与副本解决容量与可用性，但会带来 top-K 归并与深翻页的代价。
+  \item 检索模型从布尔（无排序）到 VSM（余弦 + TF-IDF）到 BM25（词频饱和 + 长度归一化）
+        到查询似然（Dirichlet 平滑）到 LTR 一条线演进，核心问题始终是
+        \emph{词频怎么饱和、长度怎么惩罚、词项怎么加权、多个信号怎么融合}。
+  \item LambdaMART 的关键洞察是「用交换两篇文档引起的 nDCG 变化量作为梯度权重」：
+        排对的样本梯度消失，头部错误优先修正，换指标只需换 $\abs{\Delta}$ 的定义。
+  \item 查询理解是中文与电商搜索的胜负手：分词要保留多路径，纠错要用噪声信道做决策，
+        RM3 等查询扩展能提召回但会带来查询漂移，实体识别把 query 变成结构化意图。
+  \item 电商搜索的特化问题（类目预测、属性抽取、同款比价、标题权重、zero-result 兜底）
+        本质上都是在「结构化商品数据不完整」这个约束下，用规则 + 模型混合的方式补齐结构化信息。
+  \item 评价必须三层齐备。CTR 是注意力而非满足度，只看 CTR 必然导致标题党与信息茧房；
+        LLM-as-judge 有位置、长度、自我偏好与领域盲区四类偏差，必须报告与人工的一致率。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item BM25 的 $k_1$ 与 $b$ 分别控制什么？为什么电商搜索里 $b$ 常常要调小？
+        如果某个字段的文档长度方差极大，你会怎么处理？
+  \item 请从零描述一次「中文 query 进、十个结果出」的完整链路，并指出你会把延迟预算花在哪一级、为什么。
+  \item LTR 的 pointwise / pairwise / listwise 三种范式有什么区别？
+        LambdaMART 里的 lambda 到底是什么？为什么它能让模型优先修正头部排序错误？
+  \item 上线一个 LTR 模型后离线 nDCG 涨了 3\% 但线上 CTR 不涨，你会按什么顺序排查？
+        位置偏差与特征穿越分别怎么发现、怎么修？
+  \item 如何设计一个中文查询纠错系统？编辑距离、噪声信道、拼音混淆各自扮演什么角色？
+        怎么控制「过度纠错」的风险？
+  \item 查询似然模型里的 Dirichlet 平滑参数 $\mu$ 起什么作用？
+        它和 BM25 里的 $b$ 有什么功能上的重叠与区别？
+  \item 电商搜索里「同款比价」怎么落地？同款判定容易出哪类错误？
+        类目预测、属性抽取、同款聚合三者失效时分别有什么表征？
+  \item 只优化 CTR 会带来什么后果？长点击、无结果率、会话级指标各自捕捉了什么信号？
+        你会怎么设计一个多目标的搜索排序目标函数？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+搜索打下的这套地基——倒排与压缩、BM25 与语言模型、LTR 与多级排序、查询理解与评价体系——
+并不会因为神经检索的兴起而过时：今天最先进的检索系统仍然是「稀疏词项召回 + 稠密向量召回 + 交叉编码器重排」的混合体。
+下一章 \cref{ch:rag} 我们就从这套地基出发，看稠密检索（双塔、DPR、难负样本）、
+后期交互（ColBERT）、向量索引工程（HNSW、IVF-PQ）如何改写召回这一层，
+以及 RAG 如何把「检索」变成生成模型的一部分。如果你还没读过 NLP 基础，可以先跳到 \cref{ch:nlp} 补齐 Transformer 与预训练的部分；
+想了解搜索算法对自然流量获取的影响，可对照 \cref{ch:seo} 与推荐召回的 \cref{ch:recall}。

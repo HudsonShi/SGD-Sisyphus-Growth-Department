@@ -1,0 +1,1448 @@
+\chapter{计算广告：生态与机制设计}
+\label{ch:ad}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 一次广告曝光从用户打开页面到广告渲染完成，中间究竟经过了哪些主体？
+        广告主、代理商、DSP、ADX、SSP、媒体、监测方各自靠什么赚钱，诉求为什么会彼此冲突？
+  \item 100\,ms 的竞价延迟预算是怎么花掉的？为什么 DSP 端的超时率会直接变成媒体的收入损失？
+  \item CPM、CPC、CPA、oCPC、CPT、CPI 这些计费方式之间如何换算？
+        广告主口中的 ROI 与 ROAS 到底差在哪里，为什么两者经常被混用？
+  \item GSP 的定价公式是什么？它为什么不是激励相容的，却又统治了搜索广告二十年？
+        VCG 理论上更优雅，为什么工程上反而很少用？
+  \item 第二价格为什么在 2017 年之后集体转向第一价格？这次转变如何永久改变了出价策略与算法目标？
+  \item 质量分如何同时调节平台收入、广告主成本与用户体验？三方平衡的边界在哪里？
+  \item 三方 Cookie 退场、苹果 ATT、GDPR/CCPA/PIPL 之后，定向能力还剩多少？建模方式要怎么变？
+  \item 品牌广告的效果究竟能不能被证明？geo holdout、PSA、ghost ads 三种增量实验各有什么代价？
+\end{enumerate}
+\end{insight}
+
+上一章我们补齐了数学、统计与工程工具（\cref{ch:math}），也看到了推荐与搜索的排序骨架。
+本章换一个视角：\kw{把广告位当成一种可以被实时定价、被拍卖、被结算的商品}。
+一旦视角这么切换，问题的性质就变了——推荐系统只需要回答「用户喜欢什么」，
+而广告系统必须同时回答「用户喜不喜欢」「广告主划不划算」「平台赚不赚钱」三个问题，
+并且这三个问题的答案会互相影响，因为参与者会\kw{策略性地博弈}。
+
+这正是计算广告被称为「算法与经济学交叉体」的原因：
+机制设计（mechanism design）决定了算法的目标函数长什么样，
+而算法能做到什么程度，又反过来约束了机制可以选择的空间。
+本章讲机制与生态，下一章 \cref{ch:admodel} 讲模型与出价算法实现。
+两边必须合起来读，单看任何一边都会产生严重的误解。
+
+\section{生态图谱：钱在这张图上怎么流动}
+
+\subsection{参与方及其商业模式}
+
+广告生态里出现的角色很多，但可以用一句话概括每一方：\kw{谁手里有流量、谁手里有预算、谁负责把它们撮合起来}。
+撮合这件事之所以需要这么多层，是因为\en{供给}（媒体流量）与\en{需求}（广告主预算）在时间、粒度、
+结算方式、数据口径上全部不对齐：媒体按曝光卖，广告主按成交买；
+媒体一天有几百亿次碎片化曝光，广告主只有一笔年度预算和若干个活动目标。
+中介层做的就是\kw{把不对齐的两端翻译成同一门语言}。
+
+\begin{table}[htbp]
+\centering
+\caption{广告生态参与方：角色、收入模式与核心诉求}
+\label{tab:ad-players}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{2.4cm} L{3.4cm} Y}
+\toprule
+\tabhead{参与方} & \tabhead{英文} & \tabhead{收入模式} & \tabhead{核心诉求与关键约束} \\
+\midrule
+广告主 & Advertiser & 支出方，不直接产生收入 & 以最低成本获得增量转化；约束是预算、ROI 目标、品牌安全与合规 \\
+\addlinespace
+代理商 & Agency / Trading Desk & 媒介代理费，通常按投放额百分比或服务费计 & 完成客户 KPI 并保住续约；约束是客户多元、素材与账户运营成本高 \\
+\addlinespace
+需求方平台 & DSP & 技术费，占媒体成本的比例，行业常见量级为个位数到二十几个百分点 & 用算法提升出价效率与赢标率；约束是延迟、数据可用性、预算平滑 \\
+\addlinespace
+广告交易平台 & ADX / Exchange & 交易手续费，即撮合抽成 & 同时做大成交量与买方数量，避免被单一买方绑定；约束是流动性 \\
+\addlinespace
+供给方平台 & SSP / 聚合 & 分成，即买方支付价与媒体到手价之间的差额 & 抬高媒体收益并保护品牌环境；约束是要给媒体可比的收益证明 \\
+\addlinespace
+媒体 / 应用 & Publisher / App & 广告库存变现，自有销售加程序化 & 单位流量收益最大化且不伤害留存；约束是体验、广告密度与政策 \\
+\addlinespace
+数据方 & DMP / Data Provider & 数据授权费、按调用计费 & 提供人群标签与相似人群扩展；约束是隐私合规与标签衰减 \\
+\addlinespace
+监测与验证 & Measurement / Verification & 按曝光或按项目计费 & 提供第三方可信的可见性、无效流量与转化归因；约束是不能既当运动员又当裁判 \\
+\addlinespace
+归因平台 & MMP / Attribution & 按安装或按激活计费 & 给出跨渠道的归因口径；约束是各平台自报口径无法直接相加 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[为什么「中介层」不会被取消]
+每次行业出现透明化浪潮，都会有人预言 DSP 与代理商将被去中间化。这件事从来没有真正发生过，
+原因是中介层解决的不是「信息不对称」这一件事，而是三件结构性工作：
+\textbf{(1) 风险承接}——广告主不愿意为不确定的曝光预付大额预算，DSP 与媒体愿意承担这个价差风险；
+\textbf{(2) 规模化运营}——一个广告主可能同时管理几十个账户、上千条素材、几百个受众包，
+这套运营密度不是品牌方市场部天然具备的能力；
+\textbf{(3) 口径翻译}——把媒体的曝光语言、平台的转化语言、财务的收付实现制语言对齐成一张报表。
+这三件事里只有第一件会被算法部分替代，后两件随着渠道碎片化反而更难。
+所以正确的预期不是「中介消失」，而是「中介的利润来源从信息差迁移到效率与合规能力」。
+\end{insight}
+
+\subsection{生态关系的结构}
+
+把上面的角色画成图，可以看到流量（请求）与预算（付款）是两条方向相反的流，
+而数据（信号）沿着第三条路径回流——\kw{回流的信号质量决定了整个系统的效率上限}。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  actor/.style={draw=NavyDeep, fill=BoxBG, rounded corners=2pt, minimum height=9mm,
+                text width=2.5cm, inner sep=4pt},
+  mid/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=9mm,
+              text width=2.5cm, inner sep=4pt},
+  side/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=9mm,
+               text width=2.5cm, inner sep=4pt}
+]
+\node[actor] (adv) at (0,0) {广告主\\预算与转化目标};
+\node[actor] (agc) at (0,-1.9) {代理商 / 投放团队\\账户与素材运营};
+\node[mid]   (dsp) at (3.4,-2.9) {DSP\\出价与预算分配};
+\node[mid]   (adx) at (7.0,-2.9) {ADX\\撮合与结算};
+\node[mid]   (ssp) at (10.6,-2.9) {SSP / 聚合\\库存与底价};
+\node[actor] (pub) at (14.0,-1.9) {媒体 / App\\库存与用户体验};
+\node[actor] (usr) at (14.0,0)   {用户\\注意力与隐私};
+\node[side]  (dmp) at (3.4,-5.4) {数据方 / DMP\\人群与相似扩展};
+\node[side]  (mea) at (10.6,-5.4) {监测 / MMP\\可见性与归因};
+
+\draw[-{Stealth}, thick, SlateGray] (adv) -- (agc) node[midway, left=2pt] {预算};
+\draw[-{Stealth}, thick, SlateGray] (agc) -- (dsp);
+\draw[-{Stealth}, thick, SlateGray] (dsp) -- (adx) node[midway, above=1pt] {出价};
+\draw[-{Stealth}, thick, SlateGray] (adx) -- (ssp) node[midway, above=1pt] {请求};
+\draw[-{Stealth}, thick, SlateGray] (ssp) -- (pub);
+\draw[-{Stealth}, thick, SlateGray] (pub) -- (usr);
+
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] (usr.south) -- ++(0,-0.55) -| (pub.north);
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] (pub.south) -- (ssp.north)
+  node[midway, right=2pt, text width=1.4cm] {曝光机会};
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] (ssp.south) -- (mea.north);
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] (mea.west) -- (dmp.east) node[midway, above=1pt] {归因信号};
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] (dmp.north) -- (dsp.south) node[midway, right=2pt] {人群};
+\draw[-{Stealth}, thick, NavyMid] (dsp.north) -- (agc.south) node[midway, right=2pt] {报表};
+\end{tikzpicture}
+\caption{广告生态的参与者与三条流向：预算向右下、曝光机会向左上、数据信号回流}
+\label{fig:ad-eco}
+\end{figure}
+
+\cref{fig:ad-eco} 里有三条值得单独记住的流：
+
+\begin{itemize}
+  \item \textbf{预算流（实线向右）}：从广告主流向媒体，每一层抽取自己的费用。
+        这意味着\kw{媒体实际到手价永远小于广告主实际支付价}，两者的差额叫技术成本或中介成本。
+        广告主看到的「媒体花费」与媒体看到的「广告收入」通常存在明显差额，
+        量级取决于链路层数与是否自建 DSP，这是很多归因对不上的第一个原因。
+  \item \textbf{流量流（虚线向左）}：从媒体的一次页面加载，逐层包装成一次竞价请求。
+        每经过一层，信息都会衰减：SSP 可能只透传部分字段，ADX 可能对多家 DSP 广播同一请求，
+        最终 DSP 看到的用户标识往往是平台化、匿名化甚至被截断的。
+        \kw{DSP 对用户的理解深度，几乎全部被这条链路的透传程度所限制}。
+  \item \textbf{数据流（虚线回流）}：从监测方与媒体回到 DSP 与广告主，形成闭环。
+        这条流的质量决定了下一轮的预估精度。它也是最受隐私政策冲击的一条：
+        三方 Cookie 退场、ATT 弹窗、国内个人信息保护法（PIPL）实施，
+        本质上都是在削减这条回流路径的带宽。
+\end{itemize}
+
+\begin{pitfall}[把「平台报表」当成财务真相]
+\textbf{现象}：四个渠道的报表 ROAS 都大于盈亏平衡点，加总后却发现整体亏钱。
+\textbf{根因}：各平台的转化归属是\kw{各自独立归因}的——同一笔订单可能被搜索、信息流、邮件各记一次；
+同时平台报表里的「收入」通常是下单金额而非实际收款，未扣退款、未扣履约成本、未扣税。
+\textbf{排查方法}：（1）在数据仓库里建立\kw{单一转化事实表}，订单号全局唯一，
+按「首次触点 / 末次触点 / 数据驱动」同时算出三套归因结果做区间估计，而不是取某一个数当真；
+（2）把平台报表、MMP 报表、内部订单表三者按天对账，任何一天差异超过阈值都要找平台对接人核对。
+\textbf{结论}：跨渠道的报表数字\kw{只能用于横向比较趋势，不能直接相加}；
+能相加的只有你自己的订单事实表。
+\end{pitfall}
+
+\section{RTB 实时链路与 100\,ms 延迟预算}
+
+\subsection{从一次页面加载到一次曝光}
+
+\term{实时竞价}{Real-Time Bidding, RTB} 是程序化广告的主流交易方式：
+媒体在页面渲染前，把这次曝光机会通过 ADX 广播给多家 DSP，
+各 DSP 在几十毫秒内决定是否出价、出多少钱，最高价者获胜，
+获胜的广告素材必须在用户看到广告位之前的瞬间返回并渲染完成。
+整个过程对用户不可见，但它是一条串行链路，任何一环超时都会导致\kw{广告位空置}（媒体损失收入）
+或\kw{页面留白}（用户体验下降）。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\tiny, align=center},
+  stage/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=8mm,
+                text width=2.15cm, inner sep=3pt},
+  late/.style={draw=CrimsonDeep, fill=white, rounded corners=2pt, minimum height=8mm,
+               text width=2.15cm, inner sep=3pt}
+]
+\node[stage] (s1) at (0,0)     {1. 用户打开页面\\媒体准备广告位};
+\node[stage] (s2) at (2.65,0)  {2. 媒体发请求\\SSP 包装库存};
+\node[stage] (s3) at (5.30,0)  {3. ADX 广播\\多家 DSP 收请求};
+\node[stage] (s4) at (7.95,0)  {4. DSP 预估\\CTR/CVR 与出价};
+\node[stage] (s5) at (10.60,0) {5. ADX 拍卖\\定价与去重};
+\node[stage] (s6) at (13.25,0) {6. 素材返回\\渲染与可见性};
+\node[late]  (s7) at (13.25,-2.4) {7. 计费与监测\\曝光/点击回传};
+\node[late]  (s8) at (7.95,-2.4)  {8. 归因与结算\\转化匹配};
+
+\foreach \x/\y in {s1/s2,s2/s3,s3/s4,s4/s5,s5/s6} \draw[-{Stealth}, thick, SlateGray] (\x) -- (\y);
+\draw[-{Stealth}, thick, SlateGray] (s6) -- (s7);
+\draw[-{Stealth}, thick, SlateGray] (s7) -- (s8);
+\draw[-{Stealth}, thick, VioletDeep, dashed] (s8.west) -- ++(-1.2,0) |- (s4.south)
+  node[midway, left=2pt, text width=1.6cm] {训练样本};
+
+\node[draw=AmberDeep, fill=BoxBGAlt, rounded corners=2pt, inner sep=4pt,
+      text width=15.4cm, font=\sffamily\tiny, align=left] at (6.6,-4.3)
+  {\textbf{延迟预算（示范量级，实际以各平台工程文档为准）}：
+   第 1--2 步由媒体与 SSP 承担；第 3--5 步是硬实时区，DSP 端通常只有 50--80\,ms 的总预算；
+   第 6 步受网络与素材体积影响，是「已中标但未渲染」的高发区；
+   第 7--8 步可以异步完成，但归因延迟会直接影响回收模型的时效。};
+\end{tikzpicture}
+\caption{RTB 实时竞价链路与延迟预算分配}
+\label{fig:rtb-timeline}
+\end{figure}
+
+\subsection{延迟预算的分解与超时的经济代价}
+
+延迟预算通常不是「一共 100\,ms」，而是每个环节各自拿到一个远小于表面数字的配额。
+原因是链路串行，且每一环都有方差：$\Prob(T \le 100\,\text{ms})$ 取决于各环节延迟分布的形状，
+而不是均值之和。常见的分解方式（示范量级）如表 \ref{tab:rtb-latency}。
+
+\begin{table}[htbp]
+\centering
+\caption{RTB 各环节延迟预算与超时后果（示范量级）}
+\label{tab:rtb-latency}
+\small
+\begin{tabularx}{\textwidth}{L{2.9cm} L{1.9cm} L{3.4cm} Y}
+\toprule
+\tabhead{环节} & \tabhead{典型预算} & \tabhead{主要耗时来源} & \tabhead{超时后果} \\
+\midrule
+媒体页面准备 & 10--20\,ms & 前端容器初始化、标识同步 & 广告位不上报请求，直接空置 \\
+\addlinespace
+SSP/ADX 包装与广播 & 5--15\,ms & 库存字段拼装、向多方并行扇出 & 买方数量减少，成交价下降 \\
+\addlinespace
+DSP 出价 & 50--80\,ms & 特征拉取、模型推理、预算检查、数据方调用 & 超时即视为放弃出价 \\
+\addlinespace
+物料与创意渲染 & 50--200\,ms & CDN 带宽、素材体积、第三方脚本 & 中标但未渲染，形成无可见曝光 \\
+\addlinespace
+监测回传 & 异步 & 曝光打点、无效流量校验 & 计费与报表延迟，争议增加 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{formulacard}[超时率的经济代价]
+设某 DSP 在高价值库存上的请求量为 $N$，中标价均值为 $\bar{b}$，超时率为 $\eta$，
+则每次超时事件对 DSP 的损失近似为一次「本可获胜的赢标」的期望毛利：
+\begin{equation}
+\text{Loss} \;\approx\; \eta \cdot N \cdot (V - \bar{b}) ,
+\label{eq:timeout}
+\end{equation}
+其中 $V$ 是该次曝光对广告主的价值，按其目标转化的期望收益折算。
+反向看媒体侧：买方超时会让 ADX 的竞争度下降，
+在第二价格机制下这会直接降低结算价——
+\kw{一个 DSP 拖慢 20\,ms，损失的不只是它自己，而是整个交易市场的价格水平}。
+\end{formulacard}
+
+\begin{toolbox}[把 DSP 端延迟压进预算的实操清单]
+\begin{enumerate}
+  \item \textbf{先量再优化}：把 DSP 内部耗时按「特征获取 / 模型推理 / 预算与频控检查 / 网络出口」四段打点，
+        分别记录 $p_{50}$ 与 $p_{99}$，因为超时几乎全部发生在长尾而不是均值。
+  \item \textbf{特征分层}：把特征分为\kw{请求内自带}（无需查）、\kw{本地缓存}（内存 KV，通常 1\,ms 以内）、
+        \kw{远程实时}（跨机房，几十毫秒）三层；只允许前两层进入硬实时路径，
+        远程特征一律走「可用则用、不可用则降级」的旁路，绝不阻塞出价。
+  \item \textbf{预算与频控前置}：把绝大多数必然不出价的请求在特征计算之前就剪掉
+        （黑名单、频控已满、预算耗尽、地域政策），用小成本过滤换取大成本节省。
+  \item \textbf{模型分档降级}：准备「完整模型 / 精简模型 / 规则兜底」三档，
+        按剩余时间预算动态选择；宁可出一个粗糙但有效的价，也不要不出价。
+  \item \textbf{异步化一切非必需项}：监测打点、日志落盘、数据方回调全部异步，
+        主链路只保留「必须在本毫秒内知道」的计算。
+  \item \textbf{压测按 $p_{99.9}$ 而不是均值}：模拟特征存储抖动、下游超时、
+        网络重传等故障注入场景，观察超时率曲线的拐点流量。
+\end{enumerate}
+\end{toolbox}
+
+\begin{casebox}[案例：程序化广告的早期实验与 RTB 的经济学起点]
+微软研究院 2012 年发表的 RTB 预测实验（\cite{perlich2012rtb}）系统报告了
+「在真实竞价环境中，用机器学习预测点击率来决定是否出价」的完整流程与效果。
+它的价值不在于某个具体模型，而在于确立了此后十几年不变的三条工程范式：
+\textbf{(1) 出价决策与预估模型的解耦}——模型只输出概率，出价由「概率乘价值」的独立模块决定，
+使两者可以分别迭代与验证；
+\textbf{(2) 用成交价而非报价看待收益}——因为竞价是选择性的（selective labeling），
+只有赢得的曝光才有观测数据，训练样本天然存在选择性偏差；
+\textbf{(3) 延迟是硬约束而非软目标}——所有模型设计从第一天起就必须在毫秒预算内完成。
+把这三条与 \cref{ch:admodel} 的 oCPC 与预算平滑放在一起看，
+会发现今天主流系统的骨架在那时就已经确定，后面的进步主要来自特征、算力与机制细节。
+\end{casebox}
+
+\section{计费方式与换算：广告世界的汇率}
+
+\subsection{八种计费方式与它们的适用场景}
+
+计费方式（pricing model）表面上只是「按什么收费」，实际上它决定了\kw{风险由谁承担}。
+媒体希望按曝光收费（CPM），因为曝光最可控；
+广告主希望按成交收费（CPA），因为成交才产生收入；
+中间的每一种计费方式，都是在两者之间分配风险与收益的折中。
+
+\begin{table}[htbp]
+\centering
+\caption{常见计费方式：口径、风险归属与适用场景}
+\label{tab:pricing-models}
+\small
+\begin{tabularx}{\textwidth}{L{1.6cm} L{3.4cm} L{2.4cm} Y}
+\toprule
+\tabhead{计费} & \tabhead{全称与含义} & \tabhead{风险归属} & \tabhead{典型场景与注意点} \\
+\midrule
+CPM & Cost per Mille，千次展示成本 & 媒体承担点击与转化风险 & 品牌曝光、开屏、视频贴片；出价单位即千次成本 \\
+\addlinespace
+CPC & Cost per Click，单次点击成本 & 广告主承担点击后的转化风险 & 搜索与信息流最常用；需防有点击无转化 \\
+\addlinespace
+CPA & Cost per Action，单次转化成本 & 媒体或平台承担转化风险 & 安装、留资、成交；平台通常只认自归因的转化 \\
+\addlinespace
+CPT & Cost per Time，按时段买断 & 广告主承担全部风险 & 开屏、首页焦点图、大促；价格由谈判而非竞价决定 \\
+\addlinespace
+CPI & Cost per Install，单次安装成本 & 渠道承担部分转化风险 & 移动应用推广；需与留存、付费率联合考核 \\
+\addlinespace
+oCPM & optimized CPM，优化后的千次成本 & 平台以转化目标优化，按展示计费 & 素材密集型投放；本质是按 CPM 结算的智能出价 \\
+\addlinespace
+oCPC & optimized CPC，优化后的点击成本 & 平台以转化目标优化，按点击计费 & 搜索与信息流主流形态；超成本赔付是常见商业条款 \\
+\addlinespace
+oCPA & optimized CPA，优化后的转化成本 & 平台以转化目标优化，按转化计费 & 强效果导向；对广告主的转化信号质量要求最高 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[oCPX 的本质：把「不愿承担的风险」外包给算法]
+CPC 与 CPM 有一个共同特点：\kw{广告主能直接观测到计费事件}（点击、曝光），
+因此可以自己控制成本；而转化事件只有广告主自己知道，
+平台想按转化收费就必须依赖广告主回传的转化信号。
+oCPX 家族做的事是把「按转化优化」与「按可控事件计费」拆开：
+平台用转化目标来优化出价，但结算仍然按曝光或点击，
+于是平台不用承担全部转化风险，广告主又得到了接近 CPA 的效果。
+这个设计的隐含代价是：\kw{平台的行为高度依赖回传信号的质量与延迟}。
+信号丢一半，oCPC 的优化就会退化成一个普通的点击模型加上不准确的假设——
+这就是为什么素材与落地页的埋点质量，往往比出价技巧更决定投放天花板。
+\end{insight}
+
+\subsection{eCPM：跨计费方式的统一货币}
+
+不同计费方式的出价无法直接比较，必须先折算成\term{千次展示期望收益}{effective CPM}。
+这是全章最重要的一个换算，几乎所有广告排序系统的第一行代码都在算它。
+
+\begin{formulacard}[eCPM 的三种形式]
+按曝光计费时，eCPM 就是出价本身：
+\begin{equation}
+\text{eCPM}_{\text{CPM}} = b_{\text{CPM}} .
+\label{eq:ecpm-cpm}
+\end{equation}
+按点击计费时，需要乘以预估点击率：
+\begin{equation}
+\text{eCPM}_{\text{CPC}} = 1000 \times b_{\text{CPC}} \times \CTR(u, a, \text{ctx}) .
+\label{eq:ecpm-cpc}
+\end{equation}
+按转化计费时，需要再乘以预估转化率：
+\begin{equation}
+\text{eCPM}_{\text{CPA}} = 1000 \times b_{\text{CPA}} \times \CTR(u, a, \text{ctx}) \times \CVR(u, a, \text{ctx}) .
+\label{eq:ecpm-cpa}
+\end{equation}
+三式的统一写法是「千次乘上结算事件发生的概率再乘上该事件的价格」，
+差别只在事件链的长度。
+\end{formulacard}
+
+由 \cref{eq:ecpm-cpc,eq:ecpm-cpa} 可以立刻得到反向换算，
+也就是广告主与投放团队每天都要报的那几个数字：
+
+\begin{equation}
+\CPC = \frac{b_{\text{CPM}}}{1000 \cdot \CTR},
+\qquad
+\CPA = \frac{b_{\text{CPM}}}{1000 \cdot \CTR \cdot \CVR},
+\qquad
+b_{\text{CPM}} = 1000 \cdot \CTR \cdot \CPC .
+\label{eq:cpc-conv}
+\end{equation}
+
+为避免每次都要重新推导，工程上统一采用「以 eCPM 为中间量」的两步换算法：
+
+\begin{equation}
+\text{eCPM} = f(b) \;\; \text{（按计费方式折算）},
+\qquad
+\CPC = \frac{\text{eCPM}}{1000 \cdot \CTR},
+\qquad
+\CPA = \frac{\text{eCPM}}{1000 \cdot \CTR \cdot \CVR} .
+\label{eq:conv-two-step}
+\end{equation}
+
+\begin{example}[一次具体的换算]
+某信息流广告位的一次展示，广告主按 CPC 出价 $b_{\text{CPC}} = 2.0$ 元，
+系统预估该用户的点击率 $\CTR = 1.5\%$，点击后转化率 $\CVR = 4\%$，客单价 $\AOV = 200$ 元，
+广告主的转化成本目标为 $\CPA = 20$ 元。则：
+\begin{itemize}
+  \item $\text{eCPM}_{\text{CPC}} = 1000 \times 2.0 \times 0.015 = 30$ 元；
+  \item 若改按 CPA 出价且目标 $20$ 元，则 $\text{eCPM}_{\text{CPA}} = 1000 \times 20 \times 0.015 \times 0.04 = 12$ 元；
+  \item 由于 $30 > 12$，\textbf{按 CPC 出价会比按 CPA 出价更激进}——
+        因为 CPC 出价隐含的 CPA 是 $2.0 / 0.04 = 50$ 元，远高于广告主声称能接受的 20 元；
+  \item 一次展示的真实期望收入是 $200 \times 1.5\% \times 4\% = 0.12$ 元，
+        若要覆盖 20 元的 CPA 目标，需要 $\CTR \times \CVR \ge 20/200 = 10\%$，
+        而当前只有 $0.06\%$，相差约两个数量级。
+\end{itemize}
+这组数字说明一个常见现象：\kw{同一个广告主，在不同计费方式下愿意支付的价格可以差好几倍}，
+因为它们对转化率的隐含假设不同，而排序系统只看得到出价，看不到背后的假设。
+\end{example}
+
+\begin{pitfall}[把 eCPM 排序当成最优分配]
+\textbf{现象}：系统严格按 eCPM 排序，短期平台收入上涨，两个月后广告主流失、大盘收入下滑。
+\textbf{根因}：eCPM 是\kw{期望收益的点估计}，它忽略了三件事：
+（1）\textbf{预估误差的方向性}——头部广告主样本多、预估准，长尾广告主样本少、容易高估，
+按 eCPM 排序会把资源系统性倾斜给「预估不准的乐观者」；
+（2）\textbf{质量的长期外部性}——低质素材短期点击率高，但会降低用户对广告位的信任，
+抬高后续所有广告主的获客成本；
+（3）\textbf{预算与生态约束}——单个广告主吃满流量会破坏广告主结构的多样性，
+使平台在需求波动时缺少可替代的买方。
+\textbf{排查方法}：把「纯 eCPM 排序」与「加入质量分、多样性与平滑后的排序」做长期实验，
+至少覆盖 4--8 周的完整转化周期，重点看\kw{广告后负反馈率}、\kw{头部广告主占比}、
+\kw{新广告主冷启动成功率}三个护栏指标。
+\textbf{结论}：eCPM 是排序的必要条件，不是充分条件；
+把它当作唯一目标，等于把机制设计问题降维成了一次静态优化。
+\end{pitfall}
+
+\subsection{广告主视角：ROAS、ROI 与单位经济模型}
+
+平台算 eCPM，广告主算的是完全不同的东西。最常被混用的两个指标是 ROAS 与 ROI：
+
+\begin{formulacard}[ROAS 与 ROI 的区别]
+\term{广告支出回报率}{Return on Ad Spend} 只衡量广告收入与广告花费之比：
+\begin{equation}
+\ROAS = \frac{\text{广告带来的收入}}{\text{广告花费}} .
+\label{eq:roas}
+\end{equation}
+\term{投资回报率}{Return on Investment} 衡量的是扣掉全部成本后的净利润与总投入之比：
+\begin{equation}
+\ROI = \frac{\GMV \cdot m - \text{Cost}}{\text{Cost}} ,
+\label{eq:roi}
+\end{equation}
+其中 $m$ 是毛利率，已扣除货值、物流、平台佣金、支付手续费等变动成本，$\text{Cost}$ 是全部投入，
+即广告花费加其他投入。二者之间的换算关系是
+\begin{equation}
+\ROI = \ROAS \cdot m - 1 .
+\label{eq:roi-roas}
+\end{equation}
+\cref{eq:roi-roas} 是最容易被忽略、也最容易造成误判的一个式子。
+\end{formulacard}
+
+\cref{eq:roi-roas} 的含义非常实际：\kw{ROAS 的盈亏平衡点完全由毛利率决定}。
+若毛利率 $m = 30\%$，则 ROAS 必须大于 $1/0.3 \approx 3.33$ 才不亏钱；
+若 $m = 60\%$，典型的高毛利美妆或虚拟商品即属此列，ROAS 大于 $1.67$ 即可盈利。
+这解释了一个行业现象：不同品类的投手对「ROAS 多少算好」的判断差异极大，
+而真正的判据只有一个——\kw{你自己的毛利率}。
+
+\begin{table}[htbp]
+\centering
+\caption{不同毛利率下的 ROAS 盈亏平衡点与含义（示范计算）}
+\label{tab:roas-breakeven}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{2.4cm} L{2.6cm} Y}
+\toprule
+\tabhead{毛利率 $m$} & \tabhead{盈亏平衡 ROAS} & \tabhead{ROAS 为 3 时的 ROI} & \tabhead{典型品类（量级参考）} \\
+\midrule
+15\% & $6.67$ & $-0.55$（严重亏损） & 低毛利标准化配件、白牌日用 \\
+\addlinespace
+25\% & $4.00$ & $-0.25$（亏损） & 常规家居、部分服饰 \\
+\addlinespace
+40\% & $2.50$ & $+0.20$ & 品牌服饰、宠物用品 \\
+\addlinespace
+60\% & $1.67$ & $+0.80$ & 美妆个护、保健品 \\
+\addlinespace
+80\% & $1.25$ & $+1.40$ & 虚拟商品、软件订阅、部分数字服务 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[用 LTV/CAC 看长期，用 ROAS 看单次]
+ROAS 与 ROI 都是\kw{回溯性}指标：它们回答「已经花掉的钱赚回来了吗」，
+不能回答「这个用户值不值得获取」。判断后者需要
+\begin{equation}
+\frac{\LTV}{\CAC} \;\ge\; 3 \quad \text{（经验阈值，非定律）},
+\label{eq:ltv-cac}
+\end{equation}
+其中 $\LTV$ 是用户全生命周期的毛利润贡献（注意用毛利而非流水），
+$\CAC$ 是获取该用户的全部成本（含广告、达人、折扣、赠品、支付手续费）。
+分母用流水、分子用毛利的算法会系统性高估健康度。
+需要提醒的是，$3$ 这个数字来自订阅制业务的行业经验，
+对一次性购买的低频品类完全不适用——那类业务的正确读法是
+「首单回本 + 复购期利润率」，而不是套用 $\LTV/\CAC$。
+\end{insight}
+
+\section{拍卖机制：从第一价格到 GSP 与 VCG}
+
+\subsection{第一价格与第二价格：谁该报真话}
+
+广告位的分配本质上是一个\term{拍卖}{Auction}问题。最基础的两种形式是：
+
+\begin{itemize}
+  \item \textbf{第一价格拍卖}（first-price）：密封报价，最高者获胜，并按\kw{自己的出价}支付；
+  \item \textbf{第二价格拍卖}（second-price，又称 Vickrey 拍卖）：密封报价，最高者获胜，
+        但按\kw{第二高的出价}支付。
+\end{itemize}
+
+第二价格拍卖有一个极为漂亮的结论：\kw{如实报价是占优策略}。
+直觉上的证明只有两步：若你获胜，支付额由别人的出价决定，与你的报价无关，所以报高一点不会多付钱，
+只会增加获胜概率；若你落败，说明有人出价高于你的真实价值，
+此时即使你调整报价能赢，支付额也会高于价值，赢反而亏。
+于是「报真实价值」既不会让你错失有利可图的胜利，也不会让你落入亏损的胜利。
+这个结论（\cite{vickrey1961counterspeculation}）是整个广告机制设计的起点。
+
+\begin{formulacard}[拍卖形式的等价关系（单物品、独立私有价值）]
+对单个不可分割的物品、估值独立同分布、风险中性的竞买人：
+\begin{equation}
+\E[\text{收益}_{\text{第一价格}}] = \E[\text{收益}_{\text{第二价格}}] ,
+\label{eq:fp-sp-equiv}
+\end{equation}
+这是收益等价定理的一个特例。但两者对竞买人的\kw{认知负担}完全不同：
+第二价格下，竞买人只需知道自己的估值；
+第一价格下，竞买人必须\kw{估计竞争对手的分布}才能决定出价，
+这直接导致了后文要讲的出价着色（bidding shading）问题。
+\end{formulacard}
+
+\subsection{GSP：搜索广告的定价规则}
+
+真实的搜索广告拍卖与上面的单物品模型有三点关键差异：
+存在\kw{多个位置}（一般 3--4 个），位置越靠上点击率越高；
+广告主可以设定\kw{预算}与\kw{出价上限}，因此不是单次独立决策；
+拍卖会\kw{重复发生}，广告主之间形成长期博弈。
+
+Google 采用的机制是\term{广义第二价格拍卖}{Generalized Second Price, GSP}：
+按「出价乘以质量分」排序，广告主 $i$ 若被分配到位置 $k$，
+则由排在其后一位的广告主的分数决定其支付额。设位置 $k$ 的点击率为 $\alpha_k$（$\alpha_1 > \alpha_2 > \cdots$），
+质量分为 $q_i$，出价为 $b_i$，则排序分数与支付额为：
+
+\begin{formulacard}[GSP 的排序与定价]
+排序分数为
+\begin{equation}
+s_i = q_i \cdot b_i ,
+\label{eq:gsp-rank}
+\end{equation}
+广告主 $i$ 获得第 $k$ 个位置时，其单次点击支付额为
+\begin{equation}
+p_i = \frac{q_{k+1} \cdot b_{k+1}}{q_i} ,
+\label{eq:gsp-price}
+\end{equation}
+其中 $q_{k+1}$ 与 $b_{k+1}$ 是排在其后一位的广告主的质量分与出价。
+若 $i$ 被分配在最后一个位置，则 $p_i$ 取平台设定的保留价（见 \cref{eq:reserve}）。
+等价地，按\kw{排序分数}支付：$p_i = s_{k+1} / q_i$。
+广告主的期望收益为
+\begin{equation}
+u_i(k) = \alpha_k \cdot (v_i - p_i) ,
+\label{eq:gsp-utility}
+\end{equation}
+其中 $v_i$ 是广告主对单次点击的真实估值。
+\end{formulacard}
+
+\begin{pitfall}[GSP 的定价公式极易记错]
+最常见的错误是把 \cref{eq:gsp-price} 写成 $p_i = b_{k+1}$（即「第二名的出价」）。
+这在\kw{没有质量分}的特殊情形下才成立。一旦引入质量分，
+支付额必须\kw{按质量分归一化}：质量分高的广告主只需支付更低的点击价格，
+因为它的一次点击对平台更「值钱」。
+第二种常见错误是把排序分数 $s_i = q_i b_i$ 与支付价 $p_i$ 混为一谈——
+前者用于排序，后者用于结算，两者的单位都是「分数除以质量分」。
+在带质量分的系统里做手工核算时，务必写下完整式子再代入数字。
+\end{pitfall}
+
+\subsection{GSP 的纳什均衡性质与它为何不是激励相容的}
+
+GSP 最著名、也最反直觉的性质是：\kw{它没有「如实报价是占优策略」这个性质，
+但它仍然有很好的均衡结构，并且在均衡处的收益不低于 VCG}。
+这两条结论来自 Edelman、Ostrovsky 与 Schwarz 的经典分析（\cite{edelman2007gsp}）。
+
+先看\kw{为什么不是激励相容}。设两个位置、三个广告主，质量分均为 $1$，
+估值分别为 $v_1 = 10$、$v_2 = 4$、$v_3 = 2$（单位：元/点击），
+位置点击率 $\alpha_1 = 1.0$、$\alpha_2 = 0.4$。若三人都如实报价，
+广告主 1 得位置 1，支付 $p_1 = b_2 = 4$，效用为 $1.0 \times (10 - 4) = 6$。
+现在考虑广告主 1 \kw{策略性压低}报价到 $3.9$：
+它仍然排在第一位（因为 $3.9 > 4$ 不成立——降到 3.9 就会掉到位置 2），
+得位置 2，支付 $p = 2$，效用为 $0.4 \times (10 - 2) = 3.2$，比 6 更差。
+再考虑它\kw{抬价}到 $11$：位置不变，支付额仍由第二名决定，效用仍为 6。
+所以在这个例子里如实报价确实最优。
+
+但如果参数换一组，结论就会翻转。设 $v_1 = 10$，$\alpha_1 = 1.0$，$\alpha_2 = 0.5$，
+$b_2 = 6$，$b_3 = 5$。如实报价时广告主 1 得位置 1，支付 6，效用 $1.0 \times 4 = 4$。
+若它把报价压到 $5.5$，则排到位置 2（因为 $5.5 < 6$ 但 $> 5$），支付 $5$，
+效用为 $0.5 \times (10 - 5) = 2.5$，还是不如位置 1。
+要让压低报价变得有利，需要位置 2 的效用足够接近位置 1，
+即 $\alpha_2 (v_1 - b_3) > \alpha_1 (v_1 - b_2)$。
+这正是 GSP 均衡的关键条件：\kw{每个广告主都要检验「是否值得主动降到下一个位置」}。
+
+\begin{formulacard}[GSP 局部无套利（纳什）均衡条件]
+设广告主 $i$ 被分配到位置 $k$，令 $s_{k+1}$ 为下一位置的排序分数。
+若 $i$ 想通过降低自己的分数挤到位置 $k+1$ 而获利，则均衡要求
+\begin{equation}
+\alpha_k \left( v_i - \frac{s_{k+1}}{q_i} \right)
+\;\ge\;
+\alpha_{k+1} \left( v_i - \frac{s_{k+2}}{q_i} \right) ,
+\label{eq:gsp-ne}
+\end{equation}
+同时还需满足「向上挤压不划算」的对称条件（把不等号反向，并取相邻的上一个位置）。
+满足 \cref{eq:gsp-ne} 的出价集合称为\kw{局部无套利均衡}（locally envy-free equilibrium）。
+可以证明：在 GSP 的局部无套利均衡处，各广告主的排序与支付\kw{与 VCG 相同}，
+因此两者的收益一致；而平台的收益在 GSP 均衡处\kw{不低于}VCG。
+\end{formulacard}
+
+\begin{insight}[「理论更优」与「工程可用」之间的鸿沟]
+VCG 是激励相容的，按理论应该是更好的机制，为什么 Google 选了 GSP？
+表面理由是历史偶然（GSP 更早被 Overture 采用），
+但深层理由有三个，且都与\kw{算法的可解释性与运营可控性}有关：
+\textbf{(1) 支付额的直觉性}——GSP 下广告主的支付额接近「下一位的分数除以自己的质量分」，
+与「我只要比后面一位多一点就能赢」的心智模型一致；
+VCG 下支付额依赖\kw{所有}其他广告主的报价，广告主很难通过实验反推出规则，
+也就无法建立「提高出价会带来什么后果」的经验。
+\textbf{(2) 对质量分调整的鲁棒性}——平台的 $q_i$ 估计一定存在误差且会频繁调整，
+VCG 的支付额对这些误差的敏感度更高，容易引发「为什么今天贵了一倍」的争议。
+\textbf{(3) 收益与稳定性}——GSP 均衡的收益不低于 VCG，
+既然理论收益没有优势，就没有理由承担 VCG 的解释成本。
+\kw{这个案例的通用教训是：一个机制的「可解释性」本身就是它的一部分价值}，
+任何在真实市场里运行的算法都要为参与者提供可学习、可预期的反馈信号，
+否则参与者会转向规避行为，而不是改进投放效果。
+\end{insight}
+
+\subsection{VCG 与保留价}
+
+\term{VCG 机制}{Vickrey--Clarke--Groves} 的核心思想是「外部性定价」：
+每位参与者支付的价格，等于他的参与给\kw{其他人}造成的总损失。
+对广告位拍卖而言，若广告主 $i$ 占据位置 $k$，则
+
+\begin{formulacard}[VCG 支付]
+设移除 $i$ 后，其余广告主的最优分配使位置 $j$ 由广告主 $\sigma(j)$ 占据，则
+\begin{equation}
+p_i^{\text{VCG}} = \frac{1}{\alpha_k}
+\sum_{j \ge k} \Big( \alpha_j \cdot q_{\sigma(j)} \cdot b_{\sigma(j)}
+- \alpha_{j+1} \cdot q_{\sigma(j+1)} \cdot b_{\sigma(j+1)} \Big) \Big/ q_i ,
+\label{eq:vcg-payment}
+\end{equation}
+其直观含义是：$i$ 的支付等于「没有 $i$ 时其他人获得的总点击价值」减去
+「有 $i$ 时其他人获得的总点击价值」，再按自己的点击率与质量分归一化。
+\kw{VCG 是激励相容且个体理性的}：如实报价是占优策略，
+且参与者的效用非负。代价是计算与沟通成本，以及对质量分误差的敏感性。
+\end{formulacard}
+
+保留价（reserve price）是平台在拍卖中设定的最低成交门槛：低于它的出价直接流拍。
+它的理论依据是 Myerson 的最优拍卖理论（\cite{myerson1981optimal}）：
+若广告主的估值服从分布 $F$（密度 $f$），则平台的最优保留价 $r$ 满足
+
+\begin{formulacard}[Myerson 最优保留价]
+定义虚拟估值
+\begin{equation}
+\phi(v) = v - \frac{1 - F(v)}{f(v)} ,
+\label{eq:virtual-value}
+\end{equation}
+则最优机制只把物品分配给 $\phi(v) \ge 0$ 的竞买人，最优保留价 $r$ 满足
+\begin{equation}
+\phi(r) = 0
+\qquad \Longleftrightarrow \qquad
+r = \frac{1 - F(r)}{f(r)} .
+\label{eq:reserve}
+\end{equation}
+一个可直接使用的特例：若估值服从 $[0, \bar{v}]$ 上的均匀分布，
+则 $r = \bar{v}/2$。这解释了为什么「把底价定在最高可能估值的一半」
+在很多场景下都不是随意的经验之谈。
+\end{formulacard}
+
+\begin{pitfall}[保留价的两类常见误用]
+\textbf{误用一：把保留价当成「想卖多少就定多少」。}
+\cref{eq:reserve} 中 $r$ 是由估值的\kw{分布}决定的，不是由平台的成本或期望决定的。
+把保留价定得过高会大幅提高流拍率：在均匀分布的例子中，
+$r = \bar{v}/2$ 时流拍概率是 50\%，已经把一半库存打掉了；
+若强行定到 $0.8\bar{v}$，流拍率升至 80\%，即使单价提高也补不回总收入，
+同时还给竞争平台送去了需求。
+\textbf{误用二：忽略重复博弈与需求侧的长期反应。}
+广告拍卖每天重复几百万次，广告主的预算与出价策略会随保留价一起调整。
+若保留价的调整频率过高、幅度过大，广告主会感知为「规则不稳定」，
+把预算转移到规则更可预测的渠道。
+\textbf{排查方法}：为保留价建立\kw{收入--流拍率--填充率}的三条曲线并做连续小步实验，
+同时监控「广告主预算留存率」这一滞后指标。保留价是机制参数里最容易在短期优化中伤害长期生态的一个。
+\end{pitfall}
+
+\subsection{第一价格化趋势与出价着色}
+
+从 2017 年前后开始，主流交易平台陆续把第二价格拍卖改为第一价格。
+公开讨论中常见的技术原因是\en{头部竞价}{Header Bidding} 的普及：
+媒体在页面里同时接入多个买方，买方可以看到多方报价信息，
+在这种环境下继续用第二价格会导致买方通过「压低报价」策略性地降低结算价。
+另一个原因是结算透明度——买方长期抱怨不清楚自己为何付出某个价格。
+
+这次转变对算法的影响是结构性的，可以概括为一句话：
+\kw{出价系统从「如实汇报估值」变成了「预测市场并优化报价」}。
+
+\begin{formulacard}[第一价格下的最优着色因子]
+设你面对 $n$ 个独立同分布的竞争对手，他们的估值服从分布 $F$（密度 $f$）。
+在第一价格拍卖的对称贝叶斯纳什均衡中，估值 $v$ 的最优出价为
+\begin{equation}
+b^*(v) = v - \frac{\int_{0}^{v} F(x)^{n-1} \,\dd x}{F(v)^{n-1}} ,
+\label{eq:shading}
+\end{equation}
+实践中最常用的是它的一个简化形式：把出价按固定比例折让，
+\begin{equation}
+b = \kappa \cdot v , \qquad \kappa \in (0, 1) ,
+\label{eq:shading-factor}
+\end{equation}
+其中 $\kappa$ 称为\kw{着色因子}（shading factor）。
+$\kappa$ 随竞争密度 $n$ 递减：竞争者越多，越需要压低报价以避免「赢家诅咒」
+——你在第一价格下的支付额就是你的报价，一旦赢标就意味着你的报价高于所有对手，
+这个信息本身说明你的估值可能偏乐观。
+\end{formulacard}
+
+\begin{example}[着色因子的量级直觉]
+考虑一个极简模型：竞争对手估值服从 $[0, 1]$ 上的均匀分布。
+当 $n = 1$ 时，\cref{eq:shading} 给出 $b^*(v) = v/2$，即 $\kappa = 0.5$；
+当 $n = 2$ 时，$b^*(v) = 2v/3$，$\kappa \approx 0.667$；
+当 $n \to \infty$ 时，$\kappa \to 1$，出价趋近真实估值。
+这说明一个反直觉的结论：\kw{竞争越少，越应该大幅压低报价}。
+原因是竞争者少时，你的报价本身就是决定支付额的主要因素；
+相反，在一个有几十家 DSP 争夺的成熟市场里，
+「报价接近估值」反而是合理的，因为你要赢得足够多的量。
+实践中 $\kappa$ 通常按\kw{广告位、地域、时段、受众包}分片在线估计，
+并随市场密度实时更新，这是 \cref{ch:admodel} 中出价模型的核心输出之一。
+\end{example}
+
+\begin{insight}[第一价格化对算法架构的三个连锁影响]
+\textbf{(1) 预估目标从 CTR 扩展到「市场价分布」。}
+第二价格时代，DSP 只需要估准 $\CTR$ 与 $\CVR$；
+第一价格时代，DSP 还必须估计\kw{竞争对手的出价分布}，
+这是一个全新的建模对象，需要日志回传的成交价、赢标率与「若加价是否会赢」的反事实信息。
+\textbf{(2) 反馈信号变得更稀疏、更有偏。}
+只有赢标的曝光有支付记录，落标时的竞争对手报价完全不可见，
+因此必须引入\kw{赢标率模型}（win rate curve）来解耦「出价 $\to$ 赢标概率」
+与「赢标 $\to$ 转化效果」两段，这正是 \cref{ch:admodel} 中出价优化与预算平滑的建模起点。
+\textbf{(3) 冷启动与探索更重要。}
+在第二价格下，如实报价即可获得接近最优的结果，模型差一点影响有限；
+在第一价格下，估值偏差会\kw{直接}变成支付额偏差，
+系统必须主动做小规模的探索性提价来校准赢标率曲线，
+否则会在一个错误的价格水平上长期停留。
+\end{insight}
+
+\section{机制设计要点与三方平衡}
+
+\subsection{激励相容、个体理性与显示原理}
+
+机制设计（mechanism design）是「逆向的博弈论」：
+不是给定规则去分析参与者会怎么做，而是\kw{先给定想要的结果，再反推该设计什么规则}。
+广告系统里需要记住的定义只有几个：
+
+\begin{definition}[激励相容]
+一个机制是\term{激励相容}{Incentive Compatibility, IC}的，
+如果在给定其他参与者策略的前提下，每个参与者\kw{如实报告自己的私有信息}
+（估值、预算、转化目标）都是最优选择。
+占优策略激励相容（DSIC）要求这一点对\kw{任意}其他参与者的策略都成立，
+这是最强的形式；贝叶斯纳什激励相容（BIC）只在估值分布上取期望最优。
+\end{definition}
+
+\begin{definition}[个体理性]
+一个机制满足\term{个体理性}{Individual Rationality, IR}，
+如果参与者在均衡处的期望效用非负，即
+\begin{equation}
+\E\big[ u_i(\text{参与}) \big] \;\ge\; 0 \;\ge\; \E\big[ u_i(\text{不参与}) \big] .
+\label{eq:ir}
+\end{equation}
+不满足 IR 的机制会被参与者的「退出」惩罚：广告主关掉账户，媒体不再供给库存。
+\end{definition}
+
+\begin{definition}[收益等价定理]
+在单物品、独立私有价值、风险中性、估值分布连续且参与者只关心期望收益的设定下，
+\kw{任何}满足配置效率（把物品分给估值最高者）的可行机制，
+其期望收益只取决于配置规则，与支付规则的具体形式无关。
+这正是 \cref{eq:fp-sp-equiv} 的来历。
+\end{definition}
+
+\begin{insight}[显示原理的实际含义]
+\term{显示原理}{Revelation Principle} 说：任何一个机制的均衡结果，
+都可以用一个「让参与者如实报告」的直接机制复现。
+它给工程实践带来的最大启发不是「应该做直接机制」，
+而是\kw{它提供了一个判断标准}：
+如果你的系统里广告主必须靠猜别人的行为来出价，
+那么这个系统在设计上就缺少了 IC，你必须为此付出代价——
+要么广告主自己雇团队做策略优化（社会成本浪费），
+要么广告主系统性出价偏离，导致平台侧的排序信号失真。
+第二价格与 GSP 的取舍，本质上就是在\kw{IC 强度}与\kw{可解释性}之间做权衡。
+\end{insight}
+
+\subsection{质量分：调节收入与体验的旋钮}
+
+\term{质量分}{Quality Score} 是平台在拍卖中给广告打的「非价格权重」。
+它把排序从单纯的「谁出价高谁赢」变成「谁的出价与质量综合最优谁赢」，
+从而在\kw{不牺牲广告主收益的前提下}提升用户体验。
+
+\begin{formulacard}[质量分与实际 CPC 的关系]
+设广告主质量分为 $q$（通常归一化到 $[1, 10]$ 区间），
+则实际单次点击成本近似为
+\begin{equation}
+\CPC_{\text{actual}} = \frac{s_{\text{下一位}}}{q} \cdot \frac{1}{\text{（归一化因子）}} ,
+\label{eq:qs-cpc}
+\end{equation}
+更便于沟通的写法是用「基准 CPC 除以质量分」的简化模型：
+\begin{equation}
+\CPC_{\text{actual}} \;\approx\; \frac{\CPC_{\text{基准}}}{q / q_{\text{基准}}} .
+\label{eq:qs-cpc-simple}
+\end{equation}
+即\kw{质量分翻倍，获得同一位置所需的实际点击成本近似减半}，
+同时排序分数 $s = q \cdot b$ 翻倍，意味着可以用更低的出价拿到更好的位置。
+\end{formulacard}
+
+\begin{casebox}[案例：Google Ads 质量分如何影响实际 CPC（示范计算）]
+Google 官方文档说明，搜索广告的\term{质量分}{Quality Score}主要由三项构成：
+预期点击率、广告相关性、落地页体验（见 \cite{google2024quality}，具体定义与阈值以官方最新文档为准）。
+下面用一个\kw{示范计算}说明它的杠杆有多大，数字为便于口算而设定，不代表真实平台数据。
+
+设两个广告主争夺同一个位置，平台设定的基准质量分为 $q_{\text{基准}} = 5$，
+基准 CPC 为 $2$ 元，下一位的排序分数为 $s_1 = 12$（单位：分数）。
+% 注意：tcolorbox 内部不能放浮动体（会触发 Float(s) lost），
+% 这里用 center + \captionof 产生不浮动的表格，编号与 label 仍正常。
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{L{2.4cm} L{1.8cm} L{2.2cm} L{2.4cm} Y}
+\toprule
+\tabhead{广告主} & \tabhead{出价} & \tabhead{质量分} & \tabhead{排序分数} & \tabhead{实际 CPC} \\
+\midrule
+广告主 A & 1.5 元 & 4 & 6.0 & $2 \times 5/4 = 2.50$ 元 \\
+\addlinespace
+广告主 B & 1.2 元 & 8 & 9.6 & $2 \times 5/8 = 1.25$ 元 \\
+\bottomrule
+\end{tabularx}
+\captionof{table}{质量分对实际 CPC 与排序分数的影响（示范计算）}
+\label{tab:qs-demo}
+\end{center}
+结论很直白：\textbf{广告主 B 的出价比 A 低 20\%，排序分数却高 60\%，实际点击成本只有 A 的一半}。
+对平台而言，B 的广告相关性更高、用户体验更好，同时单位点击的期望收益并不更低。
+这就是质量分作为「旋钮」的价值——它让\kw{提升质量成为广告主的最优策略}，
+而不是靠抬高出价来竞争。
+\textbf{需要提醒的是}：质量分是平台定义的\kw{代理指标}，
+广告主只能观测到它，无法直接验证它的计算过程；
+因此它在实践中既是优化目标，也是争议来源。
+\end{casebox}
+
+\begin{pitfall}[质量分的 Goodhart 化]
+\textbf{现象}：某团队把所有精力投入到「提高质量分」上，标题堆砌关键词、落地页堆砌正文，
+质量分在两周内从 5 涨到 8，但转化率下降、退款率上升，最终 ROI 变差。
+\textbf{根因}：质量分是\kw{由可观测代理指标合成的分数}，
+当它成为唯一的优化目标时，广告主会沿着代理指标与真实质量之间的缝隙优化
+（这正是 Goodhart 定律的经典形态，见 \cite{goodhart1975}）。
+预期点击率可以通过标题党提升，落地页体验可以通过降低页面复杂度或隐藏信息提升，
+但这些改动常常\kw{同时损害}真实转化质量。
+\textbf{排查方法}：（1）把「质量分」与「下游真实指标」放在同一张报表里，
+任何质量分上升但转化率或退款率恶化的组合都要单独审查；
+（2）对素材与落地页做\kw{人工抽检}，抽样比例不必高，但要覆盖所有新素材；
+（3）在实验时同时监控\kw{用户侧负反馈}（返回率、投诉率、广告屏蔽率），
+把它们作为不可妥协的护栏。
+\end{pitfall}
+
+\subsection{三方平衡：平台收入、广告主 ROI 与用户体验}
+
+广告系统的目标不是单目标最大化，而是一个显式的\kw{多目标约束优化}。
+把 \cref{eq:gsp-utility} 的广告主效用、平台收入与用户体验放在一起，可以写成
+
+\begin{equation}
+\max_{\{\text{排序}, \text{定价}\}} \;\;
+\lambda_1 \cdot \underbrace{\sum_k s_{(k)} \alpha_k}_{\text{平台收入}}
++ \lambda_2 \cdot \underbrace{\sum_k \alpha_k (v_{(k)} - p_{(k)})}_{\text{广告主剩余}}
+- \lambda_3 \cdot \underbrace{\Phi(\text{广告密度}, \text{质量})}_{\text{体验损失}} ,
+\label{eq:tri-objective}
+\end{equation}
+
+其中 $\Phi$ 是体验损失函数，通常由广告密度、素材质量、加载延迟与用户负反馈合成，
+$\lambda_1, \lambda_2, \lambda_3$ 是三个目标的相对权重。
+\cref{eq:tri-objective} 有三个工程含义值得强调：
+
+\begin{itemize}
+  \item \textbf{$\lambda_2$ 不能设为零。} 如果平台只最大化自己的短期收入，
+        广告主的 ROI 会跌到盈亏平衡线以下，几个月后预算撤出，平台收入随之崩塌。
+        所以「广告主剩余」是一个\kw{需要被显式保护的量}，而不是自然结果。
+        这就是 \cref{eq:ir} 在广告生态里的具体形态。
+  \item \textbf{$\lambda_3$ 必须用长期指标标定。} 体验损失在短期实验中往往测不出来，
+        因为用户不会立刻卸载 App，而是慢慢减少使用。
+        正确的做法是用\kw{长期留存的代理指标}（会话深度、7 日回访率、自然流量占比）来标定 $\lambda_3$，
+        而不是用单次会话的点击率。
+  \item \textbf{三个目标的权重应当分场景。} 搜索广告里用户意图明确，
+        广告与自然结果的一致性高，可以适当提高 $\lambda_1$；
+        信息流与视频里广告打断体验的代价更大，需要提高 $\lambda_3$；
+        电商站内广告的三方边界又不同——用户本身就来购物，广告密度容忍度更高，
+        但要防止广告挤占自然结果导致的「二价伤害」（用户以为在看推荐，其实在看广告）。
+\end{itemize}
+
+\begin{keypoint}[机制设计的四条实操准则]
+\begin{enumerate}
+  \item \textbf{先定 IC 强度，再选定价规则}：能让广告主如实报价就尽量做到，
+        做不到就提供可学习的反馈信号（清晰的成本报表、稳定的规则），降低其策略成本。
+  \item \textbf{保留价用来「筛选」而不是「榨取」}：它的理论依据是估值分布，
+        过高会同时损失成交量和需求侧信心。
+  \item \textbf{质量分要可解释、可复现、可申诉}：不可解释的分数会转化为广告主的规避行为，
+        最终降低系统的信号质量。
+  \item \textbf{任何单目标优化都要配护栏}：收入、ROI、体验三者必须同时被观测，
+        并至少有一个长期指标参与权重标定。
+\end{enumerate}
+\end{keypoint}
+
+\section{广告产品形态：从搜索到视频}
+
+\subsection{搜索广告：关键词、匹配模式与质量分构成}
+
+搜索广告是意图最明确、单位流量价值最高的形态，因为它承接的是用户\kw{主动表达的需求}。
+它的核心概念是关键词（keyword）与匹配模式（match type）：
+
+\begin{table}[htbp]
+\centering
+\caption{搜索广告的匹配模式：覆盖度与可控性的取舍}
+\label{tab:match-types}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{3.4cm} L{3.0cm} Y}
+\toprule
+\tabhead{匹配模式} & \tabhead{触发条件} & \tabhead{覆盖度} & \tabhead{典型用法与风险} \\
+\midrule
+广泛匹配 & 与关键词语义相关的查询均可触发 & 最高 & 用来探索新需求、跑量；风险是命中不相关查询，浪费预算 \\
+\addlinespace
+短语匹配 & 查询中必须包含关键词或近似变体，词序与修饰受限 & 较高 & 兼顾覆盖与相关；适合有明确核心词的商品 \\
+\addlinespace
+精确匹配 & 查询与关键词语义等价（含近义与拼写变体） & 最低 & 用在高价值转化词上，配合独立预算与出价 \\
+\addlinespace
+否定关键词 & 明确排除某些查询 & 收窄 & 控制无效流量最有效的工具，需持续维护列表 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[关键词结构的实操建议]
+\begin{enumerate}
+  \item \textbf{分层建组}：把「品牌词 / 品类词 / 竞品词 / 长尾词」分成不同广告组，
+        因为它们的转化率与竞争强度差异极大，混在一起会让算法无法给出正确的出价。
+  \item \textbf{否定词先行}：新账户开跑前，先用行业通用否定词表打底
+        （免费、教程、招聘、批发、二手、维修等），再按搜索词报告每周迭代。
+  \item \textbf{搜索词报告是最重要的报表}：至少每周看一次，
+        把高花费低转化的搜索词加入否定词，把高转化的搜索词提为精确匹配。
+  \item \textbf{不要过早使用精确匹配}：精确匹配会限制系统学习，
+        在冷启动阶段通常先用短语匹配收集信号，再逐步收紧。
+  \item \textbf{落地页与关键词必须语义一致}：这是质量分中「广告相关性」与
+        「落地页体验」两项目标的共同要求，也是最容易拿到免费提升的地方。
+  \item \textbf{预算按边际 ROI 分配}：不要平均分配，也不要把预算全押在
+        历史 ROAS 最高的词上——那些词往往已经饱和，边际收益远低于平均。
+\end{enumerate}
+\end{toolbox}
+
+搜索广告的排序分数不只是出价，而是\kw{出价与质量的乘积}。
+把前面几节的式子合并起来，就得到搜索广告最核心的一条公式：
+
+\begin{formulacard}[搜索广告排序分数]
+\begin{equation}
+\text{AdRank}_i = b_i \cdot q_i
+= b_i \cdot \underbrace{g_1(\text{预期点击率}) \cdot g_2(\text{广告相关性}) \cdot g_3(\text{落地页体验})}_{\text{质量分的三项构成}} ,
+\label{eq:adrank}
+\end{equation}
+实际 CPC 由下一位的 AdRank 除以自己的质量分得到，
+并受自己的出价上限与平台保留价约束：
+\begin{equation}
+\CPC_i = \min\Big\{ b_i,\; \max\Big\{ \frac{\text{AdRank}_{i+1}}{q_i} + \varepsilon,\; r \Big\} \Big\} .
+\label{eq:adrank-cpc}
+\end{equation}
+其中 $\varepsilon$ 是极小的增量（使排序稳定），$r$ 是保留价。
+\end{formulacard}
+
+\subsection{信息流、展示与视频广告}
+
+三种形态的差异可以用一句话概括：\kw{用户意图的明确程度递减，素材与定向的作用递增}。
+
+\textbf{信息流广告}（feed / native）嵌入在用户浏览内容的过程中。
+它的关键是\en{原生性}——广告的样式、尺寸、交互方式与自然内容一致，
+因此点击率通常显著高于传统展示位，但\kw{用户对「这是广告」的感知也更模糊}，
+一旦被识破会带来更强的负面情绪。
+信息流的工程特点是素材数量极大、生命周期极短，
+因此系统必须具备\kw{素材冷启动与快速淘汰}能力，
+以及「素材 $\times$ 人群 $\times$ 版位」三维组合的探索机制。
+
+\textbf{展示广告}（display）出现在页面的固定广告位，
+以图片与 HTML5 素材为主，是品牌曝光与再营销（retargeting）的主要形态。
+它的核心指标是可见曝光（viewable impression）与频次控制：
+一个没被用户看到的曝光对广告主没有价值，
+因此行业建立了可见性标准（例如展示广告要求一定比例的像素在视口内持续一定时长，
+具体阈值以 IAB 等标准组织的现行文档为准）。
+\kw{展示广告最常见的浪费不是投错人，而是投在了用户永远看不到的位置}。
+
+\textbf{视频广告}主要在 YouTube 等平台投放，形态与计费方式高度相关，
+下面这张表是投放团队必须记住的：
+
+\begin{table}[htbp]
+\centering
+\caption{主要视频广告形态：时长、可跳过性与计费口径}
+\label{tab:video-formats}
+\small
+\begin{tabularx}{\textwidth}{L{2.6cm} L{2.2cm} L{2.6cm} Y}
+\toprule
+\tabhead{形态} & \tabhead{典型时长} & \tabhead{跳过机制} & \tabhead{计费与适用目标} \\
+\midrule
+可跳过插播 & 无硬性上限，常见 12 秒至数分钟 & 通常 5 秒后可跳过 & 按观看计费（观看达一定时长或与广告等长）；适合深度讲解与转化 \\
+\addlinespace
+不可跳过插播 & 通常 15--20 秒 & 不可跳过 & 按展示计费；适合品牌强曝光，成本较高 \\
+\addlinespace
+Bumper 广告 & 6 秒以内 & 不可跳过 & 按展示计费；用于高频触达与提醒，单价低、频次高 \\
+\addlinespace
+信息流视频 & 随信息流播放 & 可划走 & 按展示或观看计费；素材前 3 秒决定生死 \\
+\addlinespace
+频道内短视频 & 数十秒 & 可划走 & 与内容生态耦合，适合达人合作与自然流量 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[可跳过广告的经济学：把主动权还给用户]
+可跳过插播是视频广告里最精妙的设计之一。
+它把「是否继续观看」的决定权交给用户，看似牺牲了曝光量，
+实际上做了三件事：
+\textbf{(1) 让广告主只为「真实兴趣」付费}——跳过的人不计费，
+广告主的钱花在愿意看的人身上，单位成本的有效性提升；
+\textbf{(2) 给平台创造了质量信号}——跳过率本身就是一个极强的素材质量指标，
+平台可以据此给低质素材加价或降权；
+\textbf{(3) 把竞争压力从「出价」转移到「前 5 秒」}——
+创作者必须在 5 秒内建立相关性，这直接塑造了视频广告的内容范式。
+\kw{它是一个用机制设计解决内容质量问题的经典案例}：
+平台不需要定义「什么是好广告」，只需要设计一个让用户用脚投票的规则。
+\end{insight}
+
+\subsection{电商站内广告与独立 DSP 的差异}
+
+电商平台站内广告（retail media）是近几年增速最快的广告形态，
+它的产品结构通常分为三层：\kw{关键词竞价广告}（用户搜索时展示）、
+\kw{商品推广广告}（在推荐流与商品详情页展示，即「猜你喜欢」里插入的广告位）、
+\kw{品牌广告}（旗舰店、品牌专区、类目冠名等固定资源）。
+它和独立 DSP 的差异是结构性的，直接决定了算法与运营方式的不同：
+
+\begin{table}[htbp]
+\centering
+\caption{电商站内广告与独立 DSP 的六项结构性差异}
+\label{tab:retail-vs-dsp}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{4.0cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{电商站内广告} & \tabhead{独立 DSP / 开放网络} \\
+\midrule
+购买意图 & 用户带着明确的购物意图，意图强度高 & 用户在消费内容，意图弱且需要唤醒 \\
+\addlinespace
+转化链路 & 站内闭环，点击到成交只有几步 & 跳转到站外落地页，链路长、流失多 \\
+\addlinespace
+转化率量级 & 通常显著高于开放网络，电商场景常见量级为数个百分点 & 常见量级在千分之几到百分之几，波动大 \\
+\addlinespace
+数据与信号 & 平台拥有全链路行为数据，归因几乎无歧义 & 依赖 Cookie、SDK 与回传信号，隐私政策冲击大 \\
+\addlinespace
+库存与竞争 & 库存由平台节奏决定，大促期竞价激烈、成本飙升 & 库存来自全网媒体，供给分散、质量参差 \\
+\addlinespace
+优化目标 & 直接优化 GMV 或 ROAS，可与商品、库存、定价联动 & 通常优化转化事件，难以联动供应链 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[站内广告的「自然流量侵蚀」]
+\textbf{现象}：某店铺加大站内广告投入后，总 GMV 只增长 3\%，
+但广告花费增长了 40\%，自然流量的 GMV 同步下降。
+\textbf{根因}：站内广告位常常与自然推荐位\kw{争夺同一个曝光}——
+原本会自然成交的用户，因为看到了自己的广告而点击并计费，
+形成\en{自我竞争}{self-cannibalization}；
+在大促期尤其明显，因为平台会主动提升广告位的权重，
+自然流量的位置被系统性挤出。
+\textbf{排查方法}：（1）用\kw{品牌词与泛词分开统计}的方式，
+把「用户已经在搜你的品牌」带来的广告成交单列，这部分增量最可疑；
+（2）做\kw{小比例的地域或人群关闭实验}（在允许的范围内），
+直接测量「关掉广告后总 GMV 下降多少」，而不是看广告报表的 ROAS；
+（3）监控自然流量 GMV 与广告 GMV 的\kw{相关系数}，
+如果两者长期呈显著负相关，说明主要在做存量重新分配而不是增量。
+\textbf{结论}：站内广告的正确考核口径是\kw{全店总 GMV 的增量}，
+而不是广告报表的 ROAS。
+\end{pitfall}
+
+\section{定向、隐私与合规约束}
+
+\subsection{人群定向的四代演进}
+
+定向能力的演进史，本质上是一条\kw{「信息从哪来」不断被迫更换来源}的历史：
+
+\begin{table}[htbp]
+\centering
+\caption{人群定向的四代演进与各自的信号来源}
+\label{tab:targeting-evolution}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.2cm} L{2.6cm} Y}
+\toprule
+\tabhead{阶段} & \tabhead{信号来源} & \tabhead{代表方法} & \tabhead{优势与局限} \\
+\midrule
+人口属性定向 & 媒体注册信息、自报资料 & 性别、年龄、地域、收入分层 & 合规性好、覆盖广；但区分度弱，转化率提升有限 \\
+\addlinespace
+行为定向 & 三方 Cookie、浏览与点击日志 & 兴趣标签、购物意图分群 & 区分度强；依赖第三方标识，隐私冲击下大面积失效 \\
+\addlinespace
+相似人群扩展 & 种子人群 + 平台内行为 & Lookalike、种子扩展建模 & 冷启动友好；种子质量决定上限，易放大原有偏差 \\
+\addlinespace
+模型定向 & 端上或平台内的第一方特征 & 预估模型直接输出定向分、上下文定向 & 隐私友好、可持续；但完全依赖平台的数据与建模能力 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{标识符退场：Cookie、ATT 与隐私沙盒}
+
+三方 Cookie 的退场不是一次事件，而是一个持续数年的过程，
+其影响可以用「三条链路各自缩短了多少」来衡量：
+
+\begin{itemize}
+  \item \textbf{跨站识别链路}：三方 Cookie 被浏览器限制后，
+        广告主无法在 A 网站识别出「这个用户刚在 B 网站看过某商品」，
+        跨站再营销（retargeting）与频率控制的能力大幅下降。
+  \item \textbf{跨应用识别链路}：苹果的\term{应用跟踪透明度}{App Tracking Transparency, ATT}
+        要求 App 在跨应用追踪前获得用户显式授权。
+        公开报道显示授权率长期处于较低水平，具体数值因地区、品类与弹窗设计而异，
+        这使得 iOS 端的跨应用归因从「默认可用」变成「多数不可用」，
+        行业普遍转向\kw{聚合归因}与\kw{建模归因}（在隐私预算内用模型补全缺失的转化）。
+  \item \textbf{平台内识别链路}：这条链路受影响最小，因为它是第一方数据。
+        这解释了为什么\kw{「围墙花园」的相对优势在隐私时代被放大}——
+        拥有账号体系与站内行为闭环的平台（搜索、社交、电商、视频）
+        能够继续提供高质量定向，而开放网络的 DSP 只能靠上下文信号与聚合模型。
+\end{itemize}
+
+\term{隐私沙盒}{Privacy Sandbox} 是浏览器厂商提出的一套替代方案集合，
+核心思路是\kw{把识别与匹配的工作从「个体标识符」搬到「浏览器内的本地计算或受控聚合 API」}，
+例如用受控的 API 在用户设备上完成兴趣分组或转化归因，
+只向上游暴露聚合结果。它的工程含义是：
+广告系统需要从「按用户 ID 做 join」改写为「按\kw{分组、聚合、加噪}的结果做统计推断」，
+这会同时带来两个后果——\kw{精度下降}（因为分组粒度粗、噪声注入）与
+\kw{方法迁移}（从确定性归因转向概率与增量建模）。
+具体 API 的名称、可用范围与时间表变化频繁，\kw{以各浏览器厂商与平台的最新官方文档为准}。
+
+\subsection{GDPR、CCPA 与 PIPL 的实际限制}
+
+合规条款听起来抽象，但它对系统设计的限制非常具体。下面这张表只列
+\kw{会直接改变工程实现}的那几条：
+
+\begin{table}[htbp]
+\centering
+\caption{三部主要法规对广告系统设计的实际约束（要点，非法律意见）}
+\label{tab:privacy-laws}
+\small
+\begin{tabularx}{\textwidth}{L{1.8cm} L{3.2cm} L{3.6cm} Y}
+\toprule
+\tabhead{法规} & \tabhead{适用与核心原则} & \tabhead{对定向的限制} & \tabhead{工程上的应对} \\
+\midrule
+GDPR & 欧盟境内个人数据处理；合法基础、目的限制、数据最小化、被遗忘权 & 需明确同意才能做个性化广告；敏感数据不得用于定向 & 同意管理平台（CMP）、按同意状态分流、可删除的个人数据映射表 \\
+\addlinespace
+CCPA/CPRA & 加州消费者隐私；知情权、删除权、拒绝出售或共享 & 用户可「拒绝出售/共享」，需提供显著入口 & 支持 Do Not Sell 信号的传播与短路逻辑、下游数据方协议约束 \\
+\addlinespace
+PIPL & 中国境内个人信息处理；告知同意、单独同意、跨境传输限制 & 个性化推荐需提供关闭选项；敏感个人信息需单独同意 & 个性化开关、算法推荐说明、跨境数据清单与出境评估 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[隐私约束下的定向能力自救清单]
+\begin{enumerate}
+  \item \textbf{把第一方数据资产化}：会员体系、站内行为、客服与售后记录
+        是唯一不受第三方政策直接影响的信号来源，优先建设采集与治理。
+  \item \textbf{用上下文补人群}：当人群信号变弱时，页面内容、时间、设备、
+        地域、天气等上下文特征可以承接一部分区分度，且合规风险低。
+  \item \textbf{转向聚合与建模归因}：接受个体级归因不可得，改用
+        \kw{聚合转化 API + 增量实验}来估计渠道贡献，并在报表里明确标注为估计值。
+  \item \textbf{建立同意状态的数据通路}：让「用户是否同意」成为特征与样本的一部分，
+        而不是在事后打补丁；否则模型会在违规数据上训练，风险不可控。
+  \item \textbf{把合规当成产品能力而不是成本}：在同一个平台上，
+        能说清「数据从哪来、用在哪、怎么删」的团队，反而更容易拿到品牌客户的预算。
+\end{enumerate}
+\end{toolbox}
+
+\section{品牌与效果：度量难题与增量实验}
+
+\subsection{品牌广告为什么难以度量}
+
+品牌广告的目标是「改变未来的行为」，而效果广告的目标是「触发当下的行为」。
+这个差别让品牌度量面临三个结构性困难：
+
+\begin{itemize}
+  \item \textbf{时间错位}：品牌广告的效果在未来数周甚至数月显现，
+        而预算与考核以月或季度为单位，短期报表看不到任何转化。
+  \item \textbf{归因抢功}：用户看到品牌广告后，往往通过搜索或直接输入网址完成购买，
+        归因系统会把功劳记给最后一次点击（搜索或直接访问），
+        品牌广告在末次点击归因下几乎永远得不到功劳。
+  \item \textbf{缺乏反事实}：效果广告可以关掉一小部分流量做对照，
+        品牌广告（尤其是电视、户外、大曝光）很难找到可比的对照组，
+        而且一旦做了对照，就意味着主动放弃一部分覆盖。
+\end{itemize}
+
+因此品牌度量必须走\kw{实验路线}而不是\kw{报表路线}。
+三种主流增量实验方法的对比见表 \ref{tab:incrementality}。
+
+\begin{table}[htbp]
+\centering
+\caption{三种增量实验方法：设计、代价与适用场景}
+\label{tab:incrementality}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{3.3cm} L{3.0cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{设计} & \tabhead{主要代价} & \tabhead{适用场景} \\
+\midrule
+地域对照 & 按地理区域分组，部分区域不投放（或降低投放强度） & 牺牲对照区收入；区域间溢出会污染结果 & 线下媒体、区域化投放、品牌大曝光 \\
+\addlinespace
+公益广告对照 & 对照组看到的是同版位的公益或无关广告，而非空白 & 仍需购买对照组的曝光，成本高 & 线上品牌投放，需要控制版位效应 \\
+\addlinespace
+幽灵广告 & 让广告在极后端的竞价环节「参竞但不渲染」，对照组看不到广告 & 需要平台深度配合，只有自家平台可做 & 平台自有流量上的品牌与效果评估 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{formulacard}[增量效果与提升度]
+设处理组（看到广告）的转化率为 $Y_1$，对照组（未看到广告）的转化率为 $Y_0$，
+则绝对增量为
+\begin{equation}
+\Delta = Y_1 - Y_0 ,
+\label{eq:increment-lift}
+\end{equation}
+相对提升度为
+\begin{equation}
+\text{Lift} = \frac{Y_1 - Y_0}{Y_0} ,
+\label{eq:lift}
+\end{equation}
+而真正决定预算是否应该追加的，是\term{增量成本收益比}{incremental ROAS}：
+\begin{equation}
+\ROAS_{\text{inc}} = \frac{\Delta \times \text{人群规模} \times \AOV \times m}{\text{广告花费}} ,
+\label{eq:inc-roas}
+\end{equation}
+其中 $m$ 为毛利率。\kw{注意分子用的是增量而非全部转化}：
+这正是品牌与效果预算分配的正确口径，也是绝大多数报表算错的地方。
+\end{formulacard}
+
+\begin{casebox}[案例：归因模型的公开实践与它的边界]
+学术界与工业界对多触点归因的建模有大量公开工作，
+例如基于因果推断的反事实归因框架（\cite{dalessandro2012causal}）
+把每个渠道的贡献定义为「移除该渠道后转化概率的变化」，
+这与 \cref{eq:increment-lift} 的思想完全一致——\kw{归因的本质就是反事实}。
+同一条线上的另一类工作来自电商与媒体实验方法论（\cite{kohavi2020trustworthy}），
+它系统总结了在线实验在信任度上的常见陷阱：样本比例失衡、
+多重比较、新奇效应、干扰效应（同一个用户在两个实验组之间互相影响）。
+把这两类工作放在一起，可以得到一条对广告实践极有用的判断：
+\kw{任何声称「某个渠道带来了 X 倍回报」的结论，都必须说明它的反事实是什么}。
+如果反事实是「不做这个渠道，用户会正常购买」，那么报表归因会大幅高估；
+如果反事实是「不做这个渠道，用户会去买竞品」，那么真实增量就接近报表数字。
+归因争议的绝大多数，其实是双方对反事实的定义不同。
+\end{casebox}
+
+\begin{insight}[品效协同的真实含义]
+「品效合一」被喊了很多年，但它往往被误解为「品牌广告要立刻带来转化」。
+正确的理解是：\kw{品牌与效果是同一条链路上的两个环节，而不是两个可替代的选项}。
+一个可操作的框架是：
+\begin{enumerate}
+  \item 品牌建设的目标是\kw{降低效果广告的成本}——提升品牌搜索量，
+        会让品牌词的 CPC 更低、自然流量占比更高，从而整体拉低 CAC；
+  \item 效果广告的目标是\kw{验证品牌投入是否转化为了需求}——
+        如果品牌曝光增长但品牌搜索量不涨，说明素材或定位没有建立心智；
+  \item 两者的衔接指标是\kw{品牌搜索量的增量}，它既可以被品牌广告影响，
+        又可以直接被效果投放承接，是这条链路上唯一可闭环观测的中间变量。
+\end{enumerate}
+所以正确的投放结构不是「预算在品牌与效果之间二选一」，
+而是「确定一个总预算，在链路两端同时投入，并用品牌搜索增量与增量 ROAS 两条指标共同校准」。
+站内广告、信息流、视频、搜索的具体打法与平台差异，
+见 \cref{ch:google} 与 \cref{ch:meta}；投放后的全链路效果评估与归因体系建设，
+见 \cref{ch:growth}。
+\end{insight}
+
+\begin{toolbox}[媒体采购的谈判与考核指标清单]
+谈判不是比谁报价低，而是\kw{把不确定性与责任分配写清楚}。签约前逐项确认：
+\begin{enumerate}
+  \item \textbf{结算口径}：按曝光、点击还是转化结算？计费事件如何认定、由谁认定？
+  \item \textbf{可见性与无效流量}：采用哪套可见性标准（以现行行业标准文档为准）？
+        无效流量的判定方是谁、超标后如何补偿？
+  \item \textbf{品牌安全}：内容类目黑名单、突发新闻时的暂停机制、第三方验证权限。
+  \item \textbf{数据与归因}：回传哪些字段、多久回传一次、是否支持聚合转化 API？
+        广告主能否拿到原始曝光日志做自主分析？
+  \item \textbf{底价与折扣}：是否有量级承诺换取的折扣？折扣的实际到手价如何核验？
+  \item \textbf{频次与去重}：跨平台频次是否去重？同一用户在多端如何合并计数？
+  \item \textbf{考核指标分层}：主指标（增量 ROAS 或增量 GMV）、过程指标（CPM/CPC/CTR/CVR）、
+        护栏指标（负反馈率、退款率、品牌搜索量的自然部分）三条线都要写进合同附件。
+  \item \textbf{赔付与退出条款}：未达标的补偿方式、超额成本的承担方、中止合作的结算规则。
+  \item \textbf{数据合规责任}：双方在 GDPR/CCPA/PIPL 下的角色划分与各自的义务。
+  \item \textbf{实验权限}：广告主是否有权在规定范围内做对照实验（含关停一部分流量）？
+        这一条决定了后面能否算出真实的增量 ROAS，务必在签约前争取。
+\end{enumerate}
+\end{toolbox}
+
+\section{用 Python 模拟 GSP 与第一价格拍卖}
+
+下面这段脚本用纯 Python（仅依赖标准库）模拟同一个广告位拍卖在四种机制下的结果：
+第一价格、第二价格、GSP 与 VCG。它的用途是建立直觉——
+把不同机制下的平台收益、广告主效用与「如实报价是否最优」放在一起对比，
+你会很快看清每种机制的代价在哪里。
+
+\begin{lstlisting}[style=growth, language=Python, caption={模拟第一价格 / 第二价格 / GSP / VCG 四种机制}]
+"""Compare first-price, second-price, GSP and VCG on one ad slot.
+
+All numbers are synthetic. The goal is intuition, not realism.
+"""
+
+import random
+
+POSITIONS = [1.00, 0.40, 0.15]  # CTR of position 1, 2, 3
+QUALITY = [1.0, 1.0, 1.0]       # quality scores, kept equal for clarity
+
+
+def sort_bidders(bids):
+    """Return index order sorted by score = quality * bid, descending."""
+    scored = [(q * b, i) for i, (q, b) in enumerate(zip(QUALITY, bids))]
+    scored.sort(reverse=True)
+    return [i for _, i in scored]
+
+
+def first_price(bids):
+    order = sort_bidders(bids)
+    # In first price the winner pays its own bid (per click).
+    pay = [0.0] * len(bids)
+    pay[order[0]] = bids[order[0]]
+    return order, pay
+
+
+def second_price(bids):
+    order = sort_bidders(bids)
+    pay = [0.0] * len(bids)
+    # Pay the next highest bid, not the next score.
+    pay[order[0]] = max(b for j, b in enumerate(bids) if j != order[0])
+    return order, pay
+
+
+def gsp(bids, reserve=0.0):
+    order = sort_bidders(bids)
+    pay = [0.0] * len(bids)
+    for k, i in enumerate(order):
+        if k + 1 < len(order):
+            nxt = order[k + 1]
+            pay[i] = max(reserve, QUALITY[nxt] * bids[nxt] / QUALITY[i])
+        else:
+            pay[i] = max(reserve, 0.0)
+    return order, pay
+
+
+def vcg(bids):
+    """VCG payment = externality imposed on the others."""
+    order = sort_bidders(bids)
+    pay = [0.0] * len(bids)
+    base = sum(POSITIONS[k] * QUALITY[i] * bids[i] for k, i in enumerate(order))
+    for k, i in enumerate(order):
+        rest = [j for j in order if j != i]
+        alt = sum(POSITIONS[t] * QUALITY[j] * bids[j] for t, j in enumerate(rest))
+        mine = POSITIONS[k] * QUALITY[i] * bids[i]
+        pay[i] = max(0.0, (alt + mine - base)) / (POSITIONS[k] * QUALITY[i])
+    return order, pay
+
+
+def revenue(order, pay, bids):
+    return sum(POSITIONS[k] * QUALITY[i] * pay[i] for k, i in enumerate(order))
+
+
+def utility(order, pay, bids, values):
+    return [POSITIONS[k] * (values[i] - pay[i]) if i in order[: len(POSITIONS)]
+            else 0.0
+            for k, i in enumerate(order)]
+
+
+def main():
+    random.seed(7)
+    values = [3.0, 2.0, 1.0]  # true value per click, known only to bidders
+    truthful = list(values)
+    print("truthful bids:", truthful)
+    for name, fn in [("first", first_price), ("second", second_price),
+                     ("gsp", gsp), ("vcg", vcg)]:
+        order, pay = fn(truthful)
+        rev = revenue(order, pay, truthful)
+        print(f"{name:7s} order={order} pay={[round(p, 3) for p in pay]} "
+              f"revenue={rev:.4f}")
+
+    # Is truthful bidding optimal for bidder 0 under each mechanism?
+    print("\ndeviation check for bidder 0 (value = 3.0):")
+    for name, fn in [("first", first_price), ("second", second_price),
+                     ("gsp", gsp), ("vcg", vcg)]:
+        best, best_u = None, -1e9
+        for dev in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]:
+            bids = [dev, values[1], values[2]]
+            order, pay = fn(bids)
+            k = order.index(0)
+            u = POSITIONS[k] * (values[0] - pay[0]) if k < len(POSITIONS) else 0.0
+            if u > best_u:
+                best, best_u = dev, u
+        print(f"  {name:7s} best bid={best} utility={best_u:.4f} "
+              f"(truthful utility={POSITIONS[order.index(0)] * (values[0] - fn(truthful)[1][0]):.4f})")
+
+
+if __name__ == "__main__":
+    main()
+\end{lstlisting}
+
+运行这段脚本你会观察到三件事，它们与前面几节的理论完全对应：
+
+\begin{enumerate}
+  \item \textbf{第二价格与 VCG 下，如实报价的表现不会比任何偏离更差}——
+        这正是激励相容在数值上的体现；
+  \item \textbf{第一价格下，最优报价明显低于真实估值}——
+        数值上你会看到最优出价落在真实值的一半到三分之二之间，
+        与 \cref{eq:shading} 的结论一致；
+  \item \textbf{GSP 下如实报价往往也接近最优，但不保证}——
+        把估值改成差异更大的组合（例如 $v = [10, 4, 2]$ 配合更陡的位置点击率），
+        就能构造出「压低报价挤到第二名反而更划算」的情形，
+        这正是 \cref{eq:gsp-ne} 描述的无套利条件被破坏的形态。
+\end{enumerate}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 广告生态的本质是\kw{把媒体的碎片化曝光与广告主的整体预算翻译成同一门语言}；
+        中介层承担的是风险、规模化运营与口径翻译三件事，不会因为透明化而消失。
+  \item RTB 是一条\kw{串行且带方差的链路}，DSP 端的超时不是自己的损失，
+        而是整个交易市场的价格损失（\cref{eq:timeout}）；
+        压延迟的正确做法是特征分层 + 预算频控前置 + 模型分档降级。
+  \item 所有计费方式都可以折算为 eCPM（\cref{eq:ecpm-cpm,eq:ecpm-cpc,eq:ecpm-cpa}），
+        反向换算给出 CPC 与 CPA（\cref{eq:cpc-conv}）；
+        同一个广告主在不同计费方式下的可接受出价可以相差数倍。
+  \item \kw{ROI = ROAS $\times$ 毛利率 $-$ 1}（\cref{eq:roi-roas}）是广告主侧最重要的一条换算，
+        它决定了 ROAS 的盈亏平衡点；用平台报表的 ROAS 直接比较或相加都是错的。
+  \item GSP 按 $s_i = q_i b_i$ 排序、按 $p_i = q_{k+1} b_{k+1} / q_i$ 定价
+        （\cref{eq:gsp-rank,eq:gsp-price}），它\kw{不是激励相容的}，
+        但在局部无套利均衡处与 VCG 的排序和支付一致，且平台收益不低于 VCG。
+  \item Myerson 的虚拟估值给出最优保留价（\cref{eq:virtual-value,eq:reserve}）：
+        保留价用来筛选需求，定得过高会同时损失成交量和需求侧信心。
+  \item 第一价格化让出价系统从「如实汇报估值」变成「预测市场并优化报价」，
+        \kw{着色因子}（\cref{eq:shading-factor}）随竞争密度递减，
+        竞争越少越应该压低报价。
+  \item 机制设计的四条准则：先定 IC 强度、保留价用于筛选、
+        质量分必须可解释可申诉、任何单目标优化都要配长期护栏。
+  \item 质量分（\cref{eq:adrank}）让「提升质量」成为广告主的最优策略，
+        但它也可能被 Goodhart 化，必须与下游真实指标联合监控。
+  \item 广告形态的选择取决于\kw{用户意图的明确程度}：
+        搜索承接明确需求、信息流与视频依赖素材与定向、电商站内广告转化率最高
+        但容易造成自然流量侵蚀，考核口径应是全店增量而非广告报表。
+  \item 隐私政策正在系统性缩短「跨站、跨应用、平台内」三条识别链路中的前两条，
+        应对方向是第一方数据资产化、上下文补人群、聚合与建模归因。
+  \item 品牌效果只能靠\kw{增量实验}证明（geo holdout、PSA、ghost ads），
+        正确口径是增量 ROAS（\cref{eq:inc-roas}）；
+        归因争议的本质是双方对\kw{反事实}的定义不同。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item GSP 为什么不是激励相容的？请构造一个广告主通过压低报价获利的例子，
+        并写出 GSP 的局部无套利均衡条件。
+  \item VCG 理论与性质上都更优，为什么 Google 选择了 GSP？
+        如果是你来设计一个从零开始的广告平台，你会选哪个，为什么？
+  \item oCPC 的原理是什么？它和 CPC、CPA 的本质区别在哪？
+        如果转化回传信号丢了 50\%，oCPC 的行为会如何退化？
+  \item 第一价格化之后，出价策略发生了什么变化？
+        什么是出价着色？着色因子与竞争密度是什么关系？
+  \item 给你一个广告位和三家广告主，如何计算 GSP 下的排序、支付与实际 CPC？
+        如果引入质量分，支付额该怎么修正？
+  \item 如何设计一个广告增量的实验？geo holdout、PSA 与 ghost ads 各有什么代价？
+        增量 ROAS 与报表 ROAS 差在哪里？
+  \item 三方 Cookie 退场与 ATT 之后，定向能力还剩多少？
+        你会用哪些信号替代原来的行为定向？
+  \item 平台收入、广告主 ROI 与用户体验这三方如何平衡？
+        你会用什么指标来标定体验损失的权重？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+到这里，广告系统「为什么这样设计」的部分已经讲完：
+生态决定了信号能传多远，机制决定了算法该优化什么，
+隐私与合规决定了特征可以怎么用，而增量实验决定了结果能不能被相信。
+但它们都还是\kw{规则层面}的讨论——
+真正决定一次竞价能不能赢、一个预算能不能花完、一个 oCPC 目标能不能达成的，
+是预估模型、出价公式与预算平滑的具体实现。
+下一章 \cref{ch:admodel} 我们就进入这一层：
+CTR/CVR 预估的特征与模型结构、oCPC 的目标转化与赔付逻辑、
+预算平滑与 PID 控制、多目标融合与出价上限，
+以及第一次竞价时模型还不准的情况下该怎么出手。
+读完那一章再回头看本章的 \cref{eq:ecpm-cpc,eq:gsp-price,eq:shading-factor}，
+你会发现它们全部变成了代码里的几行赋值。

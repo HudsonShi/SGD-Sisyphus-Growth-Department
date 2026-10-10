@@ -1,0 +1,298 @@
+\chapter{术语中英对照表}
+\label{app:glossary}
+
+\begin{insight}[使用说明]
+本附录按主题分组收录全书出现的核心术语。中文读者常遇到的困难是：
+同一概念在不同公司叫法不同（例如「粗排」也叫 pre-ranking / light ranking）、
+缩写满天飞（eCPM、oCPC、GAUC、CAPI）。查阅时建议先按主题定位，再用表格第三列确认口径。
+\end{insight}
+
+\section{推荐系统}
+
+\begin{xltabular}{\textwidth}{L{3.0cm} L{3.6cm} Y}
+\caption{推荐系统核心术语}\label{tab:glossary-recsys}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape 续表：推荐系统核心术语}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+召回 & Recall / Retrieval & 从百万级候选池快速筛出千级集合，决定效果上限，追求覆盖率而非精确率 \\
+粗排 & Pre-ranking / Light Ranking & 精排的廉价近似，用轻量模型把候选从万级压到千级 \\
+精排 & Ranking / Fine Ranking & 用复杂模型精确预估每个候选的效用，效果主战场 \\
+重排 & Re-ranking & 在精排结果上做多样性、打散、上下文级优化与业务规则 \\
+混排 & Blending & 把多个来源（推荐、广告、运营）的结果融合成一屏 \\
+协同过滤 & Collaborative Filtering, CF & 基于用户-物品交互共现做推荐，分 UserCF 与 ItemCF \\
+基于物品的协同过滤 & Item-based CF & 用物品相似度推荐，工业界主力，因物品稳定、可离线预计算 \\
+矩阵分解 & Matrix Factorization, MF & 把交互矩阵分解为用户与物品隐向量，用内积预测偏好 \\
+隐式反馈 & Implicit Feedback & 点击、浏览、购买等非评分信号，只有正样本没有显式负样本 \\
+贝叶斯个性化排序 & BPR & 用 pairwise 三元组 $(u,i,j)$ 直接优化排序，而非评分误差 \\
+因子分解机 & Factorization Machine, FM & 用隐向量内积建模二阶特征交叉，复杂度线性 \\
+场感知因子分解机 & Field-aware FM, FFM & 每个特征域单独一组隐向量，表达力更强但参数更多 \\
+双塔模型 & Two-tower Model & 用户塔与物品塔分离编码，线上用内积加 ANN 检索，牺牲交叉信息换效率 \\
+采样 Softmax & Sampled Softmax & 从全量候选中采样部分做分母近似，使超大规模分类可训练 \\
+多兴趣模型 & Multi-Interest Network & 用多个向量表示用户的多峰兴趣，缓解单向量表达能力不足 \\
+深度兴趣网络 & DIN & 用注意力机制根据候选物品自适应地聚合用户历史行为 \\
+深度兴趣演化网络 & DIEN & 在 DIN 基础上用 GRU 建模兴趣随时间的演化过程 \\
+多门混合专家 & MMoE & 多任务学习中用门控网络为每个任务加权组合共享专家 \\
+渐进式分层提取 & PLE & 通过任务专属专家加共享专家缓解多任务跷跷板现象 \\
+全空间多任务模型 & ESMM & 直接在全空间建模 CTR 与 CTCVR，解决 CVR 的样本选择偏差 \\
+位置偏差 & Position Bias & 用户更倾向点击靠前位置，导致模型学到位置而非相关性 \\
+位置感知学习 & PAL & 训练时显式建模位置影响、服务时置零，从而分离位置与相关性 \\
+自注意力序列推荐 & SASRec & 用因果掩码 Transformer 建模用户行为序列 \\
+BERT4Rec & BERT4Rec & 用双向 Transformer 加 Cloze 掩码预测做序列推荐 \\
+图卷积推荐 & LightGCN / PinSage & 在用户-物品二部图上做邻居聚合，LightGCN 去掉了非线性变换 \\
+生成式推荐 & Generative Recommendation & 把推荐建模为序列生成，直接生成下一个物品的语义 ID \\
+语义 ID & Semantic ID & 用层次量化把物品映射成短 token 序列，供生成式模型输出 \\
+冷启动 & Cold Start & 新用户或新物品缺少交互数据时的推荐问题 \\
+探索与利用 & Explore-Exploit, EE & 在利用已知偏好与探索未知兴趣之间平衡，常用 epsilon-greedy、UCB、Thompson 采样 \\
+多样性 & Diversity & 结果集合的差异度，防止同质化与信息茧房 \\
+信息茧房 & Filter Bubble & 推荐长期收敛到窄兴趣域，导致用户视野收窄 \\
+曝光偏差 & Exposure Bias & 只有被曝光过的物品才有反馈，导致数据非随机缺失 \\
+反事实评估 & Counterfactual Evaluation & 用 IPS、doubly robust 等方法在日志数据上评估新策略 \\
+逆倾向得分 & Inverse Propensity Scoring, IPS & 用倾向概率倒数加权，纠正日志数据的分布偏差 \\
+校准 & Calibration & 让预测概率与真实频率一致，广告出价与预算控制的前提 \\
+分组 AUC & GAUC & 按用户分组计算 AUC 再加权平均，衡量个性化排序能力 \\
+归一化折损累积增益 & NDCG & 考虑位置折损的排序指标，LTR 的常用优化目标 \\
+命中率 & Hit Rate, HR@K & 目标物品出现在 Top-K 结果中的比例 \\
+\end{xltabular}
+
+\section{搜索引擎、信息检索与 NLP}
+
+\begin{xltabular}{\textwidth}{L{3.0cm} L{3.6cm} Y}
+\caption{搜索与 NLP 核心术语}\label{tab:glossary-search}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape 续表：搜索与 NLP 核心术语}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+倒排索引 & Inverted Index & 词到文档列表的映射，搜索引擎的物理基础 \\
+倒排列表 & Posting List & 某个词对应的文档 ID、词频、位置序列，常用差值编码压缩 \\
+文档频率 & Document Frequency, DF & 包含某词的文档数，IDF 的来源 \\
+词频 & Term Frequency, TF & 词在文档中出现次数，BM25 中做饱和处理 \\
+向量空间模型 & Vector Space Model, VSM & 把查询与文档表示为词权重向量，用余弦相似度排序 \\
+BM25 & BM25 / Okapi BM25 & 带词频饱和与长度归一化的概率检索模型，长期最强 baseline \\
+查询似然 & Query Likelihood & 语言模型检索：估计文档生成查询的概率 \\
+伪相关反馈 & Pseudo Relevance Feedback, RM3 & 用初次检索的头部文档扩展查询 \\
+查询理解 & Query Understanding & 分词、纠错、改写、意图识别、实体识别的统称 \\
+拼写纠错 & Spell Correction & 基于编辑距离与噪声信道模型纠正查询拼写 \\
+查询改写 & Query Rewriting & 把用户查询改写成更易匹配的形式，含同义、扩展、重写 \\
+零结果 & Zero Result & 没有召回到任何结果的查询，电商搜索的关键体验指标 \\
+学习排序 & Learning to Rank, LTR & 用机器学习融合多路特征做排序，分 pointwise、pairwise、listwise \\
+LambdaMART & LambdaMART & 直接用 NDCG 类指标构造 lambda 梯度的 GBDT 排序模型 \\
+交叉编码器 & Cross-encoder & 查询与文档拼接后一起编码，精度高但无法预计算，只用于重排 \\
+双编码器 & Bi-encoder & 查询与文档分别编码，可离线预计算向量索引 \\
+稠密段落检索 & DPR & 双塔稠密检索的代表工作，用批内负样本训练 \\
+后期交互 & Late Interaction, ColBERT & 保留 token 级向量，用 MaxSim 计算查询-文档得分，兼顾精度与效率 \\
+难负样本 & Hard Negative & 与查询相似但无关的负例，对稠密检索训练至关重要 \\
+倒排文件索引 & IVF & 先用聚类分桶再在桶内检索，常与 PQ 量化结合 \\
+乘积量化 & Product Quantization, PQ & 把向量切分后分别量化，大幅压缩内存 \\
+近似最近邻 & ANN Search & 用 HNSW、IVF-PQ 等结构做近似最近邻检索，牺牲精度换速度 \\
+分层可导航小世界 & HNSW & 基于多层图结构的 ANN 索引，召回率高、内存占用大 \\
+稀疏-稠密混合检索 & Hybrid Retrieval & BM25 与 dense 各召回一批再融合，工业界常态 \\
+倒数排名融合 & Reciprocal Rank Fusion, RRF & 用排名倒数求和融合多路检索结果，无需调权重 \\
+检索增强生成 & Retrieval-Augmented Generation, RAG & 先检索证据再让大模型生成，缓解幻觉与知识过时 \\
+文本分块 & Chunking & 把长文档切成可检索片段，块大小与重叠是关键超参 \\
+上下文精确率 & Context Precision & RAG 评估指标，衡量检索到的上下文中有多少是真正相关的 \\
+忠实性 & Faithfulness & 生成答案是否完全由给定上下文支撑，幻觉的反面 \\
+自注意力 & Self-Attention & Transformer 核心机制，用 Q、K、V 计算序列内位置间的依赖 \\
+多头注意力 & Multi-Head Attention & 并行多组注意力，学习不同子空间的依赖关系 \\
+位置编码 & Positional Encoding & 注入序列顺序信息，含正弦、可学习、RoPE、ALiBi 等 \\
+层归一化 & Layer Normalization & 对特征维度归一化，Transformer 训练稳定性的关键 \\
+掩码语言模型 & Masked Language Modeling, MLM & BERT 的预训练任务，随机遮盖并预测被遮词 \\
+下一句预测 & Next Sentence Prediction, NSP & BERT 的句子级预训练任务，后续工作多认为无用 \\
+缩放定律 & Scaling Laws & 模型性能与参数量、数据量、算力的幂律关系 \\
+Chinchilla 最优 & Compute-optimal Scaling & 给定算力下参数与数据应按约一比二十的比例扩张 \\
+指令微调 & Supervised Fine-tuning, SFT & 用指令-回答数据微调，让模型学会遵循指令 \\
+基于人类反馈的强化学习 & RLHF & 训练奖励模型后用 PPO 优化策略，实现偏好对齐 \\
+直接偏好优化 & DPO & 跳过奖励模型，直接用偏好数据优化策略，实现更简单 \\
+低秩适配 & LoRA & 冻结原权重、只训练低秩增量矩阵，大幅降低微调显存 \\
+模型量化 & Quantization & INT8 或 INT4 降低显存与延迟，含 GPTQ、AWQ 等方法 \\
+键值缓存 & KV Cache & 自回归推理时缓存历史 K、V，避免重复计算 \\
+分组查询注意力 & GQA / MQA & 多查询头共享少量 K、V 头，降低推理显存 \\
+连续批处理 & Continuous Batching & 推理服务中动态组批，显著提升吞吐 \\
+投机解码 & Speculative Decoding & 用小模型草稿加大模型验证，加速自回归生成 \\
+分页注意力 & PagedAttention & vLLM 提出的显存管理方案，降低碎片化 \\
+序列标注 & Sequence Labeling & 给每个 token 打标签，如 NER、分词、词性标注 \\
+条件随机场 & CRF & 建模标签间转移约束的序列模型，常接在 BiLSTM 或 BERT 之后 \\
+命名实体识别 & NER & 识别文本中的人名、地名、机构、商品等实体 \\
+对比学习 & Contrastive Learning & 拉近正样本、推远负样本的表示学习范式，CLIP 的基础 \\
+\end{xltabular}
+
+\section{计算广告}
+
+\begin{xltabular}{\textwidth}{L{3.0cm} L{3.6cm} Y}
+\caption{计算广告核心术语}\label{tab:glossary-ads}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape 续表：计算广告核心术语}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+需求方平台 & DSP & 广告主侧的采买平台，负责跨媒体竞价与投放优化 \\
+供应方平台 & SSP & 媒体侧的变现平台，负责管理广告位与流量售卖 \\
+广告交易市场 & Ad Exchange, ADX & 连接 DSP 与 SSP 的实时竞价市场 \\
+实时竞价 & Real-Time Bidding, RTB & 在约 100 毫秒内完成请求、出价、拍卖、返回素材的全过程 \\
+广义第二价格 & Generalized Second Price, GSP & 搜索广告经典机制，按下一名出价加最小加价计费 \\
+维克里-克拉克-格罗夫斯 & VCG & 理论上激励相容的机制，按外部性计费 \\
+第一价格拍卖 & First-price Auction & 按自己的出价计费，需要出价着色 \\
+保留价 & Reserve Price & 卖方设置的最低价，低于此价不成交 \\
+质量分 & Quality Score & 平台对广告相关性、落地页体验、预期点击率的综合评分 \\
+千次展示期望收益 & eCPM & 跨计费方式统一的排序货币，等于一千乘以 pCTR 乘以出价 \\
+点击率 & CTR & 点击数除以展示数，广告与推荐的核心信号 \\
+转化率 & CVR & 转化数除以点击数，受延迟反馈影响 \\
+点击后转化率 & CTCVR & 展示到转化的整体概率，等于 CTR 与 CVR 的乘积 \\
+目标转化成本 & oCPM / oCPC / oCPA & 广告主设定目标成本，平台按转化目标优化出价 \\
+预算平滑 & Budget Pacing & 把日预算均匀分配到全天，避免早间超支、晚间无量 \\
+出价着色 & Bid Shading & 第一价格机制下压低出价以提升 ROI 的策略 \\
+增量实验 & Incrementality Test & 测量广告带来的本来不会发生的转化，如地理对照、PSA \\
+公共事业广告 & Public Service Announcement, PSA & 用公益广告作为对照组的实验方法 \\
+多触点归因 & Multi-Touch Attribution, MTA & 把转化功劳按规则或模型分配给多个触点 \\
+营销组合模型 & Marketing Mix Modeling, MMM & 用回归类模型在聚合数据上估计各渠道的边际贡献 \\
+沙普利值 & Shapley Value & 博弈论中按边际贡献分配合作收益，用于数据驱动归因 \\
+末次点击归因 & Last-Click Attribution & 把全部功劳给最后触点的规则，简单但系统性高估收割型渠道 \\
+可见性 & Viewability & 广告是否真正进入用户视窗，MRC 标准要求半数像素可见一秒 \\
+无效流量 & Invalid Traffic, IVT & 机器或欺诈产生的流量，需被识别并剔除 \\
+学习期 & Learning Period & 出价策略调整后算法重新学习的窗口，频繁改动会导致反复重启 \\
+目标 ROAS & tROAS & 广告主设定的目标广告支出回报率，平台据此优化 \\
+结算价 & Settlement Price & 平台与卖家约定的实际结算价格，平台模式的利润核心 \\
+\end{xltabular}
+
+\section{SEO、GEO 与增长}
+
+\begin{xltabular}{\textwidth}{L{3.0cm} L{3.6cm} Y}
+\caption{SEO、GEO 与增长核心术语}\label{tab:glossary-growth}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape 续表：SEO、GEO 与增长核心术语}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+搜索引擎优化 & SEO & 通过技术、内容与外链提升自然搜索排名的系统性工作 \\
+生成式引擎优化 & GEO & 让内容被 AI 摘要与生成式回答引用，而非只追求排名 \\
+答案引擎优化 & AEO & 面向问答式结果（FAQ、精选摘要、语音答案）的优化 \\
+零点击搜索 & Zero-click Search & 用户在结果页直接得到答案、不点击任何链接的行为 \\
+抓取预算 & Crawl Budget & 搜索引擎愿意为站点分配的抓取资源，与站点规模、质量相关 \\
+抓取到渲染 & Crawl to Render & 从抓取 HTML 到执行 JS 渲染内容的过程，JS 站点需 SSR 或预渲染 \\
+规范化链接 & Canonical Tag & 指定重复内容的主版本，避免权重分散 \\
+无索引 & noindex & 指示搜索引擎不要将该页加入索引 \\
+站点地图 & XML Sitemap & 向搜索引擎声明可抓取 URL 的文件 \\
+核心网页指标 & Core Web Vitals & Google 的用户体验指标集，含 LCP、INP、CLS \\
+最大内容绘制 & LCP & 视窗内最大内容元素渲染完成的时间，阈值 2.5 秒 \\
+交互到下次绘制 & INP & 衡量整体交互响应性，阈值 200 毫秒 \\
+累积布局偏移 & CLS & 页面加载过程中的意外布局偏移量，阈值 0.1 \\
+经验-专业-权威-可信 & E-E-A-T & 搜索质量评估者对内容质量的核心判断维度 \\
+搜索意图 & Search Intent & 查询背后的目的：导航、信息、商业调研、交易 \\
+主题集群 & Topic Cluster & 用一个支柱页串联多篇子话题页的内容组织方式 \\
+支柱页 & Pillar Page & 主题集群的中心页，覆盖主题全貌并链接到子页 \\
+结构化数据 & Structured Data / Schema & 用 Schema.org 词汇标注页面内容，帮助引擎理解实体 \\
+多语言标注 & hreflang & 告知搜索引擎不同语言或地区版本页面的对应关系 \\
+富媒体摘要 & Rich Result & 因结构化数据而在搜索结果中出现的增强展现 \\
+精选摘要 & Featured Snippet & 结果页顶部的直接答案框，AEO 的核心目标 \\
+人工智能摘要 & AI Overviews & 搜索引擎用生成式模型直接给出的答案摘要 \\
+答案块 & Answer Block & 四十到六十字、结论前置、可被直接抽取的内容单元 \\
+可提取性 & Extractability & 内容被生成式引擎切分并引用的难易程度 \\
+检索量 & Search Volume & 关键词的月均搜索次数，关键词研究的核心指标 \\
+关键词难度 & Keyword Difficulty, KD & 关键词竞争激烈程度，常与外链数、域名权重相关 \\
+搜索词报告 & Search Terms Report & 广告后台中真实触发广告的查询列表，否词的核心依据 \\
+否定关键词 & Negative Keyword & 排除不相关查询的关键词，控制无效花费 \\
+效果最大化广告 & Performance Max, PMax & Google 的跨渠道自动化广告系列，用素材组与信号驱动 \\
+购物广告 & Shopping Ads / Feed & 基于 Merchant Center 商品 Feed 展示的商品广告 \\
+商家中心 & Merchant Center & 管理商品 Feed 与购物广告资质的后台 \\
+转化 API & Conversions API, CAPI & Meta 的服务端事件回传接口，弥补浏览器端信号丢失 \\
+应用跟踪透明度 & App Tracking Transparency, ATT & 苹果的跨应用追踪授权机制，显著削弱定向与归因 \\
+广告支出回报率 & ROAS & 广告带来的收入除以广告花费 \\
+投资回报率 & ROI & 利润除以投入，与 ROAS 口径不同，勿混用 \\
+用户生命周期价值 & LTV & 单个用户全生命周期贡献的利润或收入 \\
+获客成本 & CAC & 获取一个付费用户的平均成本，分混合与付费口径 \\
+回本周期 & Payback Period & 从用户身上收回获客成本所需时间 \\
+北极星指标 & North Star Metric & 代表产品核心价值的单一关键指标 \\
+护栏指标 & Guardrail Metric & 防止优化主指标时损害体验的监控指标 \\
+古德哈特定律 & Goodhart's Law & 指标一旦成为目标，就不再是好的度量 \\
+最小可检测效应 & Minimum Detectable Effect, MDE & 实验能可靠检出的最小提升幅度，决定样本量 \\
+方差缩减 & CUPED & 用实验前协变量扣除方差，提升实验灵敏度 \\
+样本比例失配 & Sample Ratio Mismatch, SRM & 分流比例与预期不符，实验有效性的第一道体检 \\
+增量提升 & Lift / Incrementality & 相对于对照组的真实增量，而非观测到的总量 \\
+\end{xltabular}
+
+\section{跨境电商与供应链}
+
+\begin{xltabular}{\textwidth}{L{3.0cm} L{3.6cm} Y}
+\caption{跨境电商与供应链核心术语}\label{tab:glossary-cbec}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape 续表：跨境电商与供应链核心术语}\\
+\toprule
+\tabhead{中文} & \tabhead{English} & \tabhead{说明} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+跨境电子商务 & Cross-border E-commerce & 交易双方位于不同关境的电商活动，额外承担物流、关税、合规成本 \\
+全托管 & Fully-managed Model & 卖家只负责供货，平台负责定价、营销、物流与售后 \\
+半托管 & Semi-managed Model & 卖家负责海外仓发货与部分运营，平台负责流量与交易 \\
+直接面向消费者 & DTC / D2C & 品牌自建独立站直接服务消费者，掌握用户数据与定价权 \\
+小包直邮 & Direct Mail / Postal Parcel & 从国内直接寄给海外消费者，时效慢但无库存压力 \\
+海外仓 & Overseas Warehouse & 提前把货备到目标市场仓库，时效快但占用资金 \\
+头程 & First-mile / Head-haul & 从工厂或国内仓到海外仓的运输段 \\
+尾程 & Last-mile & 从海外仓到消费者手中的配送段 \\
+亚马逊物流 & FBA & 亚马逊代仓代发服务，含仓储费、长期仓储费与移除费 \\
+商家自发货 & FBM & 卖家自行仓储发货，灵活性高但时效与体验依赖自身 \\
+完税后交货 & DDP & 卖方承担关税与清关责任，买家收货即完 \\
+未完税交货 & DDU / DAP & 买方承担进口关税与清关，可能造成拒收与差评 \\
+国际贸易术语 & Incoterms & 国际商会定义的贸易术语，规范风险与费用划分 \\
+最低免税额 & de minimis & 低于该货值免征关税的额度，美国 321 条款是跨境直邮的关键变量 \\
+关税 & Customs Duty & 按 HS 编码与完税价格计征的进口税 \\
+增值税 & VAT / GST & 消费环节流转税，欧盟 IOSS 与 OSS 简化了低值包裹申报 \\
+一站式申报 & IOSS / OSS & 欧盟进口与境内远程销售的统一增值税申报机制 \\
+协调制度编码 & HS Code & 国际通用的商品分类编码，决定关税税率与监管条件 \\
+一件代发 & Dropshipping & 不备货、由供应商直接发货的模式，利润薄且品控难 \\
+库存周转率 & Inventory Turnover & 销货成本除以平均库存，衡量资金效率 \\
+售罄率 & Sell-through Rate & 售出数量占进货数量的比例 \\
+安全库存 & Safety Stock & 应对需求与交期波动的缓冲库存 \\
+再订货点 & Reorder Point, ROP & 触发补货的库存水位 \\
+经济订货批量 & EOQ & 使订货成本与持有成本之和最小的订货量 \\
+牛鞭效应 & Bullwhip Effect & 需求信息沿供应链向上游放大失真的现象 \\
+按需生产 & On-demand Production & 依订单或测款数据驱动生产，SHEIN 模式的核心 \\
+小单快反 & Small-batch Quick Response & 首单小批量测款，数据反馈后快速返单 \\
+准时制 & Just-in-Time, JIT & 低库存、按需补货的生产与供货方式 \\
+供应链约束理论 & Theory of Constraints, TOC & 系统产出由瓶颈决定，优化应聚焦瓶颈工序 \\
+产品合规认证 & CE / FCC / UL / CPC & 进入各市场的强制或平台要求的认证与检测 \\
+通用产品安全法规 & GPSR & 欧盟通用产品安全法规，对跨境卖家责任提出新要求 \\
+生产者责任延伸 & EPR & 生产者对包装与产品废弃回收承担责任，欧盟常见注册要求 \\
+通用数据保护条例 & GDPR & 欧盟数据保护法规，影响埋点、邮件与定向能力 \\
+拒付 & Chargeback & 持卡人向银行发起交易撤销，风控与利润的重大风险 \\
+支付服务商 & PSP & 提供收单与资金结算的机构，如 Stripe、PayPal、Adyen \\
+跨境收款 & Payoneer / PingPong & 跨境卖家常用的多币种收款与结汇工具 \\
+单位经济模型 & Unit Economics & 单件或单客的收入、成本与利润结构，跨境决策的基础 \\
+现金转换周期 & Cash Conversion Cycle & 从付货款到收回平台结算款的时间，决定资金需求 \\
+\end{xltabular}
+
+\begin{keypoint}[术语学习的建议]
+不要试图一次背完这张表。更有效的做法是：
+在读到某一章时回到本附录确认口径，然后\textbf{在自己的项目里用一次}。
+术语的真正含义往往藏在「它的分母是什么」「它的统计口径包含谁」这两个问题里。
+\end{keypoint}

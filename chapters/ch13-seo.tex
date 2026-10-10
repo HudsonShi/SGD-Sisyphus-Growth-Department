@@ -1,0 +1,1755 @@
+\chapter{SEO：技术、内容与外链}
+\label{ch:seo}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 爬虫到了你的站上，到底把时间花在哪里？「抓取预算」是一个真实的资源约束，还是一个被过度神话的营销词？
+  \item 同一个商品页有三条 URL（带 \code{?color=} 参数、带 \code{?utm\_source=}、带尾斜杠），搜索引擎把权重给了哪一条？怎么控制这件事？
+  \item 关键词研究产出的是一张词表，还是一张「主题--意图--页面」的映射图？为什么后者的转化率通常高一个量级？
+  \item Core Web Vitals 的三个指标是「体验指标」还是「排名因素」？把 LCP 从 4.2 秒压到 2.1 秒，流量真的会涨吗？涨多少取决于什么？
+  \item AI 批量生成内容会不会让整站被降权？「写得像人」和「有第一手经验」之间差的是什么？
+  \item SEO 不能做 A/B 实验（同一个 URL 只能有一个版本给爬虫看），那么「这次改版到底有没有用」该怎么科学地回答？
+  \item 跨境卖家面对三套完全不同的 SEO 逻辑：Google 的独立站、Amazon 的站内搜索、以及多语言多地区的 hreflang 矩阵，它们的优先级怎么排？
+\end{enumerate}
+\end{insight}
+
+SEO（Search Engine Optimization，搜索引擎优化）常被误解成一件「和算法博弈」的事：追着更新日志改标题、堆关键词、买链接。
+但如果把搜索引擎换成一个真实的人——一个耐心有限、经验丰富、只想尽快解决问题的采购员——SEO 的目标就变得非常朴素：
+\kw{把你的网站做成一个能被人和机器同时理解、并且值得信任的实体}。爬虫能不能进得来、页面能不能被正确归并、
+内容能不能回答那个具体的问句、站点在同类信息源里有没有被反复引用，这四件事决定了最终排序，
+而它们没有一件是靠「猜算法」能解决的。
+
+本章的组织方式是沿着搜索引擎的物理流程倒着讲需求、顺着讲实现：
+先从「抓取--索引--排名」三段流水线出发，理解流量是怎么被漏掉的（\cref{sec:seo-crawl}）；
+然后把关键词研究当成需求侧的用户研究来做（\cref{sec:seo-kw}）；
+接着是最容易被低估的站内工程（\cref{sec:seo-onpage}）与内容策略（\cref{sec:seo-content}）；
+\cref{sec:seo-tech} 给出一份可执行的技术 SEO 清单；
+\cref{sec:seo-link} 谈外链与权威；
+\cref{sec:seo-measure} 解决「不能做 A/B 怎么度量」这个最硬的问题；
+最后 \cref{sec:seo-cbec} 落到跨境电商的三套 SEO 逻辑。
+贯穿全章的问题只有一个：\textbf{这一步是在讨好排名信号，还是在降低用户的决策成本？}
+
+技术性约定：搜索算法内部排序模型的细节从未公开，本章凡是涉及排名机制的部分，都以 Google Search Central 的公开文档
+\cite{google2024seostarter}、搜索质量评估指南 \cite{google2024quality} 与 web.dev 的性能文档 \cite{google2024corewebvitals} 为准；
+凡是涉及算法行为的推断，都标注为「公开文档 + 行业共识」的经验判断，而不是内部数据。
+平台政策、字段长度限制、费率类内容一律以官方最新文档为准，本章给出的数值只作为「量级参考」。
+
+\section{搜索引擎如何工作：抓取、索引、排名}
+\label{sec:seo-crawl}
+
+\subsection{三段流水线与 SEO 的三类损失}
+
+从站长的视角看，搜索引擎是一条三段式流水线：\kw{抓取}（Crawling，把 URL 变成 HTML）、
+\kw{索引}（Indexing，把 HTML 变成可检索的结构化记录）、\kw{排名}（Ranking / Serving，把记录变成某次查询的结果列表）。
+每一段都会\emph{漏掉}一部分页面，而三种漏掉的根因完全不同、修复手段也完全不同。这是 SEO 诊断最重要的一个框架。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  stage/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=9mm,
+                inner sep=3pt, text width=2.15cm, align=center, font=\sffamily\scriptsize},
+  sub/.style={draw=RuleGray, fill=white, rounded corners=1pt,
+              inner sep=2pt, text width=2.15cm, align=left, font=\sffamily\tiny},
+  loss/.style={draw=CrimsonDeep, fill=white, rounded corners=1pt,
+               inner sep=2pt, text width=2.2cm, align=left, font=\sffamily\tiny},
+  hdr/.style={font=\sffamily\scriptsize\bfseries\color{NavyDeep}}
+]
+\node[stage] (a) at (0,0) {\textbf{抓取}\\\code{discover} $\to$ \code{fetch}};
+\node[stage, right=of a] (b) {\textbf{索引}\\\code{parse} $\to$ \code{store}};
+\node[stage, right=of b] (c) {\textbf{排名与展现}\\\code{retrieve} $\to$ \code{rank}};
+\draw[-{Stealth}, thick, NavyMid] (a) -- (b);
+\draw[-{Stealth}, thick, NavyMid] (b) -- (c);
+\draw[-{Stealth}, thick, NavyDeep] (c.north) to[out=60,in=120] node[midway, above=0pt, font=\sffamily\tiny\color{NavyDeep}] {新链接与站点地图回灌} (a.north);
+\node[hdr, below=5mm of a] (la) {损失一：没被抓到};
+\node[loss, below=0.5mm of la] (lax) {robots.txt 拦截\\服务器超时\\内链孤岛\\预算耗尽};
+\node[hdr, below=5mm of b] (lb) {损失二：没进索引};
+\node[loss, below=0.5mm of lb] (lbx) {\code{noindex}\\canonical 错选\\软 404\\重复内容被合并};
+\node[hdr, below=5mm of c] (lc) {损失三：排不上};
+\node[loss, below=0.5mm of lc] (lcx) {意图错配\\内容单薄\\权威不足\\体验差};
+\node[draw=RuleGray, fill=BoxBGAlt, rounded corners=2pt, inner sep=3pt, font=\sffamily\tiny,
+      text width=7.4cm, align=left] at (3.7,-4.35)
+  {诊断顺序必须是\emph{从左到右}：先确认 URL 被 200 抓取，再确认它被索引，
+   最后才谈排名。反过来调内容，等于在漏水的水管上擦地板。};
+\end{tikzpicture}
+\caption{搜索引擎的三段流水线与三类流量损失：抓取损失、索引损失、排名损失}
+\label{fig:seo-pipeline}
+\end{figure}
+
+\begin{keypoint}[三阶段诊断是 SEO 唯一不浪费时间的入口]
+\textbf{看到「自然流量下滑」时，不要先改标题。}按下面的顺序把流量拆开，可以在半小时内定位到 80\% 的问题：
+(1) 用 \code{site:} 与「网址检查」工具确认核心 URL 是否被索引；
+(2) 用 GSC 的「页面索引」报告按状态分类，看 \emph{已发现-尚未编入索引}、\emph{已抓取-尚未编入索引}、
+\emph{重复网页，Google 选择的规范网页与用户指定的不同} 这三类的占比变化；
+(3) 用服务器日志确认这些 URL 是否真的被爬过、返回码是什么；
+(4) 只有当「被抓取 + 已索引 + 无 canonical 冲突」三项都通过时，才轮到内容与排名实验。
+把这三步做成日报看板，比任何「SEO 技巧清单」都值钱。
+\end{keypoint}
+
+\subsection{抓取预算：它什么时候真的是瓶颈}
+
+\term{抓取预算}{Crawl Budget} 是 Google 公开承认的概念 \cite{google2024seostarter}，它由两个变量相乘构成：
+\kw{抓取速率限制}（crawl rate limit，由站点健康度决定，服务器越快、越少 5xx，Google 越敢多抓）
+与\kw{抓取需求}（crawl demand，由站点权威度、更新频率、URL 重要性决定）。
+它的数学形式可以用「抓取供给 vs 抓取需求」的缺口来表达：
+
+\begin{equation}
+C_{\text{eff}} = \min\Big(\, R_{\text{host}} \cdot \eta_{\text{health}} ,\;\; D_{\text{demand}} \,\Big) ,
+\qquad
+\text{缺口率} = \max\Big(0,\; 1 - \frac{C_{\text{eff}}}{N_{\text{url}} / \Delta t}\Big) ,
+\label{eq:crawlbudget}
+\end{equation}
+
+其中 $R_{\text{host}}$ 是宿主级别的抓取速率上限（请求/秒），$\eta_{\text{health}} \in [0,1]$ 是站点健康度折损
+（5xx 率高、响应时间长的站点会被动态下调），$D_{\text{demand}}$ 是 Google 愿意为该站投入的抓取总量，
+$N_{\text{url}}/\Delta t$ 是你希望它覆盖的 URL 产出速率。这个公式解释了三个反直觉的事实：
+
+\begin{itemize}
+  \item \textbf{抓取预算是相对的，不是绝对的。} 一个 500 页的企业站几乎永远不会缺预算；
+        真正缺预算的是商品数在十万量级、且每天有大量参数化 URL 变动的电商站。
+        「我的抓取预算不够」这句话，只有在 URL 总量巨大或大量低质 URL 被生成时才成立。
+  \item \textbf{加服务器不会提升抓取量。} 提高响应速度能提升 $R_{\text{host}}$ 的上限，但如果 $D_{\text{demand}}$ 已经是瓶颈
+        （站点整体权重不足、外部链接太少），再快的服务器也不会让 Google 多来几次。
+  \item \textbf{减少 URL 数量比增加抓取量更划算。} 把 $N_{\text{url}}$ 砍掉一半，效果和把抓取量翻倍一样，
+        而且成本更低、风险更小。这就是「抓取浪费治理」的全部逻辑。
+\end{itemize}
+
+\begin{equation}
+W_{\text{crawl}} = \frac{\#\{\text{抓取请求落在非规范、无索引价值或参数页上}\}}{\#\{\text{总抓取请求}\}} .
+\label{eq:crawlwaste}
+\end{equation}
+
+抓取浪费率 $W_{\text{crawl}}$ 是技术 SEO 最核心的运营指标之一。行业经验上，一个没有做过治理的中型电商站，
+这个数字常在 0.3 到 0.6 之间（示范量级）：也就是一半以上的爬虫请求花在了排序筛选参数组合、
+会话 ID、分页深水区、以及已经被 canonical 归并的重复页上。把它压到 0.1 以下，
+通常能让核心商品页的重新抓取周期从数周缩短到数天。
+
+\begin{table}[htbp]
+\centering
+\caption{抓取预算的三个来源与对应的扩容手段}
+\label{tab:crawlbudget}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{3.3cm} L{3.0cm} Y}
+\toprule
+\tabhead{来源} & \tabhead{决定因素} & \tabhead{扩容手段} & \tabhead{代价与副作用} \\
+\midrule
+抓取速率上限 & 服务器响应时间、5xx/429 比例、CDN 配置 & 提升 TTFB、加 CDN 缓存、稳定回源 & 成本上升；若内容本身低质，多抓也不会带来流量 \\
+抓取需求 & 站点整体权威、外链质量、更新频率、内容独特性 & 建设外链、持续发布原创、被高权重站引用 & 周期长（通常以季度计），无法通过技术改造速成 \\
+URL 供给质量 & 参数组合、分面导航、日历页、搜索结果页 & \code{robots.txt} 屏蔽、\code{noindex}、canonical 归并、站内搜索页禁抓 & 过度屏蔽会误伤有价值页，需要日志验证后再放开 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[「把 robots.txt 当万能开关」——最常见也最贵的抓取事故]
+\textbf{现象}：为了「节省抓取预算」，团队在 \code{robots.txt} 里屏蔽了 \code{/search}、\code{/filter}、
+大量参数路径，甚至误写为 \code{Disallow: /}。上线后搜索流量断崖式下跌，恢复用了两个月。\\
+\textbf{根因}：有三个高频误解：
+(1) \textbf{\code{Disallow} 不等于 \code{noindex}}。被 \code{Disallow} 的 URL 爬虫\emph{读不到}页面上的
+\code{noindex} 标签，如果这个 URL 已经被别的站链接过，它仍然可能以「无描述的空结果」出现在索引里。
+正确顺序是\emph{先允许抓取并输出 \code{noindex}，等它退出索引后再考虑屏蔽}。
+(2) \textbf{屏蔽会切断 PageRank 流动}。内链指向被屏蔽的 URL 时，那部分权重无法传递到被链接的下一跳。
+(3) \textbf{\code{robots.txt} 是全局生效的}，测试环境的文件被误发布到生产环境是经典事故。
+\\
+\textbf{排查方法}：
+(1) 任何 \code{robots.txt} 改动都必须走代码评审 + 灰度，禁止在服务器上直接编辑；
+(2) 用 GSC 的 \code{robots.txt} 测试工具验证每个规则实际命中的 URL 列表，
+并在日志里统计「被屏蔽但仍有外部链接」的 URL 集合；
+(3) 建立回滚预案：把文件版本化，出问题时 5 分钟内可恢复；
+(4) 监控 GSC「已抓取-尚未编入索引」与「已被 \code{robots.txt} 屏蔽」两类数量的突变告警。
+\end{pitfall}
+
+\subsection{索引：canonical、noindex 与重复内容}
+
+抓取解决「看得到」，索引解决「记得住」。索引阶段的核心任务是\kw{去重与归并}：
+搜索引擎必须为内容相同或高度相似的多个 URL 选出一个\emph{规范网址}（canonical URL），
+其余 URL 被归并（consolidate），排名信号集中到规范网址上。
+
+duplicate 问题在电商里几乎无法回避，因为同一件商品的 URL 天然会分叉：
+
+\begin{itemize}
+  \item \textbf{参数分叉}：\code{?color=red}、\code{?size=M}、\code{?sort=price}、\code{?page=2}、
+        \code{?utm\_source=facebook}、\code{?sessionid=...}。
+  \item \textbf{路径分叉}：\code{/product/123} 与 \code{/Product/123/} 与 \code{/p/123} 与 \code{/product/123?ref=home}。
+  \item \textbf{协议与主机名分叉}：\code{http} 与 \code{https}、\code{www} 与裸域、\code{trailing slash}。
+  \item \textbf{分面导航}：13 个筛选维度两两组合就是上百个可抓 URL，其中绝大多数没有独立搜索需求。
+  \item \textbf{内容聚合页}：标签页、作者页、日历归档页、站内搜索结果页。
+\end{itemize}
+
+控制重复内容的四个手段有明确的分工，不能互相替代：
+
+\begin{table}[htbp]
+\centering
+\caption{重复内容治理的四种手段及其适用边界}
+\label{tab:dedup}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{3.0cm} L{2.9cm} Y}
+\toprule
+\tabhead{手段} & \tabhead{语义} & \tabhead{适用场景} & \tabhead{风险与注意} \\
+\midrule
+\code{301} 重定向 & 旧地址永久迁移到新地址 & 换域名、换 URL 结构、合并同款页 & 链式重定向会稀释信号，必须一步到位；\code{302} 不传递归并信号 \\
+\code{canonical} 标签 & 声明「这些 URL 的规范版本是它」 & 参数变体、排序筛选、跨域转载 & 它是\emph{建议}而非指令；自引用 canonical 必须在每个页面上正确输出 \\
+\code{noindex} & 请求从索引中移除该页 & 站内搜索结果页、薄内容标签页、会员中心 & 仍会被抓取；\code{noindex} 与 \code{Disallow} 同时使用会失效 \\
+\code{robots.txt} & 禁止抓取 & 极大量无价值参数路径、爬虫陷阱 & 不阻止索引、切断权重流动；必须与日志联合验证 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[「Google 选择的规范网页」是最终裁决，不是你写的标签]
+很多团队以为写了自引用 canonical 就万事大吉。但 canonical 只是\emph{提示}：
+搜索引擎会综合站内链接结构、站点地图、重定向、\code{hreflang}、内容相似度做最终判断。
+这就产生了一个常见的错位现象：GSC 报告里显示「重复网页，Google 选择的规范网页与用户指定的不同」。
+一旦出现这类条目，说明你的\emph{链接结构}和\emph{标签声明}在打架——通常是因为内链大量指向了非规范版本，
+或者站点地图里同时收录了两个版本。
+\textbf{治理原则}：所有信号必须向同一个方向指。canonical 标签、内链、站点地图、分页、面包屑、
+结构化数据里的 \code{url} 字段、以及社交分享链接，全部指向同一个规范 URL。
+只要有一个信号方向相反，索引归并就会不稳定，表现为「排名在多个 URL 之间来回跳」。
+\end{insight}
+
+索引覆盖率可以用一个简单的分解式监控。把 GSC 的页面索引状态按「排除原因」分为三类：
+\kw{授权排除}（\code{noindex}、被 \code{robots.txt} 屏蔽、备用网页、已抓取但未索引的部分薄内容——这些是你主动或半主动的决策）、
+\kw{技术排除}（404、软 404、重定向错误、服务器错误、超时——这些是 bug）、
+\kw{质量排除}（已发现未编入索引、已抓取未编入索引——这些是预算与质量的信号）。
+
+\begin{equation}
+\text{有效索引率} = \frac{U_{\text{indexed}}}{U_{\text{canonical}}} ,
+\qquad
+U_{\text{canonical}} = U_{\text{indexed}} + U_{\text{excluded}}^{\text{tech}} + U_{\text{excluded}}^{\text{quality}} + U_{\text{excluded}}^{\text{intent}} .
+\label{eq:indexcoverage}
+\end{equation}
+
+监控的重点不是绝对值，而是\emph{周环比}：\code{U\_excluded\^{}\{tech\}} 突增一定是发版事故，
+\code{U\_excluded\^{}\{quality\}} 缓慢上升通常意味着内容供给速度超过了站点的权重增长。
+
+\subsection{JavaScript 渲染：SSR、SSG 与 ISR}
+
+现代前端框架（React、Vue、Next.js、Nuxt）默认是客户端渲染（CSR）：服务器返回一个空壳 HTML，
+浏览器下载 JS 后再把内容「画」出来。这对爬虫是一个考验——Googlebot 能执行 JavaScript，
+但它使用的是\emph{渲染队列}：先抓原始 HTML，排期渲染，渲染后再索引。这个排队意味着：
+
+\begin{itemize}
+  \item \textbf{延迟}：从抓取到可索引可能相差数小时到数天，对时效性内容（价格、库存、大促页）是致命的。
+  \item \textbf{预算消耗}：渲染比纯抓 HTML 昂贵得多，所以渲染配额远小于抓取配额，JS 重的站点更早撞墙。
+  \item \textbf{失败面更大}：JS 报错、接口鉴权、\code{robots.txt} 拦住了 JS 文件或 API 接口，
+        都会让渲染结果变成空白页，而站长在浏览器里看不到（因为自己的浏览器有登录态与缓存）。
+  \item \textbf{其他引擎更弱}：Bing 的 JS 渲染能力在历史上弱于 Google；社交平台的抓取器
+        （用于生成分享卡片）几乎不执行 JS。跨境业务尤其要注意这一点。
+\end{itemize}
+
+对应的架构选择有三档，代价依次是「首屏延迟」与「运维复杂度」：
+
+\begin{table}[htbp]
+\centering
+\caption{CSR / SSR / SSG / ISR 对 SEO 与性能的影响}
+\label{tab:render}
+\small
+\begin{tabularx}{\textwidth}{L{1.7cm} L{2.5cm} L{2.7cm} L{2.6cm} Y}
+\toprule
+\tabhead{模式} & \tabhead{HTML 何时生成} & \tabhead{SEO 友好度} & \tabhead{典型 TTFB / LCP} & \tabhead{适用页面} \\
+\midrule
+CSR & 浏览器执行 JS 后 & 低（依赖渲染队列） & TTFB 快，LCP 慢 & 登录后的交互页、后台 \\
+SSR & 每次请求时服务端生成 & 高 & TTFB 受服务端影响 & 商品页、搜索结果页 \\
+SSG & 构建时预生成 & 最高 & 极快（可全站 CDN） & 内容页、类目页、帮助中心 \\
+ISR & 构建时生成 + 按需增量再生成 & 高 & 接近 SSG & 海量 SKU 的商品页 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+ISR（Incremental Static Regeneration，增量静态再生成）是电商最实用的折中：
+首屏用静态文件顶住流量与 LCP，后台按 \code{revalidate} 时间窗或按需触发重新生成。
+它把「十万级 SKU 无法预先构建」和「价格库存必须新鲜」这一对矛盾，转化成了「新鲜度窗口」这个可调参数——
+窗口越短，越接近 SSR 的成本；窗口越长，越接近 SSG 的性能。
+
+\begin{toolbox}[判断「JS 渲染是不是我的瓶颈」的四步验证]
+\begin{enumerate}
+  \item \textbf{关掉 JavaScript 看源码}。把 \code{view-source:} 里的 HTML 复制出来，禁用 JS 打开，
+        检查标题、价格、正文、内链是否都在。如果主图与正文缺失，渲染队列就是你的瓶颈。
+  \item \textbf{用 GSC 的「已抓取的网页」与网址检查对比}。网址检查里的「已抓取的网页」标签展示的是
+        \emph{原始 HTML}，「查看测试过的网页」展示的是\emph{渲染后}的 DOM。两者不一致，就是渲染差异。
+  \item \textbf{检查 \code{robots.txt} 有没有拦住 JS 与 API}。常见错误是屏蔽了 \code{/api/} 或
+        \code{/\_next/}，导致页面渲染不出来。
+  \item \textbf{在日志里按渲染器区分 User-Agent}，统计 JS 资源与 XHR 请求的抓取比例。
+        如果 Googlebot 抓了 HTML 却没有抓取关键的 XHR 接口，说明渲染队列里的执行被跳过或失败了。
+\end{enumerate}
+把这三类页面对齐后，优先把「有搜索需求的交易型页面」改为 SSR 或 ISR，把纯交互页留在 CSR，是最常见的正确解法。
+\end{toolbox}
+
+\subsection{排名的四个维度}
+
+Google 从未公布排序因子的权重，但搜索质量评估指南 \cite{google2024quality} 给出了评估者使用的四个维度，
+可以把它理解为排序目标的高层分解：
+
+\begin{enumerate}
+  \item \textbf{相关性（Relevance）}：内容是否回答了查询的意图。
+        它不只是「词有没有出现在页面上」，而是「主题是否匹配 + 内容是否够深 + 是否针对该意图形态」。
+  \item \textbf{质量（Quality）}：内容的专业度、原创性、可验证性，以及站点是否由真实的、可问责的主体运营。
+        这就是 E-E-A-T 的落点（见 \cref{sec:seo-content}）。
+  \item \textbf{可用性（Usability）}：移动端体验、页面性能、广告密度与侵入性、可访问性。
+        Core Web Vitals 属于这一维度的显式化。
+  \item \textbf{上下文（Context）}：用户位置、语言、设备、搜索历史，以及查询本身的形态
+        （导航 / 信息 / 商业调研 / 交易）。它决定了同一份内容在不同查询下应该是第 1 位还是第 20 位。
+\end{enumerate}
+
+\begin{keypoint}[把「排名」拆成可控项与不可控项]
+\textbf{可控}：相关性（选题与页面形态）、质量（内容与作者信息）、可用性（性能与体验）。
+\textbf{半可控}：上下文中的语言与地区（靠 hreflang 与本地化站点结构影响）。
+\textbf{不可控}：用户位置、设备、搜索历史、竞品的动作。
+\textbf{推论}：SEO 的 KPI 不应该定成「某关键词排名第 1」，而应该定成
+「在目标查询集合上的\emph{可见度}（impression $\times$ 位置折扣）与\emph{有效点击数}」。
+排名是一个随机变量的实现值，可见度才是期望值。这与 \cref{ch:search} 里讲的
+「不要用单点指标评价排序系统，要用期望排序质量」是同一个道理。
+\end{keypoint}
+
+\section{关键词研究：从词表到主题地图}
+\label{sec:seo-kw}
+
+\subsection{搜索意图的四种分类}
+
+关键词研究的第一步不是找词，而是\kw{判断意图}。同一个词根在不同修饰下会落入完全不同的意图类别，
+而不同意图需要不同的页面形态、不同的转化预期、不同的 KPI。四分类如下：
+
+\begin{table}[htbp]
+\centering
+\caption{搜索意图四分类：识别特征、目标页面与合理的 KPI}
+\label{tab:intent}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{2.9cm} L{2.6cm} L{2.3cm} Y}
+\toprule
+\tabhead{意图} & \tabhead{语言特征（中英）} & \tabhead{目标页面形态} & \tabhead{典型占比} & \tabhead{合理 KPI} \\
+\midrule
+导航型 & 品牌名、品牌 + 登录、官方 & 首页、品牌页、门店页 & 5\%--15\% & 品牌词点击份额、防竞品截流 \\
+信息型 & 是什么、怎么办、为什么、教程、\en{how to}、\en{guide} & 指南、教程、对比、工具页 & 45\%--65\% & 展示量、会话时长、订阅与加购辅助转化 \\
+商业调研型 & 最好、推荐、对比、\en{vs}、评测、\en{top N} & 榜单、横评、选购指南 & 15\%--30\% & 辅助转化、跳出率、站内搜索触发率 \\
+交易型 & 买、价格、折扣、包邮、附近、型号 & 商品页、类目页、活动页 & 10\%--25\% & 转化率、加购率、自然订单数 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+这里的「典型占比」是跨行业经验范围（示范量级），实际值强烈依赖品类：B2B 工业品的信息型占比会更高，
+快消品的交易型占比会更高。表格的使用方式不是背比例，而是\emph{用它做结构诊断}：
+如果你的站点 90\% 的流量都来自信息型词，而营收全部依赖交易型，那中间一定缺了一层
+「商业调研型」的内容把用户接下来。
+
+\begin{pitfall}[意图错配：为什么「关键词排名第 1 但不出单」]
+\textbf{现象}：某关键词稳定在第 1--3 位，每月带来数万展示、上千点击，但加购与下单接近于零。\\
+\textbf{根因}：几乎所有这类 case 都是意图错配，具体有三种典型：
+(1) \textbf{信息型词落在交易型页面上}。用户搜「XX 面料透气吗」，你给的是商品详情页，
+用户看一眼就返回——这个返回不是内容不好，而是\emph{形态}不对，他要的是解释而不是货架。
+(2) \textbf{交易型词落在信息型页面上}。用户搜「XX 型号 价格」，你给了一篇三千字导购长文，
+价格藏在第七屏，用户全部注意力都在找数字。
+(3) \textbf{词本身没有购买力}。「免费」「破解」「下载」「替代品」这类修饰会系统性稀释商业意图，
+即使排名再好也只有流量没有生意。\\
+\textbf{排查方法}：
+(1) 把关键词按四类打标，分别看各自的点击率、跳出率、以及\emph{辅助转化}贡献；
+(2) 对信息型流量单独建「阅读深度 + 站内搜索 + 邮件订阅」的中间目标，
+不要用转化率考核它，否则团队会把内容当成没用的成本砍掉；
+(3) 用 SERP 形态做意图校验：如果第一屏全是商品卡与购物广告，那这个词就是交易型，别用文章去抢。
+\end{pitfall}
+
+\subsection{关键词挖掘的六条渠道}
+
+挖掘的本质是「用多个有偏的样本互相校准」。任何单一渠道都有系统性偏差，必须交叉验证。
+下面六条渠道按「成本从低到高、可信度从低到高」排列：
+
+\begin{enumerate}
+  \item \textbf{搜索引擎自动补全（Autocomplete）}。在搜索框输入种子词后，引擎给出的补全列表反映\emph{高频}查询。
+        它的偏差是强头部化，且带有地域与个性化。适合发现头部词与主流修饰方式。
+  \item \textbf{相关搜索与「人们还搜索」（Related searches / People also search for）}。
+        位于结果页底部，反映\emph{语义相邻}的查询。它是扩展主题簇最便宜的入口，
+        也是检验「这个主题簇是否完整」的快速手段。
+  \item \textbf{「人们还问」（People Also Ask, PAA）}。这是最有价值的一类：它以问句形式暴露了
+        用户的\emph{信息缺口}，而且会随点击动态展开，天然形成问题图谱。
+        PAA 的问题可以 1:1 映射成 FAQ 区块与小标题（H2/H3），是内容策划的王牌。
+  \item \textbf{竞品与 SERP 逆向工程}。把目标词的前 10 名结果抓下来，分析它们的 H 标签结构、
+        内容长度、覆盖的子问题、内链布局、以及是否用了结构化数据。
+        这是唯一能直接看到「要越过谁」的方法。
+  \item \textbf{Google Search Console（GSC）查询报告}。这是\emph{你自己的}真实数据，偏差最小，
+        包含每个查询的展示、点击、CTR、平均排名。它最大的价值是发现
+        「已有展示但排名在 11--20 位」的\emph{临门一脚}词群——这是投入产出比最高的优化对象。
+  \item \textbf{第三方工具与电商平台搜索建议}。第三方工具提供搜索量与难度估算（属于模型推算，不是真值），
+        适合做量级排序而不是做绝对决策。跨境场景还要单独采集 Amazon、Temu、eBay 的站内建议词，
+        因为平台用户的语言习惯与 Google 用户差异明显（见 \cref{sec:seo-cbec}）。
+\end{enumerate}
+
+\begin{formulacard}[搜索量的四源校准]
+不要把任何单一来源的数字当成真值。把四个带偏估计做加权融合，误差会显著下降：
+\begin{equation}
+\hat{V}(k) = w_1 \hat{V}_{\text{tool}} + w_2 \frac{I_{\text{gsc}}}{\bar{\text{CTR}}_{\text{pos}}} + w_3 \hat{V}_{\text{ads}} + w_4 \hat{V}_{\text{platform}} ,
+\qquad \sum_i w_i = 1 .
+\label{eq:volume}
+\end{equation}
+权重经验值（示范量级）：自有站点数据 $w_2$ 给最高；工具估算 $w_1$ 与广告投放后台的展示份额 $w_3$ 次之；
+平台站内数据 $w_4$ 只用于平台 SEO，不要混进 Google 的估算里。
+核心纪律是：\textbf{同一个词表里只允许一种口径}，混用会让后续的优先级排序完全失真。
+\end{formulacard}
+
+\subsection{头中长尾分层与主题聚类}
+
+按搜索量与竞争度可以把关键词切成三层。这个分层的意义不在于「哪层更好」，
+而在于\emph{不同层需要完全不同的资源类型与考核周期}：
+
+\begin{table}[htbp]
+\centering
+\caption{头部 / 中部 / 长尾关键词的规模特征与策略差异}
+\label{tab:headtail}
+\small
+\begin{tabularx}{\textwidth}{L{1.7cm} L{2.1cm} L{2.1cm} L{2.4cm} Y}
+\toprule
+\tabhead{层级} & \tabhead{月搜索量量级} & \tabhead{词数量级} & \tabhead{转化率特征} & \tabhead{打法与周期} \\
+\midrule
+头部词 & $10^4$--$10^6$ & $10^1$--$10^2$ & 低（意图宽泛） & 品牌建设 + 类目页，6--18 个月见效，靠外链与站点权重 \\
+中部词 & $10^3$--$10^4$ & $10^2$--$10^3$ & 中 & 专题页 / 选购指南，3--9 个月，靠内容深度与主题相关性 \\
+长尾词 & $10^1$--$10^2$ & $10^3$--$10^5$ & 高（意图具体） & 批量商品页 / FAQ / 场景页，4--12 周可见效，靠覆盖率与结构化 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+长尾的数学意义值得单独强调。假设一共 $N$ 个查询，按搜索量降序排列，第 $i$ 位的搜索量近似服从幂律
+$V_i \propto i^{-\alpha}$。取 $\alpha \approx 1$（齐普夫定律的经典情形），
+则前 $K$ 个词占总量的比例约为 $H_K / H_N \approx \ln K / \ln N$。
+当 $N = 10^6$ 时，前 100 个词只占约 $4.6/13.8 \approx 33\%$，前 1000 个词占约 50\%。
+\textbf{结论}：头部词的天花板比直觉低得多，而剩下的一半流量分散在百万级的长尾上。
+这就是「长尾必须用规模化内容与结构化数据去覆盖，而不是用人工写文章去覆盖」的数学根据。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=3mm,
+  pillar/.style={draw=AmberDeep, fill=BoxBG, rounded corners=2pt, minimum height=8mm,
+                 inner sep=3pt, text width=3.5cm, align=center, font=\sffamily\scriptsize},
+  clu/.style={draw=NavyMid, fill=BoxBGAlt, rounded corners=2pt, minimum height=8mm,
+              inner sep=2pt, text width=2.3cm, align=center, font=\sffamily\tiny},
+  lf/.style={draw=RuleGray, fill=white, rounded corners=1pt,
+             inner sep=2pt, text width=1.85cm, align=center, font=\sffamily\tiny},
+  hdr/.style={font=\sffamily\scriptsize\bfseries\color{NavyDeep}}
+]
+\node[pillar] (p) at (0,0) {支柱页 Pillar\\「新手如何开始跑步」\\（中部词，3000 字指南）};
+\node[clu] (c1) at (-4.2,-1.9) {集群 A\\最佳跑鞋推荐};
+\node[clu] (c2) at (0,-1.9) {集群 B\\5 公里训练计划};
+\node[clu] (c3) at (4.2,-1.9) {集群 C\\跑姿与伤病预防};
+\node[lf] (f1) at (-5.4,-3.5) {宽脚跑鞋怎么选};
+\node[lf] (f2) at (-3.0,-3.5) {跑鞋寿命多少公里};
+\node[lf] (f3) at (0,-3.5) {四周配速表};
+\node[lf] (f4) at (3.0,-3.5) {膝盖外侧疼};
+\node[lf] (f5) at (5.4,-3.5) {足底筋膜炎拉伸};
+\draw[-{Stealth}, thick, AmberDeep] (p.south) -- (c1.north);
+\draw[-{Stealth}, thick, AmberDeep] (p.south) -- (c2.north);
+\draw[-{Stealth}, thick, AmberDeep] (p.south) -- (c3.north);
+\draw[-{Stealth}, NavyMid] (c1.south) -- (f1.north);
+\draw[-{Stealth}, NavyMid] (c1.south) -- (f2.north);
+\draw[-{Stealth}, NavyMid] (c2.south) -- (f3.north);
+\draw[-{Stealth}, NavyMid] (c3.south) -- (f4.north);
+\draw[-{Stealth}, NavyMid] (c3.south) -- (f5.north);
+\draw[-{Stealth}, dashed, CrimsonDeep] (f1.west) to[out=180,in=180] (f2.west);
+\draw[-{Stealth}, dashed, CrimsonDeep] (f4.east) to[out=0,in=0] (f5.east);
+\node[draw=RuleGray, fill=BoxBGAlt, rounded corners=2pt, inner sep=3pt, font=\sffamily\tiny,
+      text width=10.2cm, align=left] at (0,-4.95)
+  {实线 = 层级内链（支柱 $\to$ 集群 $\to$ 长尾），虚线 = 同层横向内链。
+   \textbf{所有内链都必须带回上一级}，否则权重只向下流不向上聚，支柱页永远长不起来。};
+\end{tikzpicture}
+\caption{主题集群（pillar-cluster）结构：一个支柱页统领若干集群页，集群页下挂长尾页}
+\label{fig:seo-cluster}
+\end{figure}
+
+主题集群模型（Topic Cluster / Pillar-Cluster）不是为了「多写文章」，而是为了\emph{让内链承担语义标注的职责}。
+搜索引擎判断「这个站是不是这个主题的权威」，很大程度依赖站内链接图的形状：
+如果 40 篇文章都指向同一个支柱页、且彼此之间有受控的横向链接，
+这个主题簇在链接图上就是一个紧密的团（dense community），比 40 篇互不相关的孤儿文章强得多。
+
+\begin{equation}
+S_{\text{cluster}} = \sum_{u \in \mathcal{C}} \sum_{v \in \mathcal{C}} \frac{w_{uv}}{1 + \abs{d_u - d_v}} ,
+\label{eq:clustercohesion}
+\end{equation}
+
+其中 $\mathcal{C}$ 是主题簇内的页面集合，$w_{uv}$ 是页面 $u$ 到 $v$ 的内链权重（可以简单地取 1，或按锚文本相关性加权），
+$d_u$ 是页面在信息架构中的层级深度。分母惩罚「跨层乱链」，
+所以这个式子奖励的是「同层横向互链 + 严格上下级回链」的结构。
+它是内容团队可以自己算、自己优化的指标，不需要任何外部工具。
+
+\subsection{关键词优先级与难度的打分公式}
+
+关键词研究最后一定要落到一张\emph{可排序的表}上，否则团队永远在争论「先做哪个」。
+优先级打分要同时包含四个因子：价值（流量 $\times$ 商业价值）、可达性（难度）、投入（内容成本）、以及协同（与现有主题簇的距离）。
+
+\begin{equation}
+\text{Priority}(k) =
+\underbrace{\frac{\hat{V}_k \cdot \text{CTR}_k \cdot r_k}{\log_2 (1 + \text{KD}_k)}}_{\text{期望收益 / 竞争成本}}
+\cdot
+\underbrace{\Big(1 + \eta \big(1 - \exp(-\lambda \, m_k)\big)\Big)}_{\text{协同加成}}
+\cdot
+\underbrace{\Big(\frac{1}{1 + c_k / c_0}\Big)}_{\text{投入折扣}} ,
+\label{eq:kwpriority}
+\end{equation}
+
+各符号的工程含义与经验取值如下：
+
+\begin{itemize}
+  \item $\hat{V}_k$：由 \cref{eq:volume} 校准后的月搜索量。
+  \item $\text{CTR}_k$：该词目标位置上的预期点击率，按 \cref{eq:ctrcurve} 估算。
+  \item $r_k$：\kw{商业价值系数}，由「该词流量能带来多少毛利」决定。
+        经验锚点：品牌词与高意图交易词取 1.0，商业调研词取 0.5--0.8，信息型词取 0.2--0.5，
+        纯导航型词取 0.1（它能带来的最大价值是品牌防御，不是新客）。这个系数是让 SEO 与营收对齐的关键旋钮。
+  \item $\text{KD}_k$：关键词难度得分（0--100），取对数是为了避免高难度词被一票否决：
+        一个搜索量巨大但难度 80 的词，仍然可能比一个量小难度 5 的词更值得排期。
+  \item $m_k$：该词与已有主题簇的匹配度（0--1），$\lambda$ 控制协同加成的陡峭程度，
+        $\eta$ 控制协同加成的最大倍数（取 $\eta = 0.5$ 表示最多把得分放大 1.5 倍）。
+        $m_k$ 高意味着「只需在现有支柱页上加一节」，边际成本极低，必须优先。
+  \item $c_k$：预估内容生产成本（小时数或金额），$c_0$ 是团队的单位成本尺度。
+\end{itemize}
+
+难度本身也需要一个可计算的估计，而不是只看第三方工具的分数。一个白帽可用的近似是把
+「排在前 10 的结果的域权威」与「你自己页面的相关性强度」放在一起比较：
+
+\begin{equation}
+\text{KD}(k) = 100 \cdot \Bigg( \alpha \cdot \underbrace{\frac{1}{10}\sum_{j=1}^{10} \frac{\text{DA}_j}{100}}_{\text{竞争域名强度}}
++ \beta \cdot \underbrace{\frac{1}{10}\sum_{j=1}^{10} \frac{\abs{P_j}}{L^{*}}}_{\text{竞争内容深度}}
++ \gamma \cdot \underbrace{\mathbb{1}[\text{SERP 含强特征}]}_{\text{强特征惩罚}} \Bigg) ,
+\label{eq:kwkd}
+\end{equation}
+
+其中 $\text{DA}_j$ 是第 $j$ 个结果的域名权威分（0--100，第三方工具的推算值），
+$\abs{P_j}$ 是其内容篇幅，$L^{*}$ 是你为这个主题设定的目标篇幅，三者权重满足 $\alpha + \beta + \gamma = 1$。
+「强特征」指 SERP 上出现了购物结果卡、视频结果、精选摘要、AI 概览、本地包等高占用形式——
+它们会挤掉自然结果的点击份额，必须显式惩罚，否则你会为一个「排第 1 也只有 8\% 点击率」的词投三个月。
+
+点击率随位置的衰减需要用一条可拟合的曲线来建模，而不是记一张静态表：
+
+\begin{equation}
+\text{CTR}(p) = \frac{\rho}{(p + p_0)^{\tau}} ,
+\qquad \rho \in (0,1),\; \tau > 0,\; p_0 \ge 0 ,
+\label{eq:ctrcurve}
+\end{equation}
+
+$p$ 是自然结果中的位置序号，$\tau$ 描述衰减陡峭度。行业公开研究的经验范围是
+$\tau \approx 0.8$--$1.4$、$p_0 \approx 0.5$--$1.5$（示范量级，且随 SERP 形态剧烈变化）。
+这条曲线的工程用法是\emph{拟合你自己的数据}：从 GSC 导出「查询--页面--平均排名--点击--展示」，
+按排名分桶回归出 $\rho, \tau, p_0$，你就得到了自己站点在当前 SERP 形态下的真实点击率曲线。
+用这条曲线而不是用行业平均值，会让 \cref{eq:kwpriority} 的排序结果可靠得多——
+因为你的点击率曲线里已经隐含了「你的品类被购物广告吃掉多少份额」这件事。
+
+\begin{formulacard}[难度与位置的「可见度」口径]
+单看排名没有意义，把位置换算成期望点击份额才有意义：
+\begin{equation}
+\text{Vis}(k) = \sum_{p=1}^{P} \text{CTR}(p) \cdot \pi_k(p) ,
+\qquad \sum_{p} \pi_k(p) = 1 ,
+\label{eq:visibility}
+\end{equation}
+$\pi_k(p)$ 是页面在该词上落到位置 $p$ 的概率分布（来自排名追踪的历史序列或方差估计）。
+\textbf{为什么重要}：两个页面平均排名都是 6.2，一个稳定在第 6 位，一个在 2--14 位之间剧烈抖动，
+它们的期望点击份额完全不同。用 $\text{Vis}$ 而不用平均排名做 KPI，能避免团队为降低方差而做保守优化。
+\end{formulacard}
+
+\subsection{一张可执行的挖掘脚本}
+
+把上面的流程写成代码。下面这一段做三件事：从原始导出数据里过滤出「有机会」的词群、
+按 \cref{eq:kwpriority} 排序、并把词聚成主题簇用于分配页面。
+
+\begin{lstlisting}[style=growth, language=Python, caption={关键词优先级打分与主题簇分配（示例脚本）}]
+# Keyword prioritization and topic-cluster assignment.
+# Input: GSC export rows (query, page, impressions, clicks, avg_position)
+#        plus a tool export (query, volume_estimate, difficulty_0_100)
+import math
+from collections import defaultdict
+
+def ctr_at(pos, rho=0.28, p0=1.0, tau=1.1):
+    """Expected click share at a given organic position."""
+    return rho / math.pow(pos + p0, tau)
+
+def commercial_value(intent):
+    return {"transactional": 1.0, "commercial": 0.7,
+            "informational": 0.35, "navigational": 0.1}[intent]
+
+def priority(vol, pos, intent, kd, fit, cost, c0=8.0, lam=2.5, eta=0.5):
+    ctr = ctr_at(pos)
+    gain = vol * ctr * commercial_value(intent) / math.log2(1.0 + kd)
+    synergy = 1.0 + eta * (1.0 - math.exp(-lam * fit))   # fit in [0, 1]
+    discount = 1.0 / (1.0 + cost / c0)
+    return gain * synergy * discount
+
+def striking_distance(rows, lo=11.0, hi=20.0, min_impressions=100):
+    """Queries already ranking just outside page one: cheapest wins."""
+    out = []
+    for r in rows:
+        if lo <= r["avg_position"] <= hi and r["impressions"] >= min_impressions:
+            out.append(r)
+    return sorted(out, key=lambda r: -r["impressions"])
+
+def assign_to_clusters(rows, cluster_rules):
+    """cluster_rules: list of (cluster_name, list_of_patterns)."""
+    buckets = defaultdict(list)
+    for r in rows:
+        q = r["query"].lower()
+        placed = False
+        for name, pats in cluster_rules:
+            if any(p in q for p in pats):
+                buckets[name].append(r)
+                placed = True
+                break
+        if not placed:
+            buckets["_unassigned"].append(r)
+    return buckets
+
+# Example: rank the striking-distance set by priority before writing anything.
+if __name__ == "__main__":
+    rows = [
+        {"query": "wide running shoes", "avg_position": 12.4,
+         "impressions": 3200, "volume": 4400, "intent": "commercial",
+         "kd": 34, "fit": 0.9, "cost": 6.0},
+        {"query": "how long do running shoes last", "avg_position": 8.1,
+         "impressions": 1500, "volume": 2100, "intent": "informational",
+         "kd": 18, "fit": 0.8, "cost": 4.0},
+    ]
+    for r in rows:
+        r["score"] = priority(r["volume"], r["avg_position"], r["intent"],
+                              r["kd"], r["fit"], r["cost"])
+    for r in sorted(rows, key=lambda x: -x["score"]):
+        print(round(r["score"], 2), r["query"])
+\end{lstlisting}
+
+\begin{toolbox}[关键词研究的交付物清单]
+一份合格的关键词研究报告不是一张词表，而应包含六个文件：
+\begin{enumerate}
+  \item \textbf{主词表}（CSV）：关键词、意图分类、校准搜索量、难度、目标 URL、当前排名、优先级分数。
+        每行都必须有\emph{唯一的目标 URL}——一个词对应两个页面就是自我竞争。
+  \item \textbf{主题簇地图}：每个簇的支柱页、集群页、长尾页清单，以及内链拓扑的预期形状。
+  \item \textbf{临门一脚清单}：来自 GSC 的 11--20 位词群，按展示量降序，标注每个词缺什么（缺一节内容 / 缺内链 / 缺结构化数据）。
+  \item \textbf{内容缺口报告}：竞品覆盖而你没有的子问题清单，直接对应 PAA 问题图谱。
+  \item \textbf{自我竞争清单}：同一查询下有多个自有 URL 交替出现的词群，需要做页面合并或 canonical。
+  \item \textbf{季度更新的版本记录}：词表必须每季度重跑，因为搜索量与 SERP 形态都在漂移。
+\end{enumerate}
+\textbf{验收标准}：从词表里随机抽 20 个词，逐个在 SERP 上人工核对意图分类，一致率应达到 80\% 以上；
+低于这个数字说明分类规则不可用，必须先修正分类器再谈排序。
+\end{toolbox}
+
+\section{站内优化：把每个页面做到「机器可解析、用户愿意留」}
+\label{sec:seo-onpage}
+
+\subsection{标题标签、H 标签与 URL 结构}
+
+页面级的信号有清晰的分工：\code{<title>} 影响点击率与相关性判断，H 标签描述\emph{内容结构}，
+URL 影响可读性、分享与重定向成本，结构化数据表达\emph{实体与属性}，正文承载质量。
+
+\code{<title>} 的三条纪律：
+(1) \textbf{把最关键的词放在前 30 个字符内}，因为结果页标题会被截断，而截断位置与设备宽度有关；
+(2) \textbf{每个页面唯一}，重复标题是「自我竞争」最常见的来源；
+(3) \textbf{不要为了长度堆砌}——把品牌塞在最前面是最常见的浪费，品牌应该放在末尾。
+标题里的数字、年份、规格、以及能回答疑问的词（如「价格」「对比」「教程」）通常能带来更高的点击率，
+因为它们提高了「这个结果是给我的」这一判断的确定性。
+
+H 标签的核心是\kw{层级正确}而非\kw{关键词密度}。三条规则：
+(1) 每页有且仅有一个 \code{H1}，且与 \code{<title>} 语义一致但不完全重复；
+(2) 不允许从 \code{H2} 跳到 \code{H4}——层级跳跃会让「哪一节是这一节的子问题」变得模糊，
+进而影响精选摘要与 AI 概览对你内容的切分；
+(3) \code{H2/H3} 应该尽量写成\emph{用户会搜的问句}，因为问句式小标题天然匹配 PAA 与语音查询。
+
+\begin{table}[htbp]
+\centering
+\caption{页面级 SEO 信号的职责与常见错误}
+\label{tab:onpage}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{3.4cm} L{3.2cm} Y}
+\toprule
+\tabhead{信号} & \tabhead{主要影响} & \tabhead{推荐做法} & \tabhead{常见错误} \\
+\midrule
+\code{<title>} & 相关性 + 点击率 & 核心词前置，60 字符内，全站唯一，品牌后置 & 全站模板化导致大量重复；关键词堆砌 \\
+\code{meta description} & 仅影响点击率 & 写成「收益 + 证据 + 行动」的一句话 & 被当作排名因素反复优化；留空让引擎自动截取 \\
+\code{H1}--\code{H3} & 内容结构理解、摘要切分 & 单 H1；不跳级；小标题写成问句 & 用 H 标签做视觉排版；图片标题用 H2 \\
+URL & 可读性、迁移成本、分享信任度 & 短、含核心词、用连字符、全小写、稳定不变 & 含日期与参数；改版不做重定向 \\
+图片 \code{alt} & 可访问性 + 图片搜索 & 描述图片内容与上下文，非堆词 & \code{alt="image"}；把整段正文塞进 alt \\
+结构化数据 & 富媒体结果资格 & 与页面可见内容严格一致 & 标记了页面上不存在的信息 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+内链是站内优化里\emph{投入产出比最高}、却最常被忽略的一项。它与外链不同：完全可控、没有成本、可以立即调整。
+内链的三个作用必须分清楚：
+(1) \textbf{权重传递}（把外链获得的权重按链接图重新分配）；
+(2) \textbf{抓取发现}（给爬虫一条路径，减少孤岛页）；
+(3) \textbf{语义上下文}（锚文本告诉引擎「这个目标页是关于什么的」）。
+第三点最容易被浪费：全站用「点击这里」「了解更多」「查看详情」做锚文本，
+等于浪费了成千上万次免费的主题标注机会。
+
+\begin{equation}
+\text{PageRank}_{\text{site}}(v) = \frac{1-d}{N} + d \sum_{u \to v} \frac{\text{PageRank}_{\text{site}}(u)}{L(u)} ,
+\qquad d \approx 0.85 ,
+\label{eq:internal-pr}
+\end{equation}
+
+其中 $L(u)$ 是页面 $u$ 的出链数。这个式子对 SEO 的实操含义是：
+(1) \textbf{减少非必要出链}能提升每个出链拿到的份额，所以「页脚全站 200 个链接」是在稀释每个目标页；
+(2) \textbf{层级越浅的页面越容易获得权重}，所以重要页面应该从首页三跳之内可达；
+(3) 官方 PageRank 说明过\code{nofollow} 会\emph{蒸发}权重而不是转移给它——
+所以用 \code{nofollow} 「节省权重」是一个无效动作，正确的动作是\emph{不放这个链接}。
+这是与流行的 SEO 建议相反、但更接近官方文档立场的一条判断。
+
+\subsection{结构化数据：让页面变成实体}
+
+结构化数据（Schema.org 词表 + JSON-LD 表达）的作用不是「让排名变好」，而是
+\kw{让引擎无需猜测就能准确抽取实体与属性}，从而获得富媒体结果（富摘要、商品卡片、FAQ 折叠、面包屑路径）
+的资格。资格不等于展示，但没有资格就没有展示。常用的类型与它们的字段要求：
+
+\begin{table}[htbp]
+\centering
+\caption{常用结构化数据类型、必备字段与典型收益}
+\label{tab:schema}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.6cm} L{2.7cm} Y}
+\toprule
+\tabhead{类型} & \tabhead{关键字段} & \tabhead{典型展现} & \tabhead{注意事项} \\
+\midrule
+\code{Product} & \code{name}, \code{image}, \code{offers}（价格、币种、库存、运费、退货）、\code{aggregateRating}, \code{review}, \code{gtin}/\code{mpn}/\code{sku} & 商品卡、价格与评分、配送与退货信息 & 价格与库存必须与页面可见内容一致；\code{aggregateRating} 不能虚构，必须来自真实评价 \\
+\code{Article} / \code{BlogPosting} & \code{headline}, \code{author}, \code{datePublished}, \code{dateModified}, \code{image}, \code{publisher} & 文章富结果、时效标注 & \code{author} 必须能对应到真实的、可问责的人或组织页 \\
+\code{FAQPage} & \code{mainEntity} 下的 \code{Question} / \code{Answer} & 问答折叠 & 问题与答案必须在页面上\emph{可见}；只标记不展示属于违规 \\
+\code{BreadcrumbList} & \code{itemListElement} 的位置与名称 & 结果里的路径代替 URL & 必须与页面面包屑一致 \\
+\code{Organization} & \code{name}, \code{logo}, \code{url}, \code{sameAs}, \code{contactPoint} & 知识面板、品牌实体 & \code{sameAs} 指向官方社媒与工商信息，是 E-E-A-T 的实体锚点 \\
+\code{ItemList} & 列表项顺序 & 榜单类结果 & 顺序必须与页面一致 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+实践中有三个高频错误：
+(1) \textbf{只做标记不改内容}。引擎会做一致性校验，标记与可见内容不符会被判定为垃圾行为；
+(2) \textbf{把标记当排名手段}。结构化数据解决的是「展示形态」，不解决「排不排得上」；
+(3) \textbf{不维护}。价格、库存、评分是动态字段，模板化输出时必须保证每次渲染都注入最新的值，
+否则会出现「富结果里的价格比页面低 30\%」这种既损失点击又引起投诉的问题。
+
+\subsection{Core Web Vitals：定义、阈值与优化手段}
+
+\term{核心网页指标}{Core Web Vitals} 是 Google 用三个指标对「页面体验」做的显式化 \cite{google2024corewebvitals}：
+
+\begin{itemize}
+  \item \metric{LCP}（\term{最大内容绘制}{Largest Contentful Paint}）：视口内最大的内容元素完成渲染的时间。
+        它度量\emph{加载}。通常那个「最大元素」是主图、主标题或首屏 hero 区块。
+  \item \metric{INP}（\term{交互到下次绘制}{Interaction to Next Paint}）：从用户交互到页面给出视觉反馈的延迟，
+        取整个会话中交互延迟的高分位（接近最差的一次）。它度量\emph{响应}，2024 年起取代了 FID
+        （First Input Delay 只测第一次交互的输入延迟，对「页面很卡但第一次点得早」这种体验完全无感）。
+  \item \metric{CLS}（\term{累计布局偏移}{Cumulative Layout Shift}）：页面生命周期内意外布局偏移的总分。
+        它度量\emph{视觉稳定性}，广告位、图片、字体、动态插入的横幅是主要来源。
+\end{itemize}
+
+阈值的口径必须精确理解：官方定义不是「平均值」，而是\kw{第 75 百分位}，
+并且数据在移动端与桌面端\emph{分开评估}。也就是说，只有当 75\% 的页面访问都达到「良好」阈值时，
+这个页面才被判定为良好。
+
+\begin{table}[htbp]
+\centering
+\caption{Core Web Vitals 阈值与第 75 百分位口径}
+\label{tab:cwv}
+\small
+\begin{tabularx}{\textwidth}{L{1.6cm} L{2.0cm} L{1.9cm} L{1.9cm} L{2.0cm} Y}
+\toprule
+\tabhead{指标} & \tabhead{度量什么} & \tabhead{良好} & \tabhead{待改进} & \tabhead{差} & \tabhead{主要成因} \\
+\midrule
+LCP & 加载 & $\le 2.5$ s & 2.5--4.0 s & $> 4.0$ s & 服务器 TTFB 高、主图未压缩、渲染阻塞资源、LCP 元素被懒加载 \\
+INP & 响应 & $\le 200$ ms & 200--500 ms & $> 500$ ms & 长任务阻塞主线程、过大的 JS 包、事件处理里做重计算 \\
+CLS & 视觉稳定性 & $\le 0.1$ & 0.1--0.25 & $> 0.25$ & 图片与广告位无尺寸预留、字体切换、动态插入内容 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{equation}
+\text{CWV}_{\text{pass}} = \mathbb{1}\Big[\, q_{75}(\text{LCP}) \le 2.5 \ \wedge\ q_{75}(\text{INP}) \le 200 \ \wedge\ q_{75}(\text{CLS}) \le 0.1 \,\Big] ,
+\label{eq:cwvthreshold}
+\end{equation}
+
+其中 $q_{75}(\cdot)$ 是该项指标在第 75 百分位上的值，且\emph{分别}在移动端与桌面端计算。
+理解这个口径会直接改变优化策略：如果你的 LCP 中位数是 1.8 秒但 p75 是 3.6 秒，
+那么「平均值很好」完全没有意义，你要修的是那 25\% 的慢访问——它们通常来自特定机型、
+特定网络（弱网）、特定入口（冷启动无缓存）或特定模板（某个含第三方脚本的页面）。
+
+\begin{pitfall}[把 Core Web Vitals 当成「改了就会涨流量」的按钮]
+\textbf{现象}：团队花两个月把 LCP 从 4.5 秒优化到 2.0 秒，三个核心指标全绿，
+但自然流量环比只涨了 1\%--3\%，远低于预期。于是得出结论「CWV 是伪命题」。\\
+\textbf{根因}：CWV 是排序信号里\emph{权重较小}的一类，官方多次表述为「打破平局的因素」（tie-breaker）：
+当两个页面在相关性与质量上接近时，体验更好的那个胜出。
+它不解决意图错配、不解决内容单薄、不解决权威不足——这三者是流量的大头。
+更微妙的是，CWV 的收益通常表现为\emph{转化率与跳出率}的改善，而不是排名的跃升，
+所以正确的度量口径是「自然会话的转化率与每会话收入」，而不是「排名」。\\
+\textbf{排查方法}：
+(1) 先做归因分解：把流量损失拆成「排名损失」与「点击率损失」两类。
+      如果展示量稳定、CTR 稳定，而排名位置在缓慢下滑，那问题在内容与权威，不在性能。
+(2) 把 CWV 项目与内容项目分成两条独立的工作流，各自设 KPI：CWV 项目看 p75 与移动端转化率，
+      内容项目看可见度与有效点击。
+(3) 如果一定要验证 CWV 的流量收益，用 \cref{sec:seo-measure} 的地理分流实验，
+      而不是看全站环比曲线。
+\\
+\textbf{一句话总结}：性能优化的确定性收益在转化率与成本侧（带宽、算力），
+SEO 侧的收益是「不被惩罚 + 平局时胜出」，把它当成增长杠杆会失望。
+\end{pitfall}
+
+\subsection{LCP 与 INP 的优化优先级}
+
+优化的顺序应该由「延迟来源的份额」决定，而不是由「哪个技术更时髦」决定。一个通用的拆解框架：
+
+\begin{equation}
+\text{LCP} \approx \underbrace{t_{\text{TTFB}}}_{\text{服务端}} + \underbrace{t_{\text{resource}}}_{\text{关键资源下载}} + \underbrace{t_{\text{render}}}_{\text{渲染阻塞与布局}} ,
+\label{eq:lcpdecompose}
+\end{equation}
+
+按经验量级（示范量级），一个未被优化的电商商品页上这三段大致是
+$1.0\text{--}1.5$ s / $0.8\text{--}1.5$ s / $0.5\text{--}1.5$ s。
+对应的手段与收益：
+
+\begin{itemize}
+  \item $t_{\text{TTFB}}$：边缘缓存、CDN、ISR/SSG、数据库查询优化、避免服务端串行调用。
+        这一段通常最容易拿到收益，尤其是把「每次请求都查三次数据库」改成缓存命中。
+  \item $t_{\text{resource}}$：主图改成 AVIF/WebP 并做响应式尺寸、\code{preload} LCP 元素、
+        去掉阻塞渲染的 CSS 与同步脚本、把非关键 JS 加 \code{defer}。
+        \textbf{最常见的错误是把 LCP 图片做成懒加载}——懒加载会让浏览器等到布局完成后才开始下载主图，
+        直接把 LCP 推后一个数量级。
+  \item $t_{\text{render}}$：\code{font-display: swap} 或字体子集化、避免布局抖动导致的重复重排、
+        用 CSS 的 \code{content-visibility} 跳过屏外内容。
+  \item INP：把长任务切成小块（\code{setTimeout} 让步或 \code{scheduler.yield}）、
+        把重计算移到 Web Worker、事件处理里避免同步布局读取（强制重排）、
+        减少第三方脚本（客服、A/B 工具、埋点 SDK 常是最大的一块）。
+\end{itemize}
+
+\begin{insight}[第三方脚本是性能预算里最没有回报的一块支出]
+一次典型的电商首屏会加载：埋点分析、A/B 实验、客服聊天、评价组件、再营销像素、
+热力图、CDN 之外的字体。行业经验上，这些脚本合计常占移动端 JS 执行时间的 50\% 以上（示范量级），
+而其中只有少数直接影响转化。它们的问题不只是体积，更是\kw{主线程争用}：
+每个第三方脚本都可以随时插入自己的长任务，而你无法控制它们的执行时机。
+\textbf{可执行的做法}：给每个第三方脚本设一个「性能预算」（压缩后体积上限 + 主线程时间上限），
+超过预算需要业务方书面确认收益；把客服与评价组件改成\emph{交互后加载}
+（用户滚动到位置或点击时再加载），这是几乎零风险的一刀。
+\end{insight}
+
+\section{内容策略：E-E-A-T 的可操作化}
+\label{sec:seo-content}
+
+\subsection{把 E-E-A-T 翻译成可检查的动作}
+
+\term{E-E-A-T}{Experience, Expertise, Authoritativeness, Trustworthiness} 是搜索质量评估指南
+\cite{google2024quality} 中的核心概念。它不是一个可以直接优化的算法因子，
+而是评估者用于判断「这个页面是否值得信任」的一组抽象标准。
+它的工程价值在于：\textbf{它把「内容质量」这个模糊概念拆成了四个可以被检查的维度}。
+
+\begin{enumerate}
+  \item \textbf{Experience（第一手经验）}：作者是否\emph{亲自}使用/到访/操作过。
+        可操作化：加入实拍图与视频、加入具体的使用场景与失败经历、
+        标注「我们测试了多久、测了几件、用什么方法测的」。
+        对比「XX 跑鞋很舒适」与「我们连续跑了 300 公里，鞋面在 120 公里后出现横向褶皱，
+        宽脚建议买半码」，后者才有 Experience。
+  \item \textbf{Expertise（专业度）}：作者是否具备该主题的知识。
+        可操作化：作者页有真实履历与资质、文章标注作者与审稿人、引用一手来源
+        （官方文档、论文、标准、法规原文）而不是二手转载。
+  \item \textbf{Authoritativeness（权威性）}：这个站/这个人是否被同行认可。
+        可操作化：被行业媒体引用、被专业社区讨论、被维基或权威目录收录、
+        有真实的品牌搜索量与导航型查询。
+  \item \textbf{Trustworthiness（可信赖性）}：这是四个里最重要的一个。
+        可操作化：清晰的联系方式与公司主体信息（工商注册、地址、电话）、
+        退换货与隐私政策可达、支付与物流说明明确、内容里区分「事实」与「观点」、
+        存在利益关系时披露（联盟链接、赞助、赠品）、
+        有可验证的第三方评价与真实的差评。
+\end{enumerate}
+
+\begin{keypoint}[E-E-A-T 的可操作化本质是「把不可验证的承诺变成可验证的痕迹」]
+评估者会问三个问题：\textbf{这是谁写的？他凭什么知道？他说错了谁来负责？}
+把这三个问题答清楚，需要的不是文案技巧，而是一堆\emph{页面与数据的补全}：
+作者实体页、组织结构化数据、来源引用、更新日志、以及一个真实的联系入口。
+\textbf{反过来看，最伤信任的几件事是}：
+作者署名写「Admin」或干脆没有、联系方式只有一个表单、引用了不存在的来源、
+正文里没有一处提到自己的测试方法与样本量、以及页面上有大量联盟链接却不披露。
+Trust 是乘性因子：它一旦被判定为低，其余三项做得再好也会被打折。
+\end{keypoint}
+
+\subsection{内容质量评估框架}
+
+在上线前用一张量表自评，比上线后被算法惩罚再回滚便宜得多。下面这张表把质量拆成六个可打分维度。
+它的用法是：任何一篇文章发布前必须拿到总分门槛（例如 70 分），
+而「事实准确」与「来源可查」两项是\emph{一票否决项}。
+
+\begin{table}[htbp]
+\centering
+\caption{内容质量六维评估框架（每项 0--5 分）}
+\label{tab:contentquality}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.4cm} L{3.2cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{检查问题} & \tabhead{5 分的表现} & \tabhead{1 分的表现} \\
+\midrule
+意图匹配 & 内容形态是否匹配该查询的意图分类？ & 形态、深度、结构完全对齐，首屏即给答案 & 用户在长文里翻找数字，或商品页上只有营销词 \\
+信息增益 & 相比前 10 名结果，多了什么？ & 有第一手数据、实测、独有样本或原创图表 & 把已有信息换个说法重排一遍 \\
+事实与来源 & 每个数字能不能溯源？ & 一手来源可点击、日期明确、口径说明清楚 & 引用「研究显示」而不给出处 \\
+可验证性 & 作者与站点能否被追责？ & 真实作者页、审稿人、公司主体信息可达 & 匿名、无可达联系方式 \\
+更新维护 & 有没有过时信息？ & 有更新日志，日期与数据同步刷新 & 三年前的型号还在当主推，价格已失效 \\
+体验与可读性 & 移动端是否好读？有无侵入性广告？ & 清晰小标题、可跳转目录、广告不遮挡正文 & 首屏全屏弹窗、正文被三处广告切断 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+内容衰减是这张表需要动态维护的原因。绝大多数内容页的搜索需求与竞争环境都会随时间漂移，
+排名和点击会缓慢下滑。可以用一个可校准的衰减模型来规划更新排期：
+
+\begin{equation}
+\text{Traffic}(t) = \text{Traffic}(0) \cdot \exp\big(-\delta \, t \big) ,
+\qquad \delta = \delta_0 \cdot \big(1 + \kappa \, \text{Age}_{\text{stale}}\big) ,
+\label{eq:contentdecay}
+\end{equation}
+
+其中 $t$ 以月计，$\delta_0$ 是主题的自然衰减速率（新闻类极高、法规解释类极低、
+选购指南类中等），$\text{Age}_{\text{stale}}$ 是「距上次实质更新」的月数，$\kappa$ 衡量「不更新对衰减的放大」。
+这个模型的用法不是精确预测，而是\emph{排优先级}：
+把全站内容按「当前流量贡献」与「更新边际成本」排成二维矩阵，
+优先更新「流量大 + 只需补充当年数据 + 结构无需重写」的那一格。
+这一步的投入产出比远高于新写文章——因为老页面已经积累了外链与历史信号，更新只需激活它们。
+
+\begin{casebox}[案例：一个 DTC 独立站 6 个月自然流量从 0 到 10 万的路径拆解（示范案例）]
+这是一个综合多个公开增长案例共性后构造的示范复盘，不代表任何具体公司的内部数据，
+但每一步的机制都可以在公开文档与行业共识中验证。
+背景：一个新的户外用品 DTC 站点，主营轻量化露营装备，SKU 约 400 个，启动时域龄为零、零外链。
+
+\begin{enumerate}
+  \item \textbf{第 0--1 月：先修地基，不写文章}。
+        完成三件事：把商品页从 CSR 改为 ISR（首屏静态、价格按需再生成）；
+        全站补齐 \code{Product} 结构化数据（价格、库存、运费、退货、真实评价）；
+        建立 \code{hreflang} 与站点地图自动化。此时自然流量仍在三位数，看似「什么都没发生」。
+  \item \textbf{第 1--3 月：用长尾覆盖率换取第一批流量}。
+        针对 400 个 SKU 的「型号 + 场景 + 规格」组合词批量生成场景页与 FAQ 区块，
+        每页只回答一个具体问题（例如「某某型号在 0 度环境下的睡袋温标实测」）。
+        这一层的单页流量很小（每月几十次展示），但页数多、意图极准，转化率显著高于类目页。
+        三个月后自然流量到约 1.5 万/月。
+  \item \textbf{第 3--5 月：建主题簇，把权重聚起来}。
+        写出 5 篇中部词的支柱页（如「轻量化露营装备选购指南」），
+        把已有的长尾页按主题归入集群，补全双向内链与面包屑。
+        这一步不新增多少内容，但显著改变了链接图形状，支柱页开始进入 8--15 位区间。
+        同期启动数字 PR：发布一份基于自测数据的「露营装备重量对比数据集」，
+        被三个户外媒体与两个社区引用。
+  \item \textbf{第 5--6 月：临门一脚 + 内容更新}。
+        用 GSC 拉出 11--20 位词群，逐页补一节内容、加两条内链、优化标题。
+        同时对前 3 个月的老页面做一次「年度数据刷新」，把失效的型号与价格更新。
+        这一阶段是流量曲线的拐点：从约 3.5 万/月上升到 10 万/月。
+\end{enumerate}
+
+\textbf{可迁移的结论有三条}：
+(1) 自然流量的曲线是\emph{阶跃}的，不是线性的；前 8--12 周的「毫无反应」是正常现象，
+因为站点权重与索引覆盖需要时间积累，中途放弃是最常见的失败模式；
+(2) 增长的主要贡献来自\emph{覆盖率}（长尾页面数）与\emph{链接图结构}（主题簇）这两项，
+而不是单篇爆款；
+(3) 把「优化已有页面」排在「新写页面」之前，是后期性价比反转的关键——
+当站上已有几百个有历史信号的页面时，激活它们比新增页面便宜得多。
+\end{casebox}
+
+\subsection{AI 生成内容的风险与边界}
+
+AI 生成内容（AIGC）在 SEO 里的正确问题不是「能不能用」，而是「\emph{在什么环节用、边界在哪里}」。
+官方文档的立场是：评判标准是内容是否有帮助、是否\emph{为搜索者而创作}，而不是\emph{如何}创作
+\cite{google2024seostarter}。这留下的空间与风险都很清晰：
+
+\begin{itemize}
+  \item \textbf{低风险用法}：做\emph{结构化抽取}（从规格表生成对比表）、
+        做\emph{变体生成后人工审校}（把同一份实测数据改写成不同意图的页面）、
+        做\emph{内链建议与内容缺口分析}、做\emph{翻译初稿}（必须本地化审校，见 \cref{sec:seo-cbec}）。
+  \item \textbf{中风险用法}：批量生成 FAQ 与描述，但没有第一手数据支撑，
+        产出的是「正确的废话」。这类内容不会立刻被惩罚，但会在竞争中被逐页淘汰，
+        同时稀释站点的整体质量水位。
+  \item \textbf{高风险用法}：规模化生成\emph{无第一手信息}的聚合页、
+        用 AI 编造评测与评价、生成大量语义重复的近义页面（\en{doorway pages}）、
+        以及用 AI 伪造作者身份与资质。
+        这几种做法同时命中「无信息增益」与「不可验证」两条红线。
+\end{itemize}
+
+\begin{insight}[AI 内容真正的风险不是「被检测出来」，而是「没有信息增益」]
+\textbf{为什么「检测 AI 文本」是个伪命题}：检测器误报率高，且官方从未把「是否 AI 生成」作为判定标准。
+真正让你掉队的是\emph{同质化}：当几千个站用同一个模型、同一个提示词框架、
+同一份公开数据生成同一个主题的文章时，这些页面的内容分布高度重合，
+用信息论的语言说就是\emph{互信息很低}——读者读完任何一篇获得的增量信息都接近于零。
+搜索引擎的目标是「用最少的结果解决用户的问题」，在这种情况下它只需要一份。
+\textbf{推论}：AI 在 SEO 里的正确位置是\emph{放大你独有的数据}，而不是\emph{替代你没有的数据}。
+一家有真实测试能力、有真实客户反馈、有真实供应链信息的公司，
+用 AI 把这份数据放大一百倍，是巨大的效率优势；
+一家没有任何独有数据的公司用 AI 生产内容，只是把自己变成了别人内容的低质量副本。
+\textbf{可操作的判据}：如果一篇文章里删掉所有从别处也能找到的句子，还剩多少？
+剩下的那部分，才是它的全部价值。
+\end{insight}
+
+\subsection{信息型与转化型内容的配比}
+
+内容策略最常见的两种失败是「全是产品页」和「全是博客」。正确的做法是把两类内容当成一条
+\kw{漏斗上的接力}，而不是两个互相竞争的部门。
+
+\begin{itemize}
+  \item \textbf{转化型内容}（商品页、类目页、活动页）：直接承载交易意图，KPI 是转化率与自然订单毛利。
+        它的容量上限由 SKU 数决定，靠覆盖率与结构化数据取胜。
+  \item \textbf{信息型内容}（指南、教程、对比、工具）：承载调研意图，KPI 是可见度、
+        辅助转化路径触发率、以及邮件/社群订阅。它的容量上限由主题空间决定，可以远大于 SKU 数。
+  \item \textbf{中间的桥}：从信息型页面到转化型页面的路径必须\emph{显式设计}——
+        在教程的相关步骤处插入「本步骤用到的装备」模块、
+        在对比文末尾放置「按你的需求选择」的决策表并链接到类目页。
+        没有这座桥，信息型流量就只是流量，不会变成生意。
+\end{itemize}
+
+配比没有普适答案，但有一个可用的推导方式：设信息型流量的平均辅助转化率为 $r_{\text{info}}$，
+交易型流量的转化率为 $r_{\text{trans}}$，两者单位流量毛利为 $g_{\text{info}}$ 与 $g_{\text{trans}}$，
+内容生产成本分别为 $c_{\text{info}}$ 与 $c_{\text{trans}}$（单位页面）。
+则边际收益平衡点满足：
+
+\begin{equation}
+\frac{r_{\text{info}} \cdot g_{\text{info}}}{c_{\text{info}}} = \frac{r_{\text{trans}} \cdot g_{\text{trans}}}{c_{\text{trans}}} .
+\label{eq:contentmix}
+\end{equation}
+
+把它当成一个「你的钱该往哪边多放」的判据：如果左侧明显更大，就加大信息型内容投入；
+如果右侧更大，说明你还有大量 SKU 没有合格的落地页，先补覆盖率。
+多数出海独立站的实际情况是：交易型页面的达标率（title、结构化数据、性能、内链）
+往往只有五成左右，此时补交易型页面的边际收益远高于写新博客——这是最容易被忽略的诊断。
+
+\section{技术 SEO 清单}
+\label{sec:seo-tech}
+
+\subsection{站点架构与移动优先}
+
+站点架构的目标是「让爬虫用最少的请求覆盖最重要的页面，让用户用最少的点击找到目标」。
+两条可量化的原则：
+(1) \textbf{重要页面的点击深度不超过三跳}（首页为一跳），
+因为每多一跳，页面被重新抓取的频率与获得的内部权重都显著下降；
+(2) \textbf{每个页面至少有一条来自站内的静态 HTML 链接}，
+即「零孤岛」——用 JS 点击事件跳转的链接，在渲染失败时就变成了孤岛。
+
+移动优先索引（Mobile-First Indexing）意味着 Google 主要使用\emph{移动端}的 HTML 来抓取与索引。
+这带来一个致命的架构陷阱：很多站点在移动端为了「简洁」，隐藏了桌面端存在的内容
+（用 \code{display:none} 折叠的分类导航、被移入标签页的规格表、被截断的正文）。
+如果这些内容在移动端 HTML 里\emph{完全不存在}（而不是被 CSS 隐藏），它们就不会被索引。
+
+\begin{pitfall}[移动端「精简」把一半内容精简掉了]
+\textbf{现象}：桌面端排名正常的页面，在移动端设备上排名明显偏低；部分规格与表格完全搜不到。\\
+\textbf{根因}：移动端模板用条件渲染（\code{if (isMobile) return <ShortVersion/>}）
+把桌面端的内容整块去掉，而不是用 CSS 折叠。
+搜索引擎看到的是移动端 HTML，于是这些内容从未进入索引。
+同理，移动端的 \code{<link rel="canonical">}、\code{hreflang}、结构化数据如果只在桌面模板里输出，
+也会全部失效。\\
+\textbf{排查方法}：
+(1) 用移动端 User-Agent 抓取页面源码，与桌面端源码做 diff，
+      重点关注正文、规格表、内链、\code{hreflang}、结构化数据五类；
+(2) 用「网址检查」的移动端测试对比渲染后的 DOM；
+(3) 建立 CI 检查：对同一 URL 分别以移动端与桌面 UA 请求，
+      断言关键内容片段与全部 SEO 相关标签同时存在。这条断言能挡住绝大多数移动端事故。
+\end{pitfall}
+
+\subsection{hreflang 与多语言多地区}
+
+跨境业务必做、也最容易配错的一项是 \code{hreflang}。它的作用是告诉引擎
+「这几个 URL 是同一个页面的不同语言/地区版本，请把对应版本给对应的人看」。
+它\emph{不}解决重复内容归并（那是 canonical 的职责），两者必须配合使用。
+
+\code{hreflang} 的三条硬规则：
+
+\begin{enumerate}
+  \item \textbf{双向确认}。A 页面声明 B 是它的 \code{en-US} 版本，B 页面也必须声明 A 是它的 \code{zh-CN} 版本。
+        单向声明会被忽略。这是最高频的错误。
+  \item \textbf{自引用必须包含}。每个页面都要在 \code{hreflang} 集合里包含自己。
+  \item \textbf{语言与地区分开写}。\code{en} 泛指英语，\code{en-GB} 与 \code{en-US} 是地区变体；
+        \code{zh-Hans} / \code{zh-Hant} 区分简繁，\code{es-419} 表示拉美西班牙语。
+        只写语言不写地区时，引擎只能按语言分配，无法做地区定向。
+\end{enumerate}
+
+用矩阵来描述这个问题最清楚。设页面集合与（语言，地区）目标集合分别记为 $P$ 与 $L$，
+理想状态下每个页面应当声明它所有的等价版本，构成一个完全的\emph{等价类}，
+而所有等价类的声明必须互相闭合：
+
+\begin{equation}
+\text{Hreflang}_{\text{coverage}} = \frac{\abs{\big\{ (p, \ell) : \ell \in L(p),\; p \in L^{-1}(\ell) \big\}}}{\abs{\big\{ (p, \ell) : \ell \in L(p) \big\}}} \times 100\% ,
+\label{eq:hreflang}
+\end{equation}
+
+分子统计「被对端承认的声明」（双向成立的边），分母统计「所有发出的声明」。
+这个比值就是「有多少比例的 hreflang 声明是真正有效的」。
+实践中的验收门槛是 95\% 以上，低于 90\% 时通常能在 GSC 的国际定位报告里看到大量错误条目。
+一个更严格的检查是\emph{等价类闭合性}：把关系看成无向图，
+每个连通分量应当是一个完全图（任意两点之间都有双向声明），否则说明某个语言版本漏掉了某个兄弟版本。
+
+\begin{table}[htbp]
+\centering
+\caption{多语言多地区的三种站点结构对比}
+\label{tab:hreflangstruct}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{2.5cm} L{2.6cm} L{2.4cm} Y}
+\toprule
+\tabhead{结构} & \tabhead{示例} & \tabhead{权重与收录} & \tabhead{运维与合规} & \tabhead{适用场景} \\
+\midrule
+子目录 & \code{site.com/de/} & 权重集中于主域，新语言版本起量最快 & 部署最简单，CDN 与证书统一 & 中小团队、语言数目少、以内容差异为主 \\
+子域名 & \code{de.site.com} & 需各自积累权重，起量慢于子目录 & 可独立部署与技术栈，运维成本上升 & 语言站点内容差异极大、需独立团队运营 \\
+ccTLD 独立域 & \code{site.de} & 本地信任度最高，但权重完全从零积累 & 成本与合规最重（本地主体、税务、数据） & 本地化程度深、有本地主体、需本地信任背书 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[多语言站点上线的检查项（按优先级）]
+\begin{enumerate}
+  \item \textbf{先决定结构再写内容}。结构一旦上线，迁移成本极高（涉及全部 URL 与历史外链）。
+  \item \textbf{每个页面产出完整的 hreflang 矩阵}，包含自引用，且双向闭合；用脚本自动校验闭合性。
+  \item \textbf{语言切换器必须是可抓取的 \code{<a href>}}，而不是 JS 下拉或 \code{<select>} 的 onchange。
+        同时，切换器不要用自动重定向（按 IP 或 \code{Accept-Language} 强制跳转）——
+        这会导致爬虫只看到一个语言版本，是跨境站点最常见的收录灾难。
+  \item \textbf{不要机器翻译后直接上线}。需要本地化审校：单位（英寸/厘米、磅/公斤）、
+        尺码表、价格与币种、尺码命名习惯、法规声明（如欧盟的合规标识）、以及本地化的示例与场景。
+  \item \textbf{canonical 指向自身语言的版本}，绝不跨语言指向英文版。
+  \item \textbf{合规前提下处理数据与 Cookie}。不同地区对同意管理的要求不同，
+        同意横幅不应阻塞首屏内容渲染（否则 LCP 直接爆掉）。
+        涉及税务与数据跨境的具体义务，以官方最新法规为准 \cite{eu_oss}。
+  \item \textbf{监控分语言的表现}。GSC 可按国家/地区与语言细分，
+        必须分开看，否则德语区的下滑会被英语区的增长掩盖。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{分页与参数处理}
+
+分页与参数是电商站抓取浪费的两大来源。现代（且更省心）的指导是：
+\textbf{不要再用 \code{rel="next"/"prev"} 做归并信号}（主流引擎已不再使用它），
+而是让每一页分页 URL \emph{自引用 canonical}，并用清晰的路径表达页序（\code{/category/?page=3} 或 \code{/category/page/3}）。
+分页页面的价值在于「把爬虫引向深层商品」，因此它必须：
+\emph{不要 noindex}（否则深层商品失去发现路径）、
+\emph{不要用 canonical 把第 2 页指向第 1 页}（这会让第 2 页上的商品无法被发现）、
+\emph{确保每页的商品链接是静态 HTML}。
+
+参数处理的优先级排序：
+(1) \textbf{功能参数}（排序、筛选、视图模式）——
+用 canonical 归并到主版本，或在 \code{robots.txt} 中屏蔽多参数组合，
+但要保留\emph{有独立搜索需求}的筛选组合页面（例如「红色连衣裙」这类有搜索量的属性组合）；
+(2) \textbf{跟踪参数}（\code{utm\_*}、\code{gclid}、\code{fbclid}）——
+用 canonical 忽略，或统一在服务器层剥离后 301；
+(3) \textbf{会话与用户标识}（\code{sessionid}、\code{uid}）——
+必须在服务器层处理，绝不能让它们进入爬虫可见的 URL；
+(4) \textbf{分面导航}——
+这是最需要精细治理的一类。原则是「筛选维度少、有搜索量、内容可区分的组合才值得被索引」，
+其余用 canonical 或屏蔽。
+
+\begin{table}[htbp]
+\centering
+\caption{常见 URL 类型的索引策略决策表}
+\label{tab:urlpolicy}
+\small
+\begin{tabularx}{\textwidth}{L{2.7cm} L{2.0cm} L{2.2cm} Y}
+\toprule
+\tabhead{URL 类型} & \tabhead{是否索引} & \tabhead{首选手段} & \tabhead{理由} \\
+\midrule
+商品详情页 & 是 & 自引用 canonical, 入站地图 & 转化主战场，必须有独立 URL 与结构化数据 \\
+类目页 & 是 & 自引用 canonical, 分页自引用 & 承载中部词，是内部权重分发枢纽 \\
+分页第 $k$ 页 & 是 & 自引用 canonical & 深层商品的发现路径；不再用 \code{prev/next} 归并 \\
+有搜索量的筛选组合 & 是（选定的少数） & 独立 URL + 独立标题与描述 & 有真实搜索需求，且内容与父类目有可区分差异 \\
+无搜索量的筛选组合 & 否 & canonical 到父类目或 \code{robots.txt} 屏蔽 & 数量呈组合爆炸，只消耗抓取预算 \\
+站内搜索结果页 & 否 & \code{noindex} 且允许抓取 & 大量参数变体，且内容与类目页重复 \\
+标签 / 作者 / 归档页 & 视情况 & 有价值的保留，薄的 \code{noindex} & 只有在有编辑价值与内链时才保留 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{404、301 与站点迁移}
+
+迁移（换域名、换 URL 结构、换平台）是 SEO 里风险最集中的操作。核心纪律只有一条：
+\textbf{每一个旧 URL 都必须有一个 301 指向它的\emph{内容等价}新 URL，而且要一步到位}（禁止链式重定向）。
+
+\begin{itemize}
+  \item \textbf{商品下架不要直接 404}。优先 301 到同类目页或最接近的替代品；
+        只有当确实没有对应内容时才用 410（明确告知永久移除，比 404 更快退出索引）。
+        404 大量累积会浪费抓取预算并稀释站点质量。
+  \item \textbf{软 404 要清理}。软 404 是「返回 200 但页面内容是空/错误提示」，
+        对爬虫是最糟的一种：它占着索引名额，还告诉爬虫这个 URL 有效。
+        常见来源是前端路由把不存在的路径渲染成了 200 的空组件。
+  \item \textbf{迁移必须全量清单管理}。导出全部旧 URL（从 sitemap、日志、GSC 已索引页面三处取并集），
+        建立「旧 URL $\to$ 新 URL $\to$ 状态码 $\to$ 验证时间」的四列表，逐条验证。
+  \item \textbf{保留旧域名一段时间}，至少覆盖一个完整的抓取周期（数月），不要立刻停止解析。
+  \item \textbf{迁移后监控四件事}：GSC 的 404 数量、索引覆盖率、核心词群排名、以及自然流量。
+        典型形态是「前两周下滑 10\%--30\%，6--12 周恢复」；若 12 周后仍未恢复，说明映射有遗漏。
+\end{itemize}
+
+\subsection{站点地图与索引覆盖率诊断}
+
+XML 站点地图（sitemap）的价值不是「让页面被收录」，而是
+\kw{提供一份权威的、带更新时间的 URL 清单}，帮助引擎发现页面并判断优先级。
+它有三个必须遵守的纪律：
+(1) \textbf{只收录规范、可索引、返回 200 的 URL}（把 404、重定向、\code{noindex} 页放进 sitemap 是最常见的自伤）；
+(2) \textbf{\code{lastmod} 必须真实}（批量刷新全站 \code{lastmod} 会让它的信号价值归零）；
+(3) \textbf{按类型拆分 sitemap 并分别监控收录率}（商品、类目、内容、图片各一份，
+这样才能定位「哪一类页面的收录出问题了」）。
+
+索引覆盖率诊断的入手点是「\emph{提交数} 与 \emph{收录数} 的差额按原因分解」。
+一个可用的运营指标是提交-收录转化率：
+
+\begin{equation}
+\text{IndexRate}_{\text{type}} = \frac{\#\{\text{该类型 sitemap 中已收录的 URL}\}}{\#\{\text{该类型 sitemap 中提交的 URL}\}} ,
+\label{eq:sitemaprate}
+\end{equation}
+
+按类型分别监控，经验门槛（示范量级）：类目与内容页应达到 85\% 以上，
+商品页受库存与薄内容影响通常在 60\%--85\%，低于 50\% 说明该类型的页面质量或抓取预算出了系统性问题。
+注意「已发现-尚未编入索引」这个状态的含义常被误读：它\emph{不是}「页面有问题」，
+而是「我知道这个 URL，但暂时不值得抓」。它的正确应对是提升该 URL 的内链与整体站点质量，
+而不是反复在 sitemap 里提交。
+
+\subsection{日志分析：找出抓取浪费}
+
+服务器日志是唯一\emph{未经第三方加工}的抓取事实。一次有效的日志分析需要四个字段：
+时间、请求 URL、状态码、User-Agent。要做四步清洗：
+(1) 只保留主流搜索引擎的 UA（并注意 UA 可以伪造，需用反向 DNS 或官方 IP 段校验）；
+(2) 按 URL 模板归一化（把 \code{/product/12345} 归到 \code{/product/*}），否则统计会被海量 SKU 淹没；
+(3) 剔除静态资源（除非要分析渲染资源消耗）；
+(4) 关联「该 URL 是否在 sitemap 里、是否可索引、是否属于核心页面集合」。
+
+分析产出应该是四张表：
+\emph{按模板的抓取占比}（发现浪费在哪）、
+\emph{核心页面的重新抓取周期}（发现重要页面多久被看一次）、
+\emph{状态码分布}（发现 5xx、404、重定向的规模）、
+以及\emph{Googlebot 与其它 UA 的对比}（发现某些引擎完全没抓到某个模板）。
+
+\begin{lstlisting}[style=growth, language=Python, caption={日志抓取浪费分析的骨架（示例）}]
+# Crawl-log waste analysis skeleton.
+# Input: a parsed access log as list of dicts with
+#   ts, url, status, ua  (one row per request)
+import re
+from collections import Counter, defaultdict
+
+BOT_PATTERNS = {
+    "googlebot": re.compile(r"Googlebot", re.I),
+    "bingbot": re.compile(r"bingbot", re.I),
+    "other": re.compile(r"bot|crawler|spider", re.I),
+}
+
+# URL templates that carry no index value in this example site.
+WASTE_RULES = [
+    (re.compile(r"[?&](sort|view|sessionid|utm_|gclid|fbclid)="), "tracking_or_sort"),
+    (re.compile(r"/search\?"), "internal_search"),
+    (re.compile(r"[?&]page=(\d+)"), "pagination"),
+    (re.compile(r"[?&](color|size|material)=.*[?&](color|size|material)="), "multi_facet"),
+]
+
+def template_of(url):
+    """Collapse numeric ids and slugs so that stats aggregate by template."""
+    u = re.sub(r"/\d{3,}", "/{id}", url.split("?")[0])
+    return u
+
+def analyze(rows, core_templates):
+    bot_requests = Counter()
+    per_template = defaultdict(Counter)
+    waste = Counter()
+    status = Counter()
+    for r in rows:
+        bot = next((b for b, p in BOT_PATTERNS.items() if p.search(r["ua"])), None)
+        if bot is None:
+            continue
+        bot_requests[bot] += 1
+        tpl = template_of(r["url"])
+        per_template[tpl][bot] += 1
+        status[(bot, str(r["status"])[0] + "xx")] += 1
+        if tpl not in core_templates:
+            for pattern, label in WASTE_RULES:
+                if pattern.search(r["url"]):
+                    waste[label] += 1
+                    break
+            else:
+                waste["non_core_other"] += 1
+    total = sum(bot_requests.values()) or 1
+    return {
+        "bot_share": {b: round(c / total, 3) for b, c in bot_requests.items()},
+        "waste_share": {k: round(v / total, 3) for k, v in waste.most_common()},
+        "status_mix": {f"{b}/{s}": c for (b, s), c in status.most_common()},
+    }
+
+# Interpretation guide:
+#   waste_share > 0.30  -> fix robots/canonical before writing more content
+#   core templates with no Googlebot hits -> internal linking / sitemap problem
+#   5xx share > 0.01    -> crawl rate limit will drop, fix server first
+\end{lstlisting}
+
+日志分析里最容易被忽视的一条洞察是：\textbf{抓取频率高的页面不等于流量高的页面}。
+如果日志显示某个参数化的筛选页每天被爬 500 次、而核心商品页每月才被爬一次，
+那么无论你写多少内容，收益都会被这个结构性问题吃掉。修结构永远优先于写内容。
+
+\begin{keypoint}[技术 SEO 的排查顺序：先止血，再进补]
+\textbf{第一优先（止血）}：5xx 与超时、被误屏蔽的 robots、错误的 \code{noindex}、
+移动端内容缺失、重定向链、软 404。这些问题会让\emph{所有}内容投入失效。
+\textbf{第二优先（提效）}：canonical 归并一致性、分页与参数治理、sitemap 类型化与 \code{lastmod} 真实化、
+hreflang 闭合性。它们决定「已经写好的内容能不能被正确归并和定位」。
+\textbf{第三优先（增量）}：内链结构、结构化数据、Core Web Vitals、内容更新与新增。
+这一层是「锦上添花」，但只有在第一、二层干净时才有复利。
+把这三层做成月度看板，并规定「第一层有未解决项时，冻结第三层的新增投入」，
+是防止团队用写文章来逃避技术债的最有效制度。
+\end{keypoint}
+
+\section{外链与权威}
+\label{sec:seo-link}
+
+\subsection{链接价值的判断维度}
+
+外链仍然是搜索引擎判断权威的主要外部信号，但「多少条链接」早就不如「哪些链接」重要。
+评估一条链接的价值需要看六个维度：
+
+\begin{table}[htbp]
+\centering
+\caption{外链价值判断的六个维度}
+\label{tab:linkvalue}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{3.2cm} L{2.9cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{判断依据} & \tabhead{高价值特征} & \tabhead{低价值 / 风险特征} \\
+\midrule
+来源权威 & 来源域的自身链接质量与品牌知名度 & 行业媒体、行业协会、官方机构、头部社区 & 内容农场、无主题的通用目录、链接交换站 \\
+主题相关 & 来源页主题与目标页主题的距离 & 同品类评测、同行业资源页、同主题讨论 & 无关行业的付费软文 \\
+位置与语境 & 链接在页面中的位置与上下文 & 正文首屏内、上下文语义连贯、有推荐语气 & 页脚、侧栏链接块、文末链接堆 \\
+链接形态 & 是否可抓取、是否为自然锚文本 & 静态 \code{<a href>}、锚文本为品牌或主题词 & JS 跳转、\code{nofollow}/\code{sponsored} 悬挂、隐藏链接 \\
+时效与留存 & 链接存活时间与是否持续被访问 & 长期留存、来源页仍有自然流量 & 短期投放后删除、来源页已无流量 \\
+流量佐证 & 来源页是否真有用户与点击 & 分析后台能看到真实的引荐会话 & 有链接但引荐流量为零，典型操纵信号 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[把外链当成「证据」而不是「票数」，一切就说得通了]
+搜索引擎要回答的问题是「凭什么相信这个站」。链接是\emph{第三方证言}：
+一个人说你好不算什么，十个互不相识的、自己也有信誉的人说你好，才构成证据。
+这解释了所有看似矛盾的现象：为什么买来的链接往往无效甚至有害（证人被收买，证言不值钱）、
+为什么同行业的一句话胜过无关行业的一百句（专业证人）、
+为什么链接被删除会掉排名（证据被撤回）、
+以及为什么「毒链接」需要处理（被拉进一个伪造证据的网络里）。
+\textbf{推论}：外链策略的全部内容就是\emph{让真正有信誉的第三方愿意主动提到你}。
+这件事没有捷径，但有很多可复制的工程化手段——见下一节。
+\end{insight}
+
+\subsection{白帽获取的五条路径}
+
+\begin{enumerate}
+  \item \textbf{数字 PR（Digital PR）}：用数据、研究、工具制造「可被报道的东西」。
+        最有效的一类是\emph{原创数据集}：把行业里没人整理过的数据整理出来（价格指数、销量趋势、
+        消费者调研、性能横评），媒体与同行需要引用它，链接自然产生。
+        它的成本主要在数据收集与图表制作，而不在「联系媒体」。
+  \item \textbf{客座与专家投稿}：向行业媒体、垂直社区、专业博客投稿。
+        关键纪律是\emph{内容必须只用在该站发布}（不能一稿多发），
+        且作者必须与你的品牌有真实关联——否则一旦被识别为「批量付费投稿」，整批链接都会贬值。
+  \item \textbf{资源页与工具页收录}：行业资源清单、工具导航、学习路径、开源项目列表。
+        方式不是群发邮件求收录，而是先做出\emph{确实值得被收录}的东西（计算器、对比工具、
+        免费模板、开源的规格数据集），再去申请。工具类链接的质量与留存通常远高于文章类。
+  \item \textbf{数据研究与行业报告}：把「数字 PR」做成持续机制——每个季度发布一份指数或报告，
+        让同行每年都要引用一次。它同时解决链接与品牌，是复利最高的一类投入。
+  \item \textbf{专家问答与媒体引用（HARO 类机制）}：响应记者的选题征集，
+        以专家身份提供可引用的观点。它的价值不只是链接本身，更是
+        \emph{在权威媒体上留下可验证的作者痕迹}——直接支撑 E-E-A-T 里的 Expertise 与 Authoritativeness。
+\end{enumerate}
+
+\begin{toolbox}[外链建设的可执行节奏]
+\begin{enumerate}
+  \item \textbf{季度资产}：每季度至少产出一个\emph{可被引用}的资产（数据集、工具、报告、基准测试）。
+        把它的目标定为「被 10 个相关域引用」，而不是「发 100 封外联邮件」。
+  \item \textbf{月度响应}：每周固定 2--4 小时处理记者选题征集与行业问答，由懂业务的人出观点，
+        而不是由市场专员代写。
+  \item \textbf{存量激活}：每季度审计一次「未链接提及」（有人提到你的品牌但没给链接），
+        礼貌请求补充链接——这是转化率最高的外链来源，因为对方已经认可你。
+  \item \textbf{竞品链接缺口}：抓取竞品的外链来源，过滤出「既链接了竞品、也覆盖了你的主题、
+        但没链接你」的域，逐个判断有没有真实的引用理由。
+        没有真实理由的不要碰——那会退化成群发外联。
+  \item \textbf{禁止清单}：付费链接网络、链接交换群、批量目录提交、隐藏链接与页脚链接块、
+        无主题的「高权重」外链套餐。这些一律不做，理由见下一小节的惩罚成本。
+\end{enumerate}
+\textbf{验收口径}：外链项目的 KPI 不应该是「新增链接数」，
+而应该是「引荐会话数」「引荐域中相关域的比例」「品牌词搜索量的变化」——
+前两个防作弊，第三个验证真实影响力。
+\end{toolbox}
+
+\subsection{黑帽风险与惩罚恢复}
+
+搜索引擎把「操纵排名的链接」定义为\term{链接作弊}{Link Spam}。
+常见形态与它们的可检测特征如下：
+
+\begin{itemize}
+  \item \textbf{PBN（私有博客网络）}：批量注册/购买过期域名、互相链接为自己的站点输送权重。
+        可检测特征：同一批 IP/C 段、相同的模板与托管、几乎无自然流量、
+        出链全部指向少数几个商业站点、内容为自动生成。
+  \item \textbf{链接买卖与付费软文}：以金钱换取\code{dofollow} 之外的链接。
+        可检测特征：链接集中在正文、锚文本过度优化且高度一致、
+        来源站有公开的「收费标准」页面、同一来源同时链接大量无关行业。
+  \item \textbf{隐藏链接与隐藏文本}：与背景同色、字号为零、\code{display:none}、
+        放在屏幕外的绝对定位元素里。这些是明确的违规，且极易被自动检测。
+  \item \textbf{锚文本过度优化}：站外链接里精确匹配关键词的比例异常高。
+        自然的链接锚文本分布应该以品牌词、URL、通用词为主，精确商业词占比很低。
+  \item \textbf{门页（Doorway Pages）}：为每个城市/每个关键词生成一个几乎相同的落地页，
+        只改了城市名或关键词，用来把用户导向同一个页面。这与合法的
+        「按地区有真实差异的落地页」有本质区别：后者的内容、库存、服务、价格确实不同。
+\end{itemize}
+
+\begin{pitfall}[惩罚恢复：删链接不是终点，\code{disavow} 更不是万能药]
+\textbf{现象}：站点流量在某个时间点断崖式下跌（不是缓慢下滑），核心词从第 3 位掉到 40 位之后，
+甚至品牌词也不见。团队第一反应是「买错了链接」，于是把能删的删掉、删不掉的提交 \code{disavow}。\\
+\textbf{根因}：有三个层层叠加的误区。
+(1) \textbf{把算法性降权与人工惩罚混为一谈}。算法性降权通常在下次核心更新时自动部分恢复；
+人工惩罚需要在 GSC 里提交\emph{重审请求}（Reconsideration Request），否则永远解除不了。
+两者在 GSC 的「手动操作」报告里有明确区分，第一步永远是先看这个报告。
+(2) \textbf{只删不建}。人工惩罚的重审要求证明「你不仅清理了违规链接，
+并且建立了防止再次发生的流程」。只提交一份删除列表，通常会收到一次模板化拒绝。
+(3) \textbf{滥用 \code{disavow}}。\code{disavow} 是\emph{最后手段}，
+用错会主动丢掉本来有价值的链接。只有当你能明确识别一批操纵性链接、
+且联系对方删除无果时，才应该提交，并且要按域为单位、附上说明。\\
+\textbf{排查方法}：
+(1) 确认惩罚类型（手动操作报告 / 核心更新时间线 / 站点迁移副作用）；
+(2) 按「外链增量时间线」与「流量下跌时间线」做对齐，找出可疑批次；
+(3) 逐条评估链接（用 \cref{tab:linkvalue} 的六个维度），分成「必删」「可疑」「正常」三类；
+(4) 先联系对方删除（保留沟通记录），无果再 \code{disavow}；
+(5) 写好重审文件，包含时间线、根因、已执行动作、以及\emph{制度化的预防措施}；
+(6) 恢复期以季度计，期间把资源投到内容与真实 PR 上，而不是继续清理。
+\\
+\textbf{一句话总结}：恢复的本质是「重新成为一个值得信任的站」，
+而不是「把污染的证据擦掉」。前者需要时间与真实产出，没有技术捷径。
+\end{pitfall}
+
+\section{度量：在不能做 A/B 的世界里做实验}
+\label{sec:seo-measure}
+
+\subsection{GSC 指标与它们的正确读法}
+
+Google Search Console 提供四个核心指标：\metric{展示量}（Impressions）、\metric{点击量}（Clicks）、
+\metric{点击率}（CTR）、\metric{平均排名}（Average Position）。四个都需要正确理解口径：
+
+\begin{itemize}
+  \item \textbf{展示是「链接被看见」还是「被加载」}？GSC 的展示统计的是结果\emph{在用户屏幕上出现过}，
+        滚动到才计入。所以 SERP 形态变化（多出一块 AI 概览或购物卡把自然结果推出首屏）
+        会让展示量\emph{下降}，即使你的排名没变。
+  \item \textbf{平均排名是位置的平均}，且只统计产生展示的查询。它有几个陷阱：
+        一个页面在长尾词上排第 1、在头部词上排第 30，平均排名可能看起来不错，
+        但实际上头部词的展示量占了九成。\textbf{永远要按查询分层看平均排名，不要看全局平均。}
+  \item \textbf{数据延迟与抽样}。GSC 的数据有 2--3 天延迟，长尾查询可能被抽样聚合；
+        对单日数据做结论是危险的。
+  \item \textbf{「未提供」的查询}。出于隐私，低频查询不会出现在查询报告里，
+        但它们贡献了大量长尾流量。这导致「查询报告的总点击」小于「效果报告的总点击」，
+        差额就是长尾的规模——这个差额本身是一个有用的指标。
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{GSC / 第三方工具 / 分析平台三类数据源的分工与局限}
+\label{tab:datasources}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{2.9cm} L{3.0cm} Y}
+\toprule
+\tabhead{数据源} & \tabhead{能给什么} & \tabhead{口径与局限} & \tabhead{主要用途} \\
+\midrule
+GSC & 查询、页面、国家、设备的展示/点击/CTR/平均排名 & 只覆盖 Google 自然搜索；有隐私屏蔽与延迟；排名是全站平均 & 找临门一脚词、诊断索引与抓取问题 \\
+第三方排名工具 & 指定关键词组的位置快照、竞品对比、SERP 特征 & 位置是\emph{单点采样}，受地点/设备/个性化影响，与真实平均位置有系统偏差 & 竞品监控、SERP 形态变化追踪 \\
+分析平台（GA4 等） & 自然会话、转化、收入、行为路径 & 自然搜索的来源关键词多数为「未提供」 & 归因与业务结果，必须与 GSC 拼装使用 \\
+服务器日志 & 真实抓取行为与状态码 & 需要清洗与归一化；UA 可伪造 & 抓取预算与索引诊断 \\
+站内搜索日志 & 用户在自己站内搜什么 & 只反映已到站用户 & 发现内容缺口与商品缺口 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{自然流量的归因：GA4 的 not provided 问题}
+
+从分析平台看自然搜索时，绝大多数会话的来源关键词是「未提供」。
+这不是工具的问题，而是搜索引擎出于隐私不再传递完整的关键词。
+结果是：你能看到「自然搜索带来了 10 万会话」，但看不到这些会话来自哪些词。
+工程上的解决办法是\kw{两侧拼装}：
+
+\begin{itemize}
+  \item \textbf{落地页维度做桥接}。GA4 里按「自然搜索 + 落地页」分组，
+        GSC 里按「页面 + 查询」导出，两者通过\emph{落地页 URL} 关联。
+        这能恢复出「某页面带来的自然会话来自哪些查询」的近似分解，
+        精度取决于一个页面覆盖多少个查询（越聚焦越准）。
+  \item \textbf{建立查询到业务结果的映射}。把 GSC 的查询与站内的关键词分类
+        （意图分类 + 主题簇）关联，就能算出「信息型词贡献了多少辅助转化」。
+  \item \textbf{不要用「最后一次点击」评估 SEO}。自然搜索在 B2B 与高客单价品类里
+        经常是\emph{第一次触达}，最后一次点击归给品牌词或直接访问。
+        至少要用「首次点击 + 线性 + 数据驱动」三种模型交叉看（多触点归因的方法论见广告章
+        \cref{ch:ad}）。这种偏差会让「SEO 看起来没用」的结论反复出现，
+        而实际上它贡献了漏斗顶部的绝大部分。
+\end{itemize}
+
+\begin{equation}
+\text{SEO}_{\text{contribution}} = \sum_{\text{session } s} \sum_{j} \omega_j \cdot \mathbb{1}[\text{自然搜索是 } s \text{ 的第 } j \text{ 个触点}] \cdot \text{Revenue}(s) ,
+\label{eq:seoattrib}
+\end{equation}
+
+其中 $\omega_j$ 是第 $j$ 个触点在该归因模型下的权重（线性模型里 $\omega_j = 1/n_s$，
+时间衰减模型里 $\omega_j \propto \gamma^{\,n_s - j}$，首次点击模型里只有 $j=1$ 取 1）。
+把它与付费渠道用同一套模型算出来的数字放在一起，才是可比较的。
+
+\subsection{SEO 为什么不能做 A/B}
+
+标准 A/B 实验要求「同一总体随机分流到两个版本」，而 SEO 面对三个硬约束：
+(1) \textbf{一个 URL 只能有一个版本}——你不可能让一半爬虫看 A 版、一半看 B 版并各自独立收录；
+(2) \textbf{版本间会互相污染}——如果两个 URL 内容相同，引擎会做归并，实验的「两个处理」实际上变成一个；
+(3) \textbf{结果滞后且不可逆}——索引与排名需要数周才稳定，而实验期内的更新会互相干扰。
+
+替代方法有三类，按可信度从高到低：
+
+\begin{enumerate}
+  \item \textbf{地理分流实验（Geo Experiment）}。选择结构相似、互不重叠的多个地区市场，
+        随机分为处理组与对照组，只在处理组上线改动，比较两组的自然流量变化之差。
+        它的关键假设是「平行趋势」：在没有干预的情况下，两组的变化趋势相同。
+        做法上通常用\term{双重差分}{Difference-in-Differences, DiD}：
+        \begin{equation}
+        \hat{\tau}_{\text{DiD}} = \big(\bar{Y}_{\text{treat}}^{\text{post}} - \bar{Y}_{\text{treat}}^{\text{pre}}\big)
+        - \big(\bar{Y}_{\text{ctrl}}^{\text{post}} - \bar{Y}_{\text{ctrl}}^{\text{pre}}\big) ,
+        \label{eq:did}
+        \end{equation}
+        $\hat{\tau}_{\text{DiD}}$ 就是改动带来的增量效应估计。
+        必须做\emph{安慰剂检验}：把干预前的时段假装成干预期，如果 DiD 在那里也显著非零，
+        说明平行趋势假设不成立，实验设计需要重做。
+  \item \textbf{时间序列因果推断（合成控制 / 中断时间序列）}。
+        只有一个市场或无法分流时，用干预前的历史数据构造一个「反事实对照」：
+        用一组未受干预的同类站点或地区加权组合成合成控制，
+        再比较干预后的实际曲线与合成的反事实曲线。它的主要风险是
+        「同期发生了别的事」（算法更新、季节、竞品动作），所以必须对已知的大更新做\emph{排除窗口}。
+  \item \textbf{准实验代理指标}。当上述都不可行时，退而度量更接近改动本身、
+        受算法波动影响更小的中间指标：抓取频率（日志）、收录数（GSC）、
+        SERP 特征资格（结构化数据富结果出现率）、Core Web Vitals 的 p75。
+        这些指标的因果链更短，噪声更小，适合做\emph{工程验收}，
+        但不能直接换算成流量收益。
+\end{enumerate}
+
+\begin{insight}[把 SEO 的实验问题还原成「识别问题」，答案就清楚了]
+SEO 的实验困境本质上是因果推断里的经典问题：\emph{处理不可随机化到同一单元，且存在强外部冲击}。
+一旦这样看，方法论工具箱就直接可用了：
+地理分流对应「整群随机化」，时间序列对应「中断时间序列与合成控制」，
+两者都需要\emph{平行趋势}或\emph{无同期冲击}的识别假设，且都必须做安慰剂检验与敏感性分析。
+因果推断的一般框架见 \cite{pearl2009causality}；
+在线实验中如何系统地避免误判与指标滥用，可参考 \cite{kohavi2020trustworthy}。
+\textbf{最重要的实践结论}：不要在季度总结里用「环比涨了 12\%」来宣称某个 SEO 改动的功劳。
+在算法更新频繁的环境里，`环比曲线 + 归因故事` 的证据强度接近于零。
+要么做地理实验，要么诚实地报告「不可识别」，并把结论限定在工程验收指标上。
+\end{insight}
+
+\begin{toolbox}[SEO 度量的三层看板]
+\begin{enumerate}
+  \item \textbf{第一层：可识别性（工程验收）}。索引覆盖率、按类型 sitemap 收录率、
+        hreflang 闭合率、抓取浪费率、核心页面重抓周期、CWV 的 p75。
+        这些指标因果链最短，可以做到周级反馈。
+  \item \textbf{第二层：可见度（竞争位置）}。按意图分层的关键词可见度
+        $\text{Vis}$（见 \cref{eq:visibility}）、临门一脚词群的数量与质量、
+        精选摘要与富结果的出现率。它们的噪声中等，适合做月度趋势。
+  \item \textbf{第三层：业务结果}。自然会话、自然订单与毛利、辅助转化贡献、
+        自然渠道的新客 CAC。它们的噪声最大，必须用季度或半年窗口，
+        且必须在有对照组的前提下才允许做因果结论。
+\end{enumerate}
+\textbf{纪律}：每一层都要有明确的「升 / 降级」规则。当第一层出现红灯时，
+暂停第二、三层的实验解读——在漏水的水管上做流量归因是无效劳动。
+\end{toolbox}
+
+\section{跨境电商 SEO 特化}
+\label{sec:seo-cbec}
+
+\subsection{三套并行且互不相同的 SEO 逻辑}
+
+跨境增长团队必须同时应对三种搜索入口，它们的算法、可控变量与优化节奏完全不同：
+
+\begin{enumerate}
+  \item \textbf{Google 独立站 SEO}：可控变量最多（技术、内容、外链全覆盖），周期最长（季度计），
+        但天花板最高，且资产归属自己。
+  \item \textbf{平台站内 SEO}（Amazon、Temu、eBay、Shopee、TikTok Shop 等）：
+        可控变量集中在标题、属性、图片、以及广告与转化的联动；周期最短（周计），
+        但流量归属平台，规则由平台定义且随时变化。
+  \item \textbf{社媒与内容平台的搜索}（YouTube、TikTok、Pinterest、Reddit 等）：
+        本质是「站内搜索 + 推荐」的混合体，其优化逻辑更接近推荐系统（见 \cref{ch:recall}），
+        关键词的作用是帮助系统理解主题与匹配查询。
+\end{enumerate}
+
+\begin{table}[htbp]
+\centering
+\caption{平台站内 SEO 与独立站 SEO 的差异对照}
+\label{tab:platformvs}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{3.3cm} L{3.3cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{独立站（Google）} & \tabhead{平台站内（如 Amazon）} & \tabhead{对策略的含义} \\
+\midrule
+排名核心 & 相关性 + 质量 + 权威 + 体验，外链是主要外部信号 & 相关性 + 转化率 + 销售速度 + 库存与配送 + 广告 & 平台侧「转化率就是排名因子」，独立站侧不是 \\
+可控变量 & URL、模板、服务器、结构化数据、外链、内容全部可控 & 标题、五点、描述、属性、图片、A+、价格、广告、库存 & 平台侧要精细化到字段级别，独立站侧要投资技术 \\
+关键词入口 & 查询层，用户可自由表达长句 & 用户更依赖类目浏览与筛选，查询短且词序不敏感 & 平台侧重\emph{字段覆盖}，独立站侧重\emph{内容深度} \\
+度量口径 & 展示/点击/会话/转化，可端到端归因 & 平台给的是会话、转化率、Buy Box 份额等黑箱指标 & 平台侧只能做「变量实验」，无法做归因分解 \\
+资产归属 & 域名、内容、外链都是自有资产 & 账号与评价属于平台，流量无法带走 & 长期必须把平台流量导向自有渠道（合规前提下） \\
+规则风险 & 算法更新影响排名 & 政策、费率、字段规则随时变化 & 平台政策类内容一律以官方最新文档为准 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{平台站内 SEO：A9/A10 逻辑与字段规则}
+
+Amazon 的站内搜索排序（业内俗称 A9，近年的更新被称作 A10，具体机制从未官方完整公布）
+被广泛认为以\emph{转化相关信号}为核心，而不像 Google 那样以外链权威为核心。
+行业共识下，平台排序的主要输入可以归纳为四组：
+
+\begin{itemize}
+  \item \textbf{相关性}：查询与商品的匹配程度，由标题、五点描述、后台搜索词字段、
+        类目、属性（变体、材质、尺寸、颜色）、以及 A+ 内容的文本共同决定。
+        \emph{重要}：平台会做词干化与同义处理，所以堆叠重复词没有收益，
+        反而会因为可读性差压低点击率。
+  \item \textbf{转化与销售速度}：点击率、转化率、近期销量与销售增速、退货率、评价数量与评分。
+        「销售速度」的权重常被形容为「近期 > 历史」，所以促销与广告对自然排名有
+        \emph{反哺}作用——这是平台 SEO 与独立站 SEO 最大的机制差异。
+  \item \textbf{客户体验信号}：库存可得性、配送速度（FBA 通常优于自发货）、
+        价格竞争力（相对同类商品的价格带）、A+ 页面完整度、退货与客服表现。
+  \item \textbf{广告与自然位的耦合}：平台广告位与自然位共享部分排序信号，
+        广告带来的转化会反哺自然排名。这使平台的「SEO + 广告」必须一体化运营，
+        而不能像 Google 那样分开考核。
+\end{itemize}
+
+字段级别的规则必须\emph{以各平台卖家中心的最新文档为准}，因为它们会变。但有三条跨平台通用的纪律：
+(1) \textbf{标题结构化为「品牌 + 核心品类词 + 关键属性 + 规格/数量 + 适用场景」}，
+并把最核心的品类词放在前 80 个字符内（这是很多平台与移动端截断的共同边界）；
+(2) \textbf{后台搜索词字段不重复标题里已有的词}，用于补充同义词、拼写变体、
+        以及用户可能使用但标题不适合放置的词（每个平台对字符数与禁用词有不同限制，务必查官方文档）；
+(3) \textbf{属性字段填满}——平台的筛选器与推荐都依赖结构化属性，
+        留空等于主动放弃大量无查询词的曝光入口。
+
+\begin{pitfall}[把 Google 的关键词策略直接搬到平台站内]
+\textbf{现象}：独立站团队把 Google 侧验证过的长尾关键词策略套用到平台商品页，
+结果是转化率下降、自然排名反而变差。\\
+\textbf{根因}：两边的机制有几个直接冲突。
+(1) \textbf{Google 侧「匹配长尾词」靠单独页面；平台侧商品页只有一个}，
+        把长尾词堆进标题会拉低可读性与点击率，而点击率下降又直接压低平台排名——负反馈闭环。
+(2) \textbf{平台用户大量通过类目与筛选浏览，而不是搜索长句}，
+        所以「属性字段填满」的收益远高于「标题多塞三个词」。
+(3) \textbf{平台排序对转化率极其敏感}，任何降低转化率的「关键词优化」都会
+        在两周内反噬排名；Google 侧的内容页则对短期转化不敏感。
+\\
+\textbf{排查方法}：
+(1) 把平台标题的可读性当作硬约束（人工通读一遍，读不通就是不合格）；
+(2) 做字段级实验：属性补全、后台搜索词补充、主图改版三类改动分开测，
+        每次只动一处，观察两周的转化率与自然位次；
+(3) 用「无查询词曝光」的占比监控属性覆盖的收益——
+        这类曝光完全来自类目与筛选，是平台侧独有的增长空间。
+\end{pitfall}
+
+\subsection{多语言本地化：翻译不等于本地化}
+
+本地化的价值不只是「看得懂」，而是「符合当地购买决策的信息结构」。四类必须处理的差异：
+
+\begin{itemize}
+  \item \textbf{度量单位与尺码}：美国用英寸/磅、欧洲大多用厘米/公斤、
+        尺码命名体系（US / UK / EU / JP）互不相同且不能线性换算。
+        把尺码表直接机器翻译会导致大规模退货，而退货率在平台侧直接伤害排名。
+  \item \textbf{价格呈现与税费}：B2C 跨境在多数市场要求\emph{含税标价}，
+        且运费与关税的处理方式必须明确可预期。含糊的「可能有关税」是转化率杀手，
+        也影响信任维度（Trust）。具体的税务与合规义务以官方最新法规为准 \cite{eu_oss}。
+  \item \textbf{支付方式与信任信号}：不同市场的首选支付方式差异极大，
+        本地化信任标志（本地认证、本地退货地址、本地客服时段）对转化率的影响常被低估。
+  \item \textbf{内容形态与搜索习惯}：同样的品类，不同市场的查询表达习惯不同
+        （是否用型号、是否用口语、是否偏好视频）。
+        正确做法是用\emph{目标市场的关键词研究}倒推内容结构，
+        而不是先写中文内容再翻译。这也是为什么「本地化关键词研究」
+        必须由懂该市场的人或工具单独执行。
+\end{itemize}
+
+\begin{equation}
+\text{Potential}(\ell) = \sum_{k \in \mathcal{K}_{\ell}} \hat{V}_{k,\ell} \cdot \text{CTR}_{\ell}\big(p_{k}\big) \cdot r_{k,\ell} \cdot \text{AOV}_{\ell} \cdot \text{GM\%}_{\ell} ,
+\label{eq:geopotential}
+\end{equation}
+
+其中 $\mathcal{K}_{\ell}$ 是在语言/地区 $\ell$ 下你已覆盖或计划覆盖的关键词集合，
+$\hat{V}_{k,\ell}$ 是本地搜索量，$\text{CTR}_{\ell}(p_k)$ 是该市场的点击率曲线（受 SERP 形态影响），
+$r_{k,\ell}$ 是转化率，$\text{AOV}_{\ell}$ 与 $\text{GM\%}_{\ell}$ 分别是客单价与毛利率。
+这个式子的用途是\emph{给语言/地区排优先级}：很多团队的本地化顺序是「先做英语，
+再做欧洲，最后做日本」，但如果把 $\text{AOV}$ 与 $\text{GM\%}$ 代入，
+日本或德语区常常应该排在部分英语市场之前。地区优先级必须算，不能靠感觉。
+
+\begin{casebox}[案例：hreflang 配错导致的重复内容与流量塌陷（示范案例）]
+这是一个综合多个公开讨论过的典型事故构造的示范复盘，不代表任何具体公司的内部数据。
+背景：一个 DTC 站已上线英语（\code{/en/}）、德语（\code{/de/}）、法语（\code{/fr/}）三个版本，
+运营了六个月后，德语与法语的自然流量始终只有英语版的三分之一（按市场规模应该更高）。
+
+\textbf{排查发现的四个叠加问题}：
+\begin{enumerate}
+  \item \textbf{hreflang 单向声明}。英语版页面输出了指向 \code{/de/} 与 \code{/fr/} 的 \code{hreflang}，
+        但德法页面\emph{没有}回指英语版，也没有自引用。
+        结果：英语版被当作唯一规范版本，德法版本在索引层被归并掉了。
+  \item \textbf{canonical 跨语言指向}。德法页面模板复用英语模板时，
+        \code{<link rel="canonical">} 仍然是英语 URL。这是最致命的一条：
+        它明确告诉引擎「德语页面的规范版本是英语页面」。
+  \item \textbf{IP 自动重定向}。站点为了「用户体验」，按 IP 把德国用户重定向到 \code{/de/}。
+        爬虫（主要从美国 IP 抓取）因此只能看到英语版本，德法版本从未被抓取。
+  \item \textbf{语言切换器用 JS 下拉}。切换器是 \code{<select onchange="location=...">}，
+        没有可抓取的 \code{<a href>}，所以爬虫也拿不到跨语言的发现路径。
+\end{enumerate}
+
+\textbf{修复动作（按顺序）}：
+(1) 去掉 IP 自动重定向，改为\emph{提示条 + 可点击链接}，并尊重 \code{Accept-Language} 只做软推荐；
+(2) 把语言切换器改成静态 \code{<a href>} 列表；
+(3) 在每个语言版本的每个页面上输出完整的 hreflang 矩阵（含自引用、双向闭合），
+        并用脚本在 CI 里做闭合性断言；
+(4) 修正 canonical 为自引用（每个语言版本指向自身）；
+(5) 重新提交三份分语言的 sitemap，并用 \cref{eq:hreflang} 的覆盖率指标做周度监控。
+
+\textbf{恢复形态}：修好后第 2--3 周德法版本的收录数开始上升，
+第 6--10 周德法流量达到英语版的 60\%--80\%（按市场规模属于合理区间），
+全站自然流量整体上升约 40\%--60\%。
+
+\textbf{可迁移的结论}：hreflang 事故几乎从不单独出现。
+凡是跨语言站点出问题，一定要同时检查这四项：
+\emph{hreflang 是否双向闭合、canonical 是否自引用、是否有 IP 强制跳转、
+语言切换器是否可抓取}。只修其中一项，流量往往不会恢复。
+\end{casebox}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 搜索引擎是「抓取--索引--排名」三段流水线，每一段都会漏掉流量，
+        且三段的漏因与修复手段完全不同。\textbf{诊断必须从左到右}：
+        先确认被 200 抓取，再确认被索引，最后才谈排名。反过来调内容等于白干活。
+  \item 抓取预算是「抓取速率上限 $\times$ 站点健康度」与「抓取需求」的较小值
+        （\cref{eq:crawlbudget}）。它只在 URL 总量巨大时才成为瓶颈，
+        而\emph{减少低价值 URL} 永远比\emph{增加抓取量} 更划算。
+        抓取浪费率 $W_{\text{crawl}}$ 是技术 SEO 最核心的运营指标。
+  \item 索引阶段的核心是归并。canonical、\code{noindex}、301、\code{robots.txt} 四者分工明确、不可互替；
+        \code{Disallow} 不阻止索引且切断权重流动，滥用 \code{robots.txt} 是最贵的常见事故。
+        \textbf{所有信号必须指向同一个规范 URL}，否则排名会在多个 URL 之间来回抖动。
+  \item 关键词研究的交付物不是词表，而是「意图分类 + 主题簇地图 + 唯一目标 URL」。
+        意图四分类（导航/信息/商业调研/交易）决定页面形态与 KPI，
+        优先级打分要把\emph{价值、难度、投入、协同}四个因子放在一起（\cref{eq:kwpriority}），
+        否则团队永远在争论先做哪个。
+  \item 长尾不是「小词」，而是数量上的主体。齐普夫定律决定了头部词的天花板比直觉低，
+        所以长尾必须靠规模化页面与结构化数据覆盖，而不是靠人工写作。
+  \item 站内优化的三个高杠杆项：内链图结构（\cref{eq:internal-pr}，注意 \code{nofollow} 会蒸发权重）、
+        结构化数据（把页面变成实体，取得富结果\emph{资格}）、
+        以及 Core Web Vitals 的第 75 百分位口径（\cref{eq:cwvthreshold}）。
+        CWV 是平局裁决因素，它的确定性收益在转化率而非排名。
+  \item E-E-A-T 的可操作化只有一句话：\textbf{把不可验证的承诺变成可验证的痕迹}。
+        Trust 是乘性因子，一旦被判低，其余三项都会打折。
+        AI 内容的真正风险不是「被检测出来」，而是「没有信息增益」——
+        AI 的正确位置是放大你独有的数据，而不是替代你没有的数据。
+  \item 技术 SEO 有严格的优先级：先止血（5xx、误屏蔽、noindex、移动端内容缺失、重定向链），
+        再提效（canonical 一致性、参数与分页、sitemap、hreflang 闭合），最后才是增量优化。
+        第一层有红灯时冻结第三层投入，是防止用「写文章」逃避技术债的制度设计。
+  \item 外链的本质是第三方证言。判断一条链接要看来源权威、主题相关、位置语境、
+        链接形态、时效留存、流量佐证六个维度。白帽路径是数字 PR、客座、
+        资源页收录、数据研究、专家问答；黑帽的代价是惩罚与以季度计的恢复期，
+        而恢复的本质是「重新变得值得信任」，不是「擦掉证据」。
+  \item SEO 不能做标准 A/B（一个 URL 只能有一个版本）。替代方案按可信度排序：
+        地理分流 + 双重差分（\cref{eq:did}）、合成控制与中断时间序列、
+        以及准实验的工程验收指标。任何「环比涨了 X\%」的因果宣称都应当被质疑。
+  \item 跨境电商要同时应对三套 SEO 逻辑：Google 独立站（技术 + 内容 + 外链）、
+        平台站内（字段覆盖 + 转化反哺排名，A9/A10 逻辑）、
+        以及社媒搜索（关键词帮助系统理解主题，本质更接近推荐）。
+        hreflang 事故几乎从不单独出现，必须四项一起查。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item 站点自然流量突然下跌 40\%，请给出你的排查顺序与每步的判断依据。
+        你如何区分「抓取问题」「索引问题」「排名问题」与「SERP 形态变化」这四种情况？
+  \item 什么是抓取预算？它由哪两个变量决定？举一个「抓取预算根本不是瓶颈」的例子，
+        以及一个「URL 治理比增加抓取量更有效」的例子。
+  \item \code{canonical} 标签、\code{noindex}、\code{301} 重定向、\code{robots.txt} 四者分别解决什么问题？
+        为什么「先 \code{Disallow} 再期望它退出索引」是错的？如何正确地把一个页面从索引中移除？
+  \item 请解释 Core Web Vitals 的三个指标分别在度量什么，阈值为什么用第 75 百分位而不是平均值。
+        如果你把 LCP 从 4.5 秒优化到 2.0 秒但自然流量只涨了 2\%，你会怎么解释与验证？
+  \item 搜索引擎抓取到的 HTML 是原始 HTML 还是渲染后的 DOM？这对一个用 React 写的电商站意味着什么？
+        你怎么验证渲染不是你的瓶颈？ISR 相比 SSR 和 SSG 的取舍是什么？
+  \item 你如何构建一份关键词优先级排序？除了搜索量，还需要哪些因子？
+        「商业价值系数」怎么定？如果业务方坚持要做一堆高难度头部词，你怎么说服他？
+  \item E-E-A-T 里的四个维度各自怎么落地成可检查的动作？为什么说 Trust 是乘性因子？
+        AI 生成内容在 SEO 里的边界在哪里？你会怎么设计一个「AI 放大自有数据」的流程？
+  \item 跨境站点要同时做 Google 独立站 SEO 和 Amazon 站内 SEO，
+        两者的排名机制有什么本质差异？为什么「转化率是排名因子」这件事只在平台侧成立？
+        多语言站点上线时你会检查哪四项？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+SEO 解决的是「用户已经在搜索框里表达了需求」这一层的增长，它最大的优点是需求明确、资产自持，
+最大的缺点是反馈慢（以季度计）、且不能做标准实验。
+而搜索本身正在发生一次结构性的变化：结果页从「十个蓝色链接」变成「先给一段生成的答案，再附几个来源」。
+当用户不再点击链接，只读那段答案时，「排名第 1」的含义就被彻底改写——
+你优化的对象从\emph{排名位置}变成了\emph{被引用}。
+下一章 \cref{ch:geo} 我们就来讨论生成式引擎优化（GEO）与答案引擎优化（AEO）：
+AI 概览与对话式搜索如何改变内容被发现的方式，
+\code{llms.txt} 这类新兴约定 \cite{openaillmstxt} 想解决什么问题 \cite{google2024ai_overviews}，
+以及「如何让模型引用你而不是引用你的竞品」这件事在工程上可以怎么做。
+如果你还需要复习搜索引擎内部的检索与排序机制，可以先回到 \cref{ch:search}；
+想了解自然流量与付费流量在归因上的分工，可对照 \cref{ch:ad} 与 \cref{ch:google}；
+跨境电商的整体运营框架与供应链约束，见 \cref{ch:cbec} 与 \cref{ch:supply}。

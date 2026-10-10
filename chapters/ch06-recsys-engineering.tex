@@ -1,0 +1,1200 @@
+\chapter{推荐系统工程化}
+\label{ch:receng}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 一次请求只有 150--300\,ms 的端到端预算，召回、粗排、精排、重排、混排、策略层各自能分到多少延迟与算力？超了怎么办？
+  \item 离线特征、近线特征、实时特征三层各自解决什么问题、代价是什么？为什么「离线 AUC 涨了、线上不涨」的第一嫌疑永远是特征？
+  \item 训练样本到底是怎么拼出来的？时序正确性、负采样、延迟反馈、位置偏差会分别引入什么系统性偏差，怎么校正？
+  \item 在线预估服务如何同时做到高吞吐、低尾延迟、可热更新、可降级？动态 batching 的最优批量由什么决定？
+  \item 增量训练与在线学习如何拿到「小时级」的时效性，又不掉进灾难性遗忘？什么时候必须回滚？
+  \item 一次推荐 A/B 实验怎么做才可信？分层正交分流、CUPED、A/A 校验、多重比较分别防的是哪一类错误？
+  \item 效果之外，多样性与信息茧房怎么度量、怎么进指标看板？
+\end{enumerate}
+\end{insight}
+
+前面四章（\cref{ch:recall}、\cref{ch:ranking}、\cref{ch:sequence}）讨论的都是「模型该怎么设计」。
+但真实系统的效果可以近似写成一条乘法链：
+
+\begin{equation}
+\text{线上效果} \;\approx\; \underbrace{\text{模型能力}}_{\text{算法}} \;\times\; \underbrace{\text{工程一致性}}_{\text{特征/样本/服务}} \;\times\; \underbrace{\text{实验可信度}}_{\text{流量与统计}} .
+\label{eq:effect-product}
+\end{equation}
+
+三项中任何一项接近零，整体就接近零。而工业界的普遍经验是：模型结构的收益已经进入边际递减区间，
+\textbf{瓶颈几乎总是在第二项}——离线和线上用的不是同一个特征、样本的时间边界错了、
+服务端为了压延迟偷偷改了截断策略、实验流量被污染导致结论不可信。
+本章讲的就是这一项。它不像模型结构那样容易发论文，但它决定了你能把已有模型的潜力释放出多少。
+
+\section{系统全景：从一次请求到一屏结果}
+
+\subsection{六段链路的职责边界}
+
+工业推荐系统的标准形态是\term{多级级联漏斗}{Cascading Funnel}：
+在候选规模与单次打分成本之间做分层妥协。每一级都要回答两个问题：\kw{从多少候选里选出多少}、
+\kw{用多贵的模型}。这两个数字决定了下一级的上限。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  st/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=10mm,
+             text width=2.05cm, inner sep=3pt},
+  fs/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=9mm,
+             text width=5.4cm, inner sep=3pt},
+  sv/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=9mm,
+             text width=5.4cm, inner sep=3pt},
+  lg/.style={draw=SlateGray, fill=white, rounded corners=2pt, minimum height=10mm,
+             text width=2.05cm, inner sep=3pt, dashed}
+]
+\node[lg] (req) {请求 + 上下文\\用户/设备/场景};
+\node[st, right=of req] (rec) {多路召回\\$10^{6} \to 10^{3}$};
+\node[st, right=of rec] (pre) {粗排\\$10^{3} \to 10^{2}$};
+\node[st, right=of pre] (rank) {精排（GPU）\\$10^{2} \to 10^{1}$};
+\node[st, right=of rank] (rerank) {重排\\去重/打散/定坑};
+\node[st, below=10mm of rerank] (mix) {混排\\自然 + 广告};
+\node[st, left=of mix] (policy) {策略层\\频控/兜底/风控};
+\node[st, left=of policy] (srv) {返回一屏\\曝光 + 反馈日志};
+\node[fs, below=12mm of pre] (online) {\textbf{在线特征库}（KV，毫秒级）：实时行为序列、近 1 小时统计、上下文缓存};
+\node[fs, below=4mm of online] (offline) {\textbf{离线/近线特征}（小时/天级）：用户画像、i2i 相似度、内容理解、供给约束};
+\node[sv, below=4mm of offline] (loop) {\textbf{训练与实验闭环}：样本拼接（point-in-time）、增量训练、模型热更新、A/B 平台};
+\draw[-{Stealth}, SlateGray] (req) -- (rec);
+\draw[-{Stealth}, SlateGray] (rec) -- (pre);
+\draw[-{Stealth}, SlateGray] (pre) -- (rank);
+\draw[-{Stealth}, SlateGray] (rank) -- (rerank);
+\draw[-{Stealth}, SlateGray] (rerank) -- (mix);
+\draw[-{Stealth}, SlateGray] (mix) -- (policy);
+\draw[-{Stealth}, SlateGray] (policy) -- (srv);
+\draw[-{Stealth}, TealDeep, dashed] ([xshift=-1.2cm]online.north) -- ([xshift=-1.2cm]rec.south);
+\draw[-{Stealth}, TealDeep, dashed] ([xshift=0.6cm]online.north) -- ([xshift=0.6cm]rank.south);
+\draw[-{Stealth}, AmberDeep, dashed] (loop.west) -| (req.south);
+\draw[-{Stealth}, CrimsonDeep, dashed] (srv.south) |- ([xshift=-1.8cm]loop.east);
+\end{tikzpicture}
+\caption{推荐系统端到端架构：等级联漏斗 + 特征双通道 + 训练实验闭环}
+\label{fig:receng-arch}
+\end{figure}
+
+各级的典型职责与常见误区：
+
+\begin{itemize}
+  \item \textbf{召回}：从全库（$10^{6} \sim 10^{8}$）中筛出千级候选。目标是\kw{覆盖率与上限}，不是精度。
+        它由多条并行的「路」组成：i2i 协同、双塔向量、图游走、热门/新品兜底、内容标签。
+        召回最怕的不是单路效果差，而是\kw{多路同质化}——五路召回给出近乎同一个集合，等于只有一路。
+  \item \textbf{粗排}：把千级压到百级，是精排的廉价近似。核心矛盾是\kw{与精排的排序一致性}：
+        粗排漏掉的物品，精排再准也救不回来。因此粗排训练的标签往往不是点击，而是「精排分数」或「精排 Top 位置」。
+  \item \textbf{精排}：效果主战场，也是最贵的一级。多目标（点击/转化/时长/负反馈）在这里融合，模型结构见 \cref{ch:ranking}。
+  \item \textbf{重排}：在列表级别做优化——去重、同类目打散、多样性约束、位置定坑。
+        它是一个\kw{组合优化}问题而不是打分问题，目标函数里必须显式写进多样性与生态约束。
+  \item \textbf{混排}：把自然结果与广告结果放进同一个列表。这里要评估的不是「谁分高」，
+        而是\kw{同一个位置给谁带来的总价值更高}，涉及广告的 eCPM 与自然结果的长期留存价值折现（见 \cref{ch:ad}）。
+  \item \textbf{策略层}：频控、舆情与安全、黑白名单、供给侧保护、新内容扶持、兜底结果。
+        工程上这一层往往是最后一跳，也必须是\kw{最快、最不容易挂}的一层。
+\end{itemize}
+
+\begin{keypoint}[先定预算，再定模型]
+一个常见的失败顺序是：先训一个最好的精排模型，然后发现延迟放不进线上，被迫减特征、减候选、减 batch，
+最后线上效果反而不如原来的小模型。
+\textbf{正确的顺序是反过来的：先确定每一级的延迟与算力预算，再在预算内选模型。}
+本章第 2 节给出预算的分解方法，第 5 节给出在线服务如何逼近预算上限。
+\end{keypoint}
+
+\section{延迟预算：把 200\,ms 拆开}
+
+\subsection{端到端延迟的构成}
+
+用户感知的延迟是从客户端发起到首屏渲染完成的\term{端到端延迟}{End-to-End Latency}，
+它不是各级耗时的简单相加，而是「串行段相加 + 并行段取最大 + 排队等待 + 网络往返」：
+
+\begin{equation}
+T_{\text{e2e}} \;=\; \underbrace{T_{\text{net}} + T_{\text{gw}}}_{\text{网络与网关}}
+\;+\; \underbrace{\sum_{k \in \text{serial}} \left( T^{\text{queue}}_{k} + T^{\text{compute}}_{k} \right)}_{\text{串行级}}
+\;+\; \underbrace{\max_{m \in \text{fanout}} \left( T^{\text{queue}}_{m} + T^{\text{compute}}_{m} \right)}_{\text{并行级（取最大）}}
+\;+\; \underbrace{T_{\text{merge}} + T_{\text{render}}}_{\text{聚合与渲染}} .
+\label{eq:lat-budget}
+\end{equation}
+
+这个式子有两个直接推论。
+
+\textbf{推论一：并行能省时间，但省不出「负时间」。}
+把召回拆成 8 路并行，墙钟时间由最慢的一路决定；如果某一路（例如跨机房的特征查询）慢到 80\,ms，
+其余 7 路再快也没有意义。工程上的标准做法是\kw{给每一路设独立超时 + 允许部分结果返回}
+（hedged request）：8 路中 6 路在 30\,ms 内返回就直接进入粗排，慢的两路结果丢弃并记入「丢路率」指标。
+
+\textbf{推论二：排队时间往往比计算时间更不可控。}
+计算时间由模型和硬件决定，可以做容量规划；排队时间由当时的流量决定，跟其他请求强耦合。
+因此延迟优化的第一优先级通常不是「换更快的模型」，而是\kw{削峰、限流、隔离资源池}。
+
+\subsection{各级 QPS/延迟/算力预算分配（示范量级）}
+
+\begin{table}[htbp]
+\centering
+\caption{某信息流推荐链路的延迟与算力预算表（示范量级，非真实线上数据）}
+\label{tab:layer-budget}
+\small
+\begin{tabularx}{\textwidth}{L{1.5cm} L{1.9cm} R{1.05cm} R{1.5cm} L{2.6cm} Y}
+\toprule
+\tabhead{层级} & \tabhead{候选量} & \tabhead{放大倍数} & \tabhead{p99 预算} & \tabhead{资源形态} & \tabhead{预算失守时的第一手段} \\
+\midrule
+网关与上下文 & 1 次请求 & -- & 8\,ms & 无状态服务 & 本地缓存上下文，去掉同步下游调用 \\
+\addlinespace
+召回（8 路并行） & $5\times10^{6} \to 3\times10^{3}$ & $1.7\times10^{3}$ & 35\,ms & CPU 集群 + ANN 索引 & 减少路数、降低 ANN 的 \code{efSearch}、只取 TopK \\
+\addlinespace
+粗排 & $3\times10^{3} \to 3\times10^{2}$ & $10$ & 20\,ms & CPU，轻量双塔/蒸馏 & 减特征、降维、分片并行 \\
+\addlinespace
+精排 & $3\times10^{2}$ & -- & 45\,ms & GPU（动态 batching） & 减候选、降 batch 上界、切小模型 \\
+\addlinespace
+重排与多样性 & $3\times10^{2} \to 10^{2}$ & $3$ & 10\,ms & CPU，纯算法 & 退化为贪心打散 \\
+\addlinespace
+混排与策略 & $10^{2} \to 10^{1}$ & $10$ & 8\,ms & CPU，规则 + 小模型 & 跳过广告竞价，走保底自然结果 \\
+\addlinespace
+聚合与序列化 & 一屏 & -- & 12\,ms & 服务端 & 减少字段、异步下发非首屏模块 \\
+\midrule
+\textbf{合计（p99）} & -- & -- & \textbf{$\sim$190\,ms} & -- & 端到端超时 250\,ms，超时走缓存兜底 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\cref{tab:layer-budget} 的三个读法：
+
+(1) \textbf{预算不是均分的，而是按「单位算力的边际收益」分配的}。精排拿了 45\,ms 却只处理 300 个候选，
+召回拿了 35\,ms 却要处理 500 万候选，原因是精排的每个候选都要跑一次深层网络，
+而召回的每个候选只需要一次向量内积或一次查表。
+
+(2) \textbf{放大倍数决定了错误代价}。召回阶段的漏召（把好内容筛掉了）是不可逆的；
+粗排阶段的漏排同样不可逆，但影响小一档；精排和重排的错误基本可逆（顺序差一点）。
+因此召回与粗排要\kw{偏向高召回}——宁可把可疑候选放进下一级，也不要提前丢掉。
+
+(3) \textbf{每一级都要有「预算失守」的降级动作}，且降级动作必须提前设计、提前压测，
+不能在故障时临时改代码。第 5 节给出完整的降级矩阵。
+
+\subsection{尾延迟：为什么 p99 才是生死线}
+
+平均值是最没有意义的延迟指标。用户不会感受到平均，只会在那 1\% 的卡顿里流失；
+更关键的是，服务端通常\kw{按 p99 配置超时}，一旦 p99 越过超时线，请求被截断，
+用户拿到的是兜底结果，效果直接掉一档。
+
+在把预估服务抽象成一个单队列服务（到达率 $\lambda$、服务率 $\mu$、利用率 $\rho=\lambda/\mu<1$）时，
+排队等待时间的尾部分布有解析形式：
+
+\begin{equation}
+\Prob\{ W > t \} = \rho\, e^{-(\mu - \lambda) t},
+\qquad
+W_{0.99} = \frac{\ln(100\,\rho)}{\mu - \lambda}.
+\label{eq:tail-p99}
+\end{equation}
+
+这个式子解释了一个非常常见的现象：\textbf{利用率从 60\% 提到 85\%，平均延迟可能只涨 20\%，
+但 p99 会涨两三倍。}因为 $W_{0.99}$ 的分母是 $\mu-\lambda$，当 $\lambda \to \mu$ 时分母趋于零。
+工程结论是：\kw{在线服务的目标利用率通常压在 60\%--70\%，剩下的 30\%--40\% 不是浪费，
+而是买 p99 的保险。}如果容量规划必须做到 85\% 以上，就必须引入主动限流（把超额流量直接转兜底），
+而不是让它排在队列里拖垮所有人。
+
+\begin{formulacard}[尾延迟的三个实用上界]
+\begin{equation}
+\underbrace{\Prob\{T > t\} \le \frac{\E[T]}{t}}_{\text{马尔可夫不等式}}
+\qquad
+\underbrace{T_{p99} \le T_{\text{median}} \cdot \frac{1}{1-\rho}}_{\text{排队放大}}
+\qquad
+\underbrace{T_{\text{e2e}} \le \sum_k T_k^{(p99)}}_{\text{保守叠加}} .
+\end{equation}
+马尔可夫不等式只能给出弱上界，但足以判断「场均 30\,ms 而 p99 声称 40\,ms」是不可能的；
+第二个式子是排障时最常用的直觉；第三个式子用于设定端到端超时——它偏保守，可以再打 0.7 的折。
+\end{formulacard}
+
+\begin{pitfall}[延迟优化的五个假动作]
+\begin{enumerate}
+  \item \textbf{只压平均延迟}：把日志采样率调低，平均延迟立刻变好看，p99 一点没变。
+  \item \textbf{把超时当优化}：超时线从 200\,ms 提到 300\,ms，「超时率」下降了，用户体验更差了。
+        指标口径必须写清楚是\kw{端到端 p99}而不是「服务内部耗时 p99」。
+  \item \textbf{在同一资源池里混部在线与离线}：离线任务一跑，在线 p99 就抖。要么物理隔离，要么给在线预留核并设定 cgroup 上限。
+  \item \textbf{忽视下游扇出的乘法效应}：每一级都取 p99 做超时，端到端会积累成几倍；
+        正确做法是按端到端预算反推每级预算（budget allocation），而不是自下而上加总。
+  \item \textbf{把缓存命中率当成延迟指标}：缓存命中确实快，但\kw{缓存穿透时的毛刺}才是 p99 杀手。
+        必须为穿透路径单独测量并单独限流。
+\end{enumerate}
+\end{pitfall}
+
+\section{特征平台：离线、近线、实时三层}
+
+\subsection{为什么要分层}
+
+特征的本质是「用历史数据换当前决策」。历史越久、统计越充分，特征越稳（离线特征）；
+历史越近、越贴近当前意图，特征越准但越脆（实时特征）。
+一个特征平台必须同时提供这两类能力，并在成本、时效、一致性三者之间做分层妥协。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4.5mm,
+  every node/.style={font=\sffamily\tiny, align=center},
+  src/.style={draw=SlateGray, fill=white, rounded corners=2pt, minimum height=8mm,
+              text width=2.2cm, inner sep=3pt, dashed},
+  cmp/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=8mm,
+              text width=2.2cm, inner sep=3pt},
+  st/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=8mm,
+             text width=2.4cm, inner sep=3pt},
+  chk/.style={draw=CrimsonDeep, fill=white, rounded corners=2pt, minimum height=8mm,
+              text width=6.9cm, inner sep=3pt},
+  sv/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=8mm,
+             text width=4.6cm, inner sep=3pt}
+]
+\node[src] (evt) {客户端/服务端埋点\\行为事件流};
+\node[cmp, right=of evt] (mq) {消息队列\\（Kafka/Pulsar）};
+\node[cmp, right=of mq] (flink) {流式计算\\窗口聚合 1h/24h/7d};
+\node[st, right=of flink] (kv) {在线 KV\\（Redis/HBase）};
+\node[src, below=8mm of evt] (db) {业务库与数仓\\ODS/DWD/DWS};
+\node[cmp, right=of db] (batch) {批计算\\天级/小时级};
+\node[st, right=of batch] (hive) {离线特征表\\（Hive/Parquet）};
+\node[st, right=of hive] (snap) {定时回灌\\在线 KV（快照）};
+\node[chk, below=9mm of flink] (diff) {\textbf{一致性校验}：离线特征表 $\leftrightarrow$ 在线 KV 抽样 diff，按特征维度出日报};
+\node[sv, below=5mm of diff] (train) {训练侧：point-in-time 样本拼接};
+\node[sv, right=of train] (serve) {服务侧：低延迟特征查询};
+\draw[-{Stealth}, SlateGray] (evt) -- (mq);
+\draw[-{Stealth}, SlateGray] (mq) -- (flink);
+\draw[-{Stealth}, SlateGray] (flink) -- (kv);
+\draw[-{Stealth}, SlateGray] (db) -- (batch);
+\draw[-{Stealth}, SlateGray] (batch) -- (hive);
+\draw[-{Stealth}, SlateGray] (hive) -- (snap);
+\draw[-{Stealth}, SlateGray] (snap) -- (kv);
+\draw[-{Stealth}, TealDeep] (kv.south) -- (diff.north east);
+\draw[-{Stealth}, TealDeep] (hive.south) -- (diff.north east);
+\draw[-{Stealth}, AmberDeep, dashed] (diff.south) -- (train.north);
+\draw[-{Stealth}, AmberDeep, dashed] (diff.south) -- (serve.north);
+\end{tikzpicture}
+\caption{特征平台数据流：实时链路与离线链路在在线 KV 汇合，一致性校验是唯一的质量闸门}
+\label{fig:feature-platform}
+\end{figure}
+
+\subsection{三层的定义、时效与代价}
+
+\begin{table}[htbp]
+\centering
+\caption{特征类型与时效对照表（量级为经验值，随业务与集群规模变化）}
+\label{tab:feature-freshness}
+\small
+\begin{tabularx}{\textwidth}{L{1.75cm} L{2.5cm} L{1.5cm} R{1.35cm} L{2.2cm} Y}
+\toprule
+\tabhead{层级} & \tabhead{典型特征} & \tabhead{更新频率} & \tabhead{端到端时效} & \tabhead{存储形态} & \tabhead{主要风险} \\
+\midrule
+离线特征 & 用户画像、长期兴趣标签、物品内容理解、i2i 相似度、供给约束 & 天级/小时级 & 1--24\,h & Hive/Parquet + 每日回灌 KV & 时效滞后；回灌失败导致大面积取默认值 \\
+\addlinespace
+近线特征 & 滑动窗口统计（1h/24h 点击率、曝光数）、会话聚合、近线 i2i & 分钟级 & 1--10\,min & 流式计算 + KV & 乱序与重复消费；窗口边界与训练口径不一致 \\
+\addlinespace
+实时特征 & 本次会话行为序列、最近 N 次交互、实时上下文（位置/网络/时间）、实时竞价信号 & 秒级/请求级 & $<$1\,s & 请求内拼装 + 低延迟 KV & 抖动、穿透、与训练样本分布偏移 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+用两个指标统一描述一层特征的「质量」：
+
+\begin{equation}
+\text{Freshness}(f) = \E_{x}\!\left[\, t_{\text{req}}(x) - t_{\text{event}}(f, x) \,\right],
+\qquad
+\text{Coverage}(f) = \Prob\bigl\{ f(x) \neq \varnothing \bigr\} .
+\label{eq:feature-freshness}
+\end{equation}
+
+\text{Freshness} 是平均新鲜度（越小越好），\text{Coverage} 是取值非空的比例（越大越好）。
+这两个指标必须和效果一起看：一个 Coverage 从 98\% 掉到 90\% 的实时特征，
+会让 10\% 的请求走进完全不同的打分区间，表现为「整体 CTR 没变但某个分群掉得很厉害」。
+因此特征平台的监控里，\kw{空值率、默认值率、分布 PSI} 与模型 AUC 是同等重要的指标。
+
+\subsection{离线特征：稳、便宜，但会「过期」}
+
+离线特征的主体是天级画像与统计。它的工程要点有三个。
+
+\textbf{第一，分区与幂等。}所有离线特征表按日期分区（\code{dt}），重跑某一天必须覆盖而不是追加。
+使用 \code{INSERT OVERWRITE} 而不是 \code{INSERT INTO}，否则重跑会产生重复行，
+并在 KV 回灌时表现为「同一个用户有两个值，随机命中一个」——这是最难排查的一致性事故之一。
+
+\textbf{第二，回灌要在模型发布之前完成，而不是同时进行。}标准流程是：
+离线表质量校验通过 $\to$ 回灌 KV $\to$ KV 抽样比对通过 $\to$ 才允许新模型推进灰度。
+如果回灌与模型灰度同时进行，一旦新特征缺失，你会同时面对「模型变了」和「特征变了」两个变量，
+无法归因。
+
+\textbf{第三，要考虑特征穿越。}任何用到「未来信息」的离线特征都会让离线指标虚高。
+例如「用户是否高价值」标签如果是由未来 30 天的消费定义的，那么在预测时刻这个特征是不可得的。
+判断标准只有一条：\kw{该特征在线上请求时刻是否真的可算出来？}
+
+\subsection{近线特征：窗口口径才是难点}
+
+近线特征由流式计算产出，典型实现是「事件流 $\to$ 按用户分组 $\to$ 滑动窗口聚合 $\to$ 写入 KV」。
+真正的难点不是技术栈，而是\kw{窗口口径}：
+
+\begin{itemize}
+  \item \textbf{窗口是事件时间还是处理时间？}事件时间（event time）需要水印（watermark）处理乱序；
+        处理时间（processing time）实现简单，但同一个用户在不同时刻看到的「近 1 小时点击数」会跳变，
+        训练与线上更难对齐。生产环境建议统一用事件时间。
+  \item \textbf{窗口是否包含当前这条事件？}训练时如果标签是由「包含当前曝光」的窗口算出来的，
+        就构成了信息泄漏。规则是：特征的窗口必须\kw{严格早于}预测时刻。
+  \item \textbf{重复消费怎么处理？}消息队列通常至少一次投递（at-least-once），
+        聚合逻辑必须按 \code{(user\_id, event\_id)} 去重，或者接受少量重复但保证与训练口径一致。
+\end{itemize}
+
+\begin{lstlisting}[style=growth, language=Python, caption={近线窗口聚合与在线取值的一致性关键点（伪代码）}]
+# Sliding-window aggregation: event-time based, strictly before request time
+def aggregate(user_events, req_ts, windows=(3600, 86400, 7 * 86400)):
+    feats = {}
+    for w in windows:
+        lo = req_ts - w
+        # IMPORTANT: event_ts < req_ts (exclusive), never <= req_ts
+        batch = [e for e in user_events if lo <= e["event_ts"] < req_ts]
+        feats["click_cnt_%ds" % w] = sum(1 for e in batch if e["type"] == "click")
+        feats["exp_cnt_%ds" % w] = len(batch)
+        feats["click_rate_%ds" % w] = safe_div(feats["click_cnt_%ds" % w], feats["exp_cnt_%ds" % w])
+    return feats
+
+def safe_div(a, b):
+    return float(a) / b if b else 0.0
+\end{lstlisting}
+
+\subsection{实时特征：最贵也最容易翻车}
+
+实时特征是「请求级」拼装的，典型来源有三类：(1) 客户端本次会话中已发生的行为（滑动、快滑、停留、加购）；
+(2) 服务端缓存的上下文（网络类型、页面位置、时间、地域）；(3) 其他在线系统的实时信号（广告实时出价、库存）。
+它们的共同特点：\kw{训练时可能根本不存在}。
+
+以「最近 10 次曝光序列」为例：
+训练样本通常是从日志里「重放」出来的，序列天然存在于日志顺序中；
+而线上请求时，这个序列必须由在线服务在几百微秒内从 KV 里读出来并拼装。
+如果训练用的是「完整序列」，线上只取「最近 10 条」，两者的分布不同（长度分布不同），
+模型学到的是「序列越短越可能点击」这类伪相关。
+标准解法是：\kw{训练样本也严格按同样的截断规则构造，并对超长序列做同样的截断标记}。
+
+\subsection{特征血缘与版本管理}
+
+在高频迭代的团队里，特征的可维护性主要取决于两件事：
+
+\begin{itemize}
+  \item \textbf{血缘（lineage）}：每个特征从哪张表、经过哪个任务、被哪些模型使用。
+        没有血缘的系统里，「这个特征能不能删」永远没人敢回答，结果是特征表越堆越大、离线任务越跑越慢。
+  \item \textbf{版本（version）}：特征定义一旦变更（例如把 7 天窗口改成 14 天），
+        必须是一个新版本并记录生效时间。旧模型继续读旧版本，直到所有依赖方切换完毕。
+        否则「同一个特征名、线上线下不同定义」的事故几乎必然发生。
+\end{itemize}
+
+工程上推荐的最小可行方案：\kw{特征名里嵌入版本与窗口}，例如
+\code{ctr\_cnt\_24h\_v2}，并在特征元数据表里记录 owner、口径、上线时间、依赖上游任务。
+
+\subsection{特征一致性校验}
+
+一致性用抽样 diff 率度量。给定一个抽样请求集合 $\mathcal{S}$ 与一个容差 $\epsilon_f$：
+
+\begin{equation}
+D(f) = \frac{1}{\abs{\mathcal{S}}} \sum_{x \in \mathcal{S}}
+\mathbf{1}\!\left[\, \abs{\,f_{\text{off}}(x) - f_{\text{on}}(x)\,} > \epsilon_f \,\right],
+\label{eq:feat-diff}
+\end{equation}
+
+其中 $f_{\text{off}}$ 是按训练口径在离线重算的值（\textbf{注意：不是读离线特征表，而是用同一份日志重放}），
+$f_{\text{on}}$ 是线上服务实际打日志记下的值。这个设计非常关键：
+它把「离线表算错」和「在线服务取错」两种问题分开了。
+
+\begin{lstlisting}[style=growth, language=Python, caption={特征一致性 diff 校验框架（伪代码）}]
+# Recompute features offline from the SAME served-log, then compare with logged online values
+def check_consistency(sample_rows, feature_specs, tol):
+    report = []
+    for name, spec in feature_specs.items():
+        bad, total, abs_err = 0, 0, 0.0
+        for row in sample_rows:
+            off = spec.recompute(row["raw_events"], row["req_ts"])
+            on = row["online_features"].get(name)
+            if on is None:
+                continue
+            total += 1
+            err = abs(float(off) - float(on))
+            abs_err += err
+            if err > tol[name]:
+                bad += 1
+        report.append({
+            "feature": name,
+            "diff_rate": bad / total if total else 0.0,
+            "mean_abs_err": abs_err / total if total else 0.0,
+            "samples": total,
+        })
+    return report  # alert when diff_rate > 0.5% or mean_abs_err > 1e-3
+\end{lstlisting}
+
+\begin{table}[htbp]
+\centering
+\caption{离线与在线特征不一致的排查表（按现象定位原因）}
+\label{tab:feat-diff-debug}
+\small
+\begin{tabularx}{\textwidth}{L{3.3cm} L{4.1cm} Y}
+\toprule
+\tabhead{现象} & \tabhead{典型根因} & \tabhead{排查手段} \\
+\midrule
+某个 ID 类特征全为空 & KV 回灌任务失败或分区缺失；主键类型不一致（字符串与数值） &
+对比 KV 的 key 数量与离线表去重主键数；抽样用同一个 key 直查 KV \\
+\addlinespace
+连续型特征整体偏移 & 量纲/单位不同（秒与毫秒、元与分）；归一化参数版本不一致 &
+对比分布的分位数；检查特征版本号与模型绑定的版本是否一致 \\
+\addlinespace
+只有新用户不一致 & 默认值口径不同（离线填 0、线上填全局均值） &
+对「无历史行为」的用户单独统计 diff 率 \\
+\addlinespace
+只在跨天边界不一致 & 时区混用（UTC 与本地时区）；分区切换时刻的边界处理 &
+把 diff 按小时切片，观察是否集中在 00:00 附近 \\
+\addlinespace
+diff 率低但效果差 & 特征没错，但\kw{取数时刻}错了：线上在曝光后取值，训练在曝光前取值 &
+在日志中同时记录 \code{req\_ts} 与 \code{feature\_ts}，检查二者顺序 \\
+\addlinespace
+只有高活跃用户不一致 & 序列特征截断长度不同（离线取全量、线上取 TopN） &
+按行为条数分桶统计 diff 率，检查截断逻辑 \\
+\addlinespace
+间歇性、低比例不一致 & 缓存过期与并发写；KV 主从延迟 &
+抓取同一 key 的多次读取值；检查缓存的 TTL 与刷新策略 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[离线在线不一致的六种典型场景]
+\emph{以下六种是行业通识中最高频的原因，按发生频率大致排序：}
+\begin{enumerate}
+  \item \textbf{时间穿越}：特征用到了标签窗口内的信息（最常见，也最难发现）。
+  \item \textbf{口径漂移}：离线口径改了、在线没改，或反之；没有版本管理时几乎必然发生。
+  \item \textbf{默认值不一致}：缺失时离线填 0、线上填均值，或离线填 NULL、线上填 0。
+  \item \textbf{截断与去重不一致}：序列长度、TopK、去重规则在两侧不同。
+  \item \textbf{时区与分区边界}：UTC 与本地时区混用，或跨天时刻的分区归属不同。
+  \item \textbf{特征计算与请求顺序不一致}：线上先算特征后更新行为、训练是先有行为后算特征（或反之）。
+\end{enumerate}
+\textbf{排查顺序建议}：先看单特征 diff 率（定位到具体特征）$\to$ 再看该特征的空值率与分位数（区分缺失还是数值偏移）
+$\to$ 最后看时间维度切片（定位到边界时刻）。切忌一上来就怀疑模型。
+\end{pitfall}
+
+\begin{toolbox}[特征上线前的 10 项一致性检查清单]
+\begin{enumerate}
+  \item 离线表重跑是否幂等？是否为 \code{INSERT OVERWRITE}？
+  \item 特征在预测时刻是否真的可得（无时间穿越）？
+  \item 窗口是否严格早于预测时刻（\code{event\_ts < req\_ts}）？
+  \item 缺失值口径在离线与在线是否完全一致（含类型）？
+  \item 序列截断长度、去重规则、排序规则是否两侧一致？
+  \item 时区与分区边界是否统一为 UTC？跨天如何处理？
+  \item KV 回灌是否只有一份数据源（避免双写打架）？
+  \item 归一化/分桶参数是否随模型版本一起发布？
+  \item 是否记录了线上实际取值（用于事后 diff）？
+  \item 是否有特征级监控（空值率、默认值率、PSI、diff 率）与告警阈值？
+\end{enumerate}
+这十项全部为「是」之后，才允许新模型进入灰度。
+\end{toolbox}
+
+\section{样本工程}
+
+模型看到的世界由样本决定。样本工程的每一步都在引入偏差，而偏差只有在\kw{训练分布与服务分布一致}时才被抵消。
+
+\subsection{样本拼接：时序正确性是第一原则}
+
+一个训练样本可以抽象为 $(u, i, t, x_{u,t}, x_{i,t}, \text{ctx}_t, y)$：
+用户在时刻 $t$ 对物品 $i$ 的行为作为标签 $y$，
+特征只能使用 $t$ 之前（或严格早于标签窗口）可得的信息。
+标签窗口的定义必须显式：
+
+\begin{equation}
+y(u,i,t) = \mathbf{1}\!\left[\, \exists\, e \in \mathcal{E}(u):\ t < t_{e} \le t + \Delta_{\text{label}}
+\ \wedge\ e \in \mathcal{A}(i) \,\right],
+\label{eq:label-window}
+\end{equation}
+
+其中 $\mathcal{E}(u)$ 是用户行为事件集合，$\mathcal{A}(i)$ 是归因到物品 $i$ 的事件类型集合（点击、加购、成单），
+$\Delta_{\text{label}}$ 是标签窗口长度（点击常取当日，成单常取 7--30 天）。
+$\Delta_{\text{label}}$ 越长，样本越稀疏、标签越滞后，训练与线上时差越大——这是延迟反馈问题的根源。
+
+\begin{lstlisting}[style=growth, language=SQLx, caption={point-in-time 样本拼接：特征侧必须严格早于曝光时刻}]
+-- Build training samples with point-in-time correctness.
+-- feature_ts < impress_ts  (strictly earlier), and the label window is explicit.
+WITH imp AS (
+  SELECT user_id, item_id, impress_ts, request_id
+  FROM dwd_impression
+  WHERE dt BETWEEN '2025-03-01' AND '2025-03-14'
+),
+feat AS (
+  -- Daily snapshot of user features, valid for the whole day AFTER the snapshot time
+  SELECT user_id, dt, feature_ts, ctr_cnt_24h, click_rate_7d
+  FROM dws_user_feature_snapshot
+),
+lab AS (
+  SELECT user_id, item_id, impress_ts, MIN(event_ts) AS first_click_ts
+  FROM dwd_behavior_event
+  WHERE event_type IN ('click', 'cart', 'order')
+  GROUP BY user_id, item_id, impress_ts
+)
+SELECT imp.user_id,
+       imp.item_id,
+       imp.impress_ts,
+       feat.ctr_cnt_24h,
+       feat.click_rate_7d,
+       CASE WHEN lab.first_click_ts IS NOT NULL
+             AND lab.first_click_ts <= imp.impress_ts + INTERVAL '86400' SECOND
+            THEN 1 ELSE 0 END AS label
+FROM imp
+JOIN feat
+  ON feat.user_id = imp.user_id
+ AND feat.dt = to_date(imp.impress_ts)          -- snapshot of the same day
+ AND feat.feature_ts < imp.impress_ts           -- PIT guard: no future features
+LEFT JOIN lab
+  ON lab.user_id = imp.user_id AND lab.item_id = imp.item_id
+ AND lab.impress_ts = imp.impress_ts;
+\end{lstlisting}
+
+时序上有三个必须写进代码规范的硬规则：
+\kw{特征时刻 $<$ 曝光时刻}（严格小于，不是小于等于）；
+\kw{标签时刻 $>$ 曝光时刻}；\kw{样本的负例必须在曝光集合里取}。
+最后一条最容易被违反：只在点击日志上做负采样，会得到「只要曝光就点击」的模型，
+因为模型从未见过「曝光了但没点」的样本。
+
+\subsection{负采样策略}
+
+推荐与广告的样本空间极度不平衡。以信息流为例，一次请求曝光 10 个物品，
+其中点击 0.5 个，成单 0.005 个，正负比在 $10^{-3} \sim 10^{-4}$ 量级。
+负采样目的是降低训练成本与加快收敛，但\kw{采样必须校正}，否则预估概率整体偏高，
+直接影响排序（以及广告计费）。
+
+设负样本以比例 $\alpha \in (0,1]$ 降采样（正样本全部保留），采样后模型的输出为 $p_s$，
+则真实概率为：
+
+\begin{equation}
+p_{\text{true}} = \frac{p_{s}}{p_{s} + r\,(1 - p_{s})},
+\qquad r = \frac{1}{\alpha} \ge 1 .
+\label{eq:neg-correct}
+\end{equation}
+
+当 $r=1$（不采样）时 $p_{\text{true}} = p_s$；当 $r=100$ 且 $p_s=0.5$ 时，
+$p_{\text{true}} \approx 0.0099$，正是预期的 $\alpha$ 量级。
+校正的实现方式有两种：\kw{训练时用加权 logloss}（负样本权重乘 $1/r$），
+或者\kw{训练不做校正、服务时统一做单调变换}。前者更常用，因为校正与训练耦合更紧、
+不容易忘；代价是加权后的损失函数对学习率更敏感。
+
+\begin{table}[htbp]
+\centering
+\caption{各阶段负采样与校正的常见配置（示范量级）}
+\label{tab:sample-neg}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.0cm} L{1.8cm} L{1.6cm} Y}
+\toprule
+\tabhead{阶段} & \tabhead{负样本来源} & \tabhead{采样比例} & \tabhead{是否校正} & \tabhead{说明} \\
+\midrule
+召回（双塔） & 全库随机 + 批内负样本 & $10^{-4} \sim 10^{-2}$ & 需要 & 采样越狠，模型越擅长区分「明显不相关」，但对困难负样本不敏感 \\
+\addlinespace
+召回（困难负样本） & 同类目/同作者/历史曝光未点击 & 不降采样或轻度 & 需要 & 提升精度上限的关键，但比例过高会让向量空间过拟合 \\
+\addlinespace
+粗排 & 精排 Top 附近未点 & $10^{-2} \sim 10^{-1}$ & 需要 & 应与精排看到的候选分布尽量接近 \\
+\addlinespace
+精排 & 真实曝光未点击（全保留） & 1.0 & 不需要 & 分布即服务分布，不做采样最安全 \\
+\addlinespace
+精排（场景间联合训练） & 全部场景曝光 & 1.0 & 需要（场景权重） & 不同场景正负比差异大，必须显式加权或分场景校准 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{样本去重与比例控制}
+
+三类采样问题在真实系统里同时存在，需要分层控制：
+
+\textbf{(1) 用户级降权。}重度用户贡献了大部分样本，会让模型偏向「高频行为模式」。
+常见做法是按用户会话或按天做上限截断（例如每个用户每天最多保留 200 条曝光），
+或按 $1/\sqrt{n_u}$ 加权（$n_u$ 是用户样本数）。
+
+\textbf{(2) 物品级配额。}头部物品曝光极多，模型容易记住「热门即正例」。
+常按物品做 $\min(1, c / n_i)$ 的降采样，其中 $c$ 是配额常数。
+注意：这会改变物品热度分布，必须在服务侧保留热度特征，否则冷启动物品会被系统性低估。
+
+\textbf{(3) 时间上的连续性与序列相关性。}同一次会话内的多个曝光高度相关，
+随机切分训练/验证集会泄漏。正确做法是\kw{按时间切分}，并且留出一段
+\term{隔离期}{Embargo Period}（例如验证集起始时间前 24 小时的数据不参与训练），
+避免标签窗口跨过切分点。
+
+\subsection{延迟反馈：转化样本的「欠费」问题}
+
+点击是近乎即时的，成单则可能几小时甚至几天后才发生。如果训练只使用「已经观察到」的转化，
+就会出现经典的\term{延迟反馈}{Delayed Feedback}偏差：\kw{近期的转化被系统性低估}，
+模型对新鲜流量给出的转化率偏低（业内常称为「模型欠费」）。
+把转化拆成「在窗口内被观测到」与「尚未被观测到」两部分：
+
+\begin{equation}
+\Prob\{ y = 1 \mid x \}
+= \underbrace{\Prob\{ y = 1,\, c = 1 \mid x \}}_{\text{窗口内已观测（可作正样本）}}
++ \underbrace{\Prob\{ y = 1,\, c = 0 \mid x \}}_{\text{延迟未观测（等待或建模）}} ,
+\label{eq:delayed-feedback}
+\end{equation}
+
+其中 $c=1$ 表示在归因窗口内观测到转化。工业界有三条主流处理路线：
+
+\begin{itemize}
+  \item \textbf{延长等待（waiting）}：把样本保留到窗口结束才入训。最准确，但训练数据滞后 $\Delta_{\text{label}}$，
+        与在线学习的时效性目标直接冲突。适合作为「干净样本」用于周期性全量训练。
+  \item \textbf{归因修正（importance weighting）}：用历史统计的延迟分布给未观测样本分配权重。
+        延迟分布常建模为指数分布或分段常数，$\Prob\{\text{delay} > s\}$ 即延迟生存函数。
+        工程实现简单，但对分布漂移敏感。
+  \item \textbf{联合建模（elapsed-time 建模）}：同时预估「是否转化」与「延迟是否已超过已流逝时间」，
+        用两个输出的乘积/比值做校正（业界常见的一类做法如 ES-DFM 系列）。
+        效果好，代价是模型复杂度与训练稳定性下降。
+\end{itemize}
+
+\begin{insight}[延迟反馈的本质是一道「数据新鲜度」收费]
+你不可能同时拥有「样本完全成熟」与「模型小时级更新」。
+所有延迟反馈方案都是在回答同一个问题：\textbf{为了时效性，愿意承受多少标签噪声？}
+经验做法是分层：\kw{小时级增量训练用等待 1 小时内的短窗口样本 + 修正权重}，
+\kw{天级训练用完整归因窗口的干净样本}，两个模型用融合权重上线，既保时效又保准确。
+\end{insight}
+
+\subsection{位置偏差与随机探索位}
+
+线上日志里的点击天然带有位置偏好：排第一的点击率远高于第五（位置偏差），
+而排序位置又由模型决定（策略偏差）。直接拿日志训练，模型学到的部分是「位置好不好」而不是「内容相关不相关」。
+标准解法是\kw{训练时加位置特征，服务时置零}（PAL 类做法，详见 \cref{ch:ranking}）。
+但仅有位置特征还不够，因为模型需要知道「在没有位置影响的情况下谁会点」，
+这要求数据里包含\kw{位置与内容的正交性}。
+
+因此生产系统通常保留一个\term{随机探索位}{Random Exploration Slot}：
+在一屏中拿出固定比例（例如 1\%--5\% 的曝光位）随机展示候选，
+不参与排序模型的决策。这批数据提供两个不可替代的价值：
+
+\begin{itemize}
+  \item \textbf{无偏的评估数据}：可以做反事实评估（IPS/DR），估算新策略的真实收益
+        （相关因果推断与偏差校正方法见 \cref{ch:growth}，\cite{saito2020doubly}）。
+  \item \textbf{去偏的训练数据}：位置分布独立于内容，位置特征的作用可以被干净地辨识出来。
+\end{itemize}
+
+代价是短期内那部分流量体验变差（通常是 CTR 掉几个百分点），
+所以要控制比例、按人群/场景分层、并把探索成本计入平台预算。
+经验做法是把探索位当\kw{长期投资}：用它的数据换更好的去偏模型，再反哺全部流量。
+
+\section{在线服务}
+
+\subsection{预估服务架构}
+
+在线预估服务的核心指标是三个：\metric{QPS}（吞吐）、\metric{p99}（延迟）、\metric{Availability}（可用性）。
+三者的关系是：\kw{在同一份硬件上，吞吐与延迟是此消彼长的}。
+常见的架构形态是「CPU 集群负责特征与轻量模型，GPU 集群负责精排」，
+两者之间通过网络传特征张量（或干脆让 GPU 侧自己拉特征）。
+
+\begin{itemize}
+  \item \textbf{特征侧}：批量查 KV（multi-get），减少网络往返次数；把一次请求需要的所有 key 合并成一次批量查询。
+  \item \textbf{模型侧}：稀疏特征转稠密 embedding 是显存与带宽瓶颈，常用方案是 embedding 放在 CPU/内存、
+        网络部分放 GPU；或使用量化后的 embedding（int8）降低带宽。
+  \item \textbf{调度侧}：请求排队、动态 batching、K/V 状态复用（同一用户在同一位置的多次请求可以复用上下文）。
+\end{itemize}
+
+\subsection{动态 batching：吞吐与延迟的取舍}
+
+静态 batch 的问题很明显：batch 固定为 64 时，低峰期要等满 64 个请求，延迟被拖长；
+高峰期又会让排队爆炸。\term{动态 batching}{Dynamic Batching} 的做法是
+「以 batch 大小或等待时间先到者为准」——凑到 $B$ 个请求或等满 $T_w$ 毫秒就发车。
+设单批固定开销为 $t_{\text{fix}}$（kernel 启动、通信、同步），
+GPU 每秒可处理 $\mu$ 个样本，到达率为 $\lambda$，则：
+
+\begin{equation}
+\text{Throughput}(B) = \frac{B}{t_{\text{fix}} + B/\mu} \xrightarrow[\;B \to \infty\;]{} \mu,
+\qquad
+L(B) = \underbrace{\frac{B-1}{2\lambda}}_{\text{等待凑批}} + \underbrace{t_{\text{fix}} + \frac{B}{\mu}}_{\text{计算}} .
+\label{eq:dynamic-batching}
+\end{equation}
+
+吞吐关于 $B$ 单调递增并饱和到 $\mu$：批越大，固定开销被摊得越薄。
+但延迟里的等待项随 $B$ 线性增长，于是给定延迟预算 $L_{\text{budget}}$，
+最优批量是「刚好用满预算」的那个：
+
+\begin{equation}
+B^{\star} = \max\left\{ B \;\Big|\; \frac{B-1}{2\lambda} + t_{\text{fix}} + \frac{B}{\mu} \le L_{\text{budget}} \right\}
+\;\approx\; \frac{(L_{\text{budget}} - t_{\text{fix}}) \cdot 2\lambda\mu}{2\lambda + \mu} \quad (B \gg 1).
+\label{eq:batch-optimal}
+\end{equation}
+
+\begin{formulacard}[动态 batching 的四条实操结论]
+\begin{enumerate}
+  \item \textbf{高峰期自动变大、低峰期自动变小}是免费的：$B^{\star}$ 与 $\lambda$ 正相关。不必手工调参，
+        只要按 $L_{\text{budget}}$ 求解即可。
+  \item \textbf{按「等待时间上限」实现比按「batch 大小」实现更稳}：设 $T_w$ 上限，
+        实际批量 $B = \lambda T_w$，延迟上界天然满足，且不需要在线解方程。
+  \item \textbf{大 batch 的收益有明显的边际拐点}：$t_{\text{fix}}=2$\,ms、$\mu=5000$ 样本/秒时，
+        $B=16$ 的吞吐约为 $16/(0.002+0.0032)=3077$，$B=64$ 约为 $4545$，$B=256$ 约为 $4951$。
+        从 16 到 64 涨 48\%，从 64 到 256 只涨 9\%。
+  \item \textbf{p99 由最长等待决定}：必须给排队设硬上限（队列长度 + 超时丢弃），
+        否则一次特征侧的抖动会让队列堆积，形成雪崩。
+\end{enumerate}
+\end{formulacard}
+
+\begin{lstlisting}[style=growth, language=Python, caption={按等待时间上限实现动态 batching（伪代码）}]
+# Deadline-driven dynamic batching: flush when batch is full OR the oldest item
+# in the queue has waited longer than max_wait_ms.
+class DynamicBatcher:
+    def __init__(self, max_batch, max_wait_ms):
+        self.max_batch = max_batch
+        self.max_wait_ms = max_wait_ms
+        self.queue = []
+
+    def submit(self, req):
+        self.queue.append(req)
+
+    def should_flush(self, now_ms):
+        if not self.queue:
+            return False
+        if len(self.queue) >= self.max_batch:
+            return True
+        waited = now_ms - self.queue[0].enqueue_ms
+        return waited >= self.max_wait_ms
+
+    def flush(self):
+        batch, self.queue = self.queue, []
+        # one forward pass for the whole batch; pad to a multiple of 8 for tensor cores
+        return self.model.forward(batch)
+\end{lstlisting}
+
+\subsection{模型热更新与灰度}
+
+模型上线不是「替换一个文件」，而是一次带状态迁移的发布。三个要素缺一不可：
+\kw{双缓冲}（新模型加载完成前旧模型继续服务）、\kw{原子切换}（一个指针交换，不是逐请求判断）、
+\kw{可回滚}（保留上一版本及其特征版本）。
+
+\begin{lstlisting}[style=growth, language=bash, caption={模型热更新与灰度的典型操作序列}]
+# 1) stage the new model artifact (never overwrite the serving file in place)
+aws s3 cp s3://models/rank/v231/model.onnx /data/models/rank/v231/model.onnx
+sha256sum /data/models/rank/v231/model.onnx
+
+# 2) warm up: load into a shadow process, run a fixed replay set, compare outputs
+serving-cli warmup --model /data/models/rank/v231 --replay /data/replay/1k.jsonl
+
+# 3) canary: 1% of traffic, keep the feature version pinned to v231
+serving-cli switch --model /data/models/rank/v231 --feature-version v231 --weight 0.01
+
+# 4) promote gradually while watching guardrail metrics
+serving-cli switch --model /data/models/rank/v231 --weight 0.10
+serving-cli switch --model /data/models/rank/v231 --weight 0.50
+
+# 5) rollback is one command; it must be faster than the promote path
+serving-cli rollback --to /data/models/rank/v230 --feature-version v230
+\end{lstlisting}
+
+灰度要分两层：\kw{模型层的流量比例灰度}（1\% 到 5\% 到 50\% 到全量）与
+\kw{特征层的版本灰度}。两者必须绑定——「新模型 + 旧特征」或「旧模型 + 新特征」都可能崩。
+最常见的翻车方式是：特征回灌在新模型全量前完成，导致旧模型读了新口径的特征，
+全站指标在半夜抖动而无人知道原因。
+
+\subsection{全链路超时与降级}
+
+\begin{table}[htbp]
+\centering
+\caption{推荐链路的降级矩阵（示例，具体阈值按业务 SLA 设定）}
+\label{tab:degrade}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{2.6cm} L{3.2cm} Y}
+\toprule
+\tabhead{故障等级} & \tabhead{触发条件} & \tabhead{降级动作} & \tabhead{代价与恢复策略} \\
+\midrule
+L1 特征慢 & 实时特征 KV p99 $>$ 30\,ms & 单次请求用离线快照特征；写快照读取开关 & 效果降 1--3 个绝对 CTR 百分点；KV 恢复后自动切回 \\
+\addlinespace
+L2 单路召回超时 & 某一路召回 35\,ms 未返回 & 丢弃该路结果，记录「丢路率」，用其余路兜底 & 覆盖率下降；丢路率连续 5 分钟超阈值则扩缩容 \\
+\addlinespace
+L3 精排不可用 & GPU 队列积压或节点批量失联 & 切到粗排分数直接出结果；候选数降到 1/3 & 效果明显下降但可用；GPU 恢复后按 10\% 步长恢复流量 \\
+\addlinespace
+L4 全链路超时 & 端到端 p99 $>$ 250\,ms & 返回个性化缓存结果（上一轮同用户同场景） & 时间上「过期一屏」；缓存 TTL 与用户状态绑定 \\
+\addlinespace
+L5 全站故障 & 推荐服务不可用 & 返回运营配置的保底列表（热门 + 品类均衡） & 效果回到无个性化水平，但保证页面可开 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keypoint}[降级设计的三个不变量]
+\begin{enumerate}
+  \item \textbf{降级路径必须走通、必须压测过}。没被压测过的降级代码，故障时就是新的故障源。
+  \item \textbf{降级不能是「自动全开」}。要有明确的触发条件、明确的恢复条件与恢复步长，
+        否则会在故障恢复期产生二次震荡。
+  \item \textbf{每次降级都要有对应指标}。「丢路率」「兜底率」「缓存命中率」必须进入看板，
+        否则你只会在效果周报里看到一次无法解释的下跌。
+\end{enumerate}
+\end{keypoint}
+
+\section{训练系统}
+
+\subsection{全量训练与增量训练的取舍}
+
+\begin{itemize}
+  \item \textbf{全量训练}：用数月到一年的完整样本重新训练，周期天级。
+        优点是稳定、可复现、不会累积漂移；缺点是无法及时响应新内容、新用户、新热点。
+  \item \textbf{增量训练}：在已有权重上继续用最近一段时间（例如最近 7 天或最近 1 天）的样本微调，
+        周期小时级。优点是时效性好；缺点是会\kw{灾难性遗忘}（对老分布的记忆衰减）、
+        以及权重会被近期的异常流量带偏。
+\end{itemize}
+
+工业界的主流方案是\kw{「全量 + 增量」双轨}：以天级全量模型为基线，
+小时级增量模型在基线上微调，线上用两者的融合（例如对 logit 做加权平均，或按场景/人群路由）。
+融合权重通常取 0.7（全量）与 0.3（增量）起步，
+并用在线实验确定——注意这是一个\kw{可以用 A/B 直接测的超参}，不要靠拍脑袋。
+
+\subsection{在线学习}
+
+真正的\term{在线学习}{Online Learning}是「样本到达即更新」，秒级到分钟级。
+在推荐场景里它主要带来两类收益：新用户与冷启动物品的快速适应，
+以及突发热点的快速捕捉（例如某事件让某类内容瞬时爆发）。
+工程实现上，工业界长期的主流是 FTRL-Proximal 一族（\cite{mcmahan2013ftrl}），
+其更新形式为：
+
+\begin{equation}
+w_{t+1} = \argmin_{w}\; \left\{
+\sum_{s=1}^{t} g_s \cdot w
+\;+\; \frac{1}{2} \sum_{s=1}^{t} \sigma_s \norm{\,w - w_s\,}_2^2
+\;+\; \lambda_1 \norm{w}_1
+\right\},
+\label{eq:online-learning}
+\end{equation}
+
+其中 $g_s$ 是第 $s$ 步的梯度、$\sigma_s$ 是学习率调度因子、$\lambda_1$ 是 L1 正则。
+近端项（proximal term）让每个坐标的更新可以独立闭式求解，
+既有梯度下降的自适应性，又通过 L1 得到稀疏解——这在特征维度上亿时是决定性的优势
+（只更新被激活的坐标，单机即可承载）。
+
+深度模型的在线学习则更多采用「小学习率 + 近期样本 + 滑动窗口重放」三件套：
+\begin{equation}
+\mathcal{L}_t(\theta) = \sum_{s \in \mathcal{W}_t} \underbrace{e^{-\eta (t - s)}}_{\text{时间衰减权重}} \cdot
+\ell\bigl(y_s, f_\theta(x_s)\bigr) + \lambda \norm{\theta - \theta_{\text{base}}}_2^2 ,
+\label{eq:online-decay}
+\end{equation}
+
+其中 $\mathcal{W}_t$ 是当前滑动窗口，$\eta$ 是衰减系数，
+$\lambda$ 项把参数拉向基线权重 $\theta_{\text{base}}$，是防遗忘最直接的手段。
+经验上 $\eta$ 对应「半衰期」：取 $\eta$ 使得 3 天前的样本权重约为 0.3--0.5，
+既能快速适应，又不会只记住最后一小时的流量。
+
+\subsection{灾难性遗忘与回滚}
+
+\begin{pitfall}[增量训练翻车的四种形态]
+\begin{enumerate}
+  \item \textbf{冷启动特征崩塌}：新物品的 embedding 在增量样本里根本没出现，
+        多次更新后权重漂移；上线表现为「新内容曝光量骤降」。
+        对策：冻结低频 ID 的 embedding，或设最小更新阈值。
+  \item \textbf{分布被单场景带偏}：某个场景流量翻倍，增量模型整体向该场景偏移。
+        对策：样本按场景加权归一，并在验证集上分场景监控。
+  \item \textbf{学习率过大导致震荡}：小时级更新且学习率与天级一致，
+        权重在几个批次内反复跳变。对策：增量学习率取全量的 1/5 到 1/10。
+  \item \textbf{静默过期}：训练任务失败但线上继续用旧模型，几天后才发现（常伴随特征版本变更）。
+        对策：训练任务的「模型新鲜度」本身设为监控指标并列告警。
+\end{enumerate}
+\end{pitfall}
+
+\textbf{回滚的前提是「可回滚」}。要做到可回滚，必须同时保留：
+模型文件、推理代码版本、特征版本、以及与之匹配的后处理参数（校准曲线、分桶阈值）。
+很多团队的模型可以秒级回滚，但特征不能——于是回滚后模型和特征不匹配，
+反而制造出比故障更糟的结果。\kw{把「模型 + 特征 + 参数」打成一个不可变的发布单元（bundle），
+是解决这个问题的唯一干净方式。}
+
+\begin{casebox}[案例：某电商「小时级增量 + 天级全量」的双轨上线（示范量级）]
+某类电商把转化预估从「天级全量」改成「天级全量 + 小时级增量」的双轨：
+天级模型用 90 天样本训练（等待完整归因窗口），小时级模型在天级基线上用最近 2 小时的曝光样本微调，
+学习率取基线的 1/8，滑动窗口重放比例 30\%。
+监控上加了三个新告警：模型新鲜度（超过 4 小时未更新）、特征 diff 率（超过 0.5\%）、
+分场景 AUC 偏离（偏离基线超过 0.005）。
+效果层面观察到的主要收益不是整体 AUC（整体基本持平），
+而是\kw{新品与新类目的冷启动效率}与\kw{大促期间热点内容的响应速度}；
+代价是训练系统的复杂度提升了一个量级，且必须建立模型回滚的演练机制
+（每月至少一次真实的回滚演练）。
+\end{casebox}
+
+\section{实验平台}
+
+模型上线前的一切乐观都要靠实验证伪。实验平台要解决的三个问题是：
+\kw{分流是否随机}（能不能比）、\kw{灵敏度够不够}（比得出来吗）、\kw{结论是否可信}（比出来的是真的吗）。
+
+\subsection{分层正交分流}
+
+分流的基本单元是\term{实验单元}{Experimental Unit}：可以是用户、设备、会话或请求。
+单元越小，同层可并行的实验越多，但污染风险越高（同一用户在两个实验里看到不同策略，
+会话级指标会互相干扰）。推荐场景最常用的单元是\kw{用户}（信息流）或\kw{会话}（搜索）。
+
+分桶用哈希实现，保证同一次分配稳定、可复现、且能在服务端与离线分析端一致：
+
+\begin{align}
+\text{bucket}(x) &= \mathrm{hash}(\text{salt},\ \text{exp\_id},\ \text{unit\_id}) \bmod M,
+\label{eq:bucket-hash} \\
+\text{group}(x) &=
+\begin{cases}
+\text{处理组}, & \text{bucket}(x) \in \{0, 1, \dots, k-1\}, \\
+\text{对照组}, & \text{bucket}(x) \in \{k, \dots, M-1\}.
+\end{cases}
+\end{align}
+
+其中 $M$ 是总桶数（常用 100 或 1000），$k$ 由实验流量比例决定。
+$salt$ 一层的意义在于：不同实验用不同 salt，同一用户在不同实验里的分桶相互独立，
+这就是\term{分层正交}{Layered Orthogonal}的基础——
+把系统拆成若干互不干扰的「层」（推荐模型层、UI 层、广告策略层），
+每层内流量互斥，层与层之间流量正交，从而在同样的总流量上并行跑多个实验。
+
+\begin{insight}[分层的经济学：为什么它值一个独立的平台]
+不做分层时，全站同时只能跑一个实验（因为实验之间会互相污染），
+一个实验按两周计，一年只能验证约 25 个想法。
+做分层正交后，通常可以同时跑 3--5 个互不干扰的实验，验证吞吐提升数倍。
+\textbf{实验平台的真正价值不是「能跑 A/B」，而是「单位时间的有效结论数」。}
+这也是为什么成熟团队把实验平台当基础设施，而不是一个工具脚本。
+\end{insight}
+
+\subsection{实验灵敏度与 CUPED}
+
+很多实验「没显著」不是因为没有效果，而是因为指标方差太大（流量不够）。
+提升灵敏度最有效的手段之一是\term{CUPED}{Controlled-experiment Using Pre-Experiment Data}：
+用一个\kw{实验前}的协变量 $X$（例如实验前 7 天的同一指标）对目标指标 $Y$ 做中心化回归调整：
+
+\begin{equation}
+Y^{\text{cv}} = Y - \theta\,(X - \E[X]),
+\qquad
+\theta = \frac{\Cov(Y, X)}{\Var(X)},
+\qquad
+\frac{\Var(Y^{\text{cv}})}{\Var(Y)} = 1 - \rho_{YX}^{2},
+\label{eq:cuped}
+\end{equation}
+
+其中 $\rho_{YX}$ 是 $Y$ 与 $X$ 的相关系数。方差降低的比例就是 $1-\rho^2$：
+若相关系数为 0.7，方差降 51\%，等价于样本量翻一倍；
+若相关系数只有 0.2，方差只降 4\%，基本无感。
+CUPED 的关键约束是 $X$ \kw{必须在分流之前确定且不受实验影响}——
+用实验期的数据做 $X$ 会引入偏差，「用实验前的历史指标」才是正确用法。
+
+\begin{formulacard}[实验所需样本量的直觉公式]
+两组均值比较、双侧检验、显著性水平 $\alpha$、功效 $1-\beta$ 时：
+\begin{equation}
+n_{\text{per group}} \;\approx\; \frac{2\,\sigma^{2}\,(z_{1-\alpha/2} + z_{1-\beta})^{2}}{\delta^{2}} .
+\end{equation}
+其中 $\delta$ 是要检测的最小效应（MDE）、$\sigma$ 是指标标准差。
+取 $\alpha=0.05$、功效 80\%，则 $z$ 部分约为 $7.85$，工程上常用近似
+$n \approx 16\,\sigma^{2}/\delta^{2}$（每组）。
+若方差大、转化率低，所需样本会迅速膨胀——这就是为什么低转化率业务必须靠 CUPED 与更长的实验周期。
+\end{formulacard}
+
+\subsection{A/A 校验与流量分割错误}
+
+上线实验前必须先跑 A/A：两组都拿旧策略，理论上应该没有差异。
+A/A 的作用是\kw{发现平台自身的 bug}——分流不随机、日志丢数、指标计算有偏。
+
+核心检验是\term{样本比例不匹配}{Sample Ratio Mismatch, SRM}：
+观察到的各组样本量与预期比例不符时，用卡方检验：
+
+\begin{equation}
+\chi^{2} = \sum_{g=1}^{G} \frac{(O_g - E_g)^{2}}{E_g},
+\qquad E_g = N \cdot p_g,
+\label{eq:srm-chi2}
+\end{equation}
+
+其中 $O_g$ 是第 $g$ 组实际样本数、$E_g$ 是按分流比例算出的期望数。
+自由度 $G-1$。\kw{实践阈值要比常规统计检验严得多}：
+业界（如微软的实验平台经验，见 \cite{kohavi2020trustworthy}）建议
+当 SRM 的 p 值小于 0.001 时就应该直接判定实验无效并排查，而不是继续看效果指标。
+原因是分流 bug 会让所有指标都不可信，此时「效果显著」更可能是 bug 的表达而不是真实收益。
+
+A/A 还要看\kw{指标的一致性}：把同一份流量随机分成两半，计算主要指标的差值与 p 值分布，
+如果一个平台的 A/A 实验有 8\% 的 p 值小于 0.05，说明指标计算或分流有系统性问题。
+
+\subsection{多重比较与序贯检验}
+
+同时看 20 个指标时，即使没有任何真实效应，至少有一个指标「显著」的概率约为
+$1 - 0.95^{20} \approx 64\%$。这就是\term{多重比较}{Multiple Comparisons}问题。
+控制手段有三类：
+
+\begin{itemize}
+  \item \textbf{族错误率控制（FWER）}：Bonferroni 把阈值改为 $\alpha / m$，最保守；
+        Holm--Bonferroni 是它的逐步改进版。
+  \item \textbf{错误发现率控制（FDR）}：Benjamini--Hochberg 允许一定比例的假阳性，
+        更适合「一次看几百个分群」的探索性分析。
+  \item \textbf{预先注册主指标}：工程上最有效的手段其实是流程约束——
+        实验开始前就定好一个主指标与少量护栏指标，其余指标只作诊断，不作决策依据。
+\end{itemize}
+
+另一个常见陷阱是\term{偷看数据}{Peeking}：每天看 p 值，一旦显著就停止实验。
+这会让实际的第一类错误率远高于 5\%。正确做法要么是固定样本量、
+要么使用序贯检验（sequential testing）或组序贯设计，在统计框架内允许提前终止。
+
+\subsection{长期效应与 holdback}
+
+短期 A/B 测不出三类效应：\kw{学习效应}（用户需要时间适应新交互）、
+\kw{反馈循环效应}（模型改变曝光分布，进而改变未来的训练数据）、
+\kw{生态效应}（创作者与供给侧的长期反应）。对策是设置\term{长期留出组}{Holdback}：
+留下固定比例（例如 1\%--5\%）的流量长期使用旧策略，持续数月观察指标的长期差异。
+
+\begin{toolbox}[一次推荐 A/B 实验的 12 步检查表]
+\begin{enumerate}
+  \item 明确假设与主指标（一个），列出护栏指标（3--5 个）。
+  \item 确定实验单元（用户/会话/请求）与分层归属。
+  \item 计算 MDE 与所需样本量，倒推实验周期（覆盖完整周周期，至少 7 天）。
+  \item 先跑 A/A（或复用平台的 A/A 基线）确认无 SRM。
+  \item 校验分流哈希：同一 \code{unit\_id} 在不同天是否稳定落在同一桶。
+  \item 确认指标口径与数据链路（埋点、日志、数仓）在实验组与对照组完全一致。
+  \item 确认特征与模型版本在实验期间不交叉变更。
+  \item 设定停止条件：固定样本量或序贯方案，禁止随意偷看。
+  \item 分析时先看护栏指标，再看主指标；再按人群/场景做分层分析（并做多重比较校正）。
+  \item 检查新奇效应：看第一周与第二周的效应是否一致。
+  \item 显著则评估量级与置信区间，不显著则记录 MDE 与「最多可能损失多少」。
+  \item 无论成败，写入实验档案（含失败库），供后续复用。
+\end{enumerate}
+\end{toolbox}
+
+\section{生态与体验}
+
+\subsection{多样性与打散}
+
+纯按预估效用排序会收敛到「同类内容堆叠」：用户点了一个母婴类视频，下一屏全是母婴。
+短期 CTR 可能上升，长期会伤害留存，并让生态里的中小创作者失去曝光。
+多样性约束通常加在重排阶段，形式是在贪心选择时对已选集合的相似度做惩罚：
+
+\begin{equation}
+\text{score}'(i \mid \mathcal{S}) = \text{score}(i) - \beta \cdot \max_{j \in \mathcal{S}} \text{sim}(i, j),
+\label{eq:dpp-greedy}
+\end{equation}
+
+其中 $\mathcal{S}$ 是已选集合，$\beta$ 控制多样性强度。
+DPP（行列式点过程）是其更严格的概率化版本，会在「相关性」与「多样性」之间给出一个可解释的取舍曲线。
+工程上 $\beta$ 不是常数，而是与用户的历史消费广度相关：兴趣窄的用户需要更强的打散，
+兴趣宽的用户可以少打散。
+
+\subsection{信息茧房的度量}
+
+\term{信息茧房}{Filter Bubble} 不是一个道德判断，而是一个可以量化的分布问题：
+用户的兴趣分布随时间的集中度是否上升、曝光分布与全站供给分布是否偏离。
+两个常用度量是熵与 Gini 系数：
+
+\begin{equation}
+H(u) = -\sum_{c \in \mathcal{C}} p_u(c) \log p_u(c),
+\qquad
+\text{Gini} = \frac{\sum_{i=1}^{n} \sum_{j=1}^{n} \abs{x_i - x_j}}{2\, n^{2} \bar{x}} .
+\label{eq:diversity}
+\end{equation}
+
+$H(u)$ 是用户消费类目分布的熵（越高越分散），可以按用户分层看时间趋势；
+$\text{Gini}$ 常用于度量\kw{曝光在创作者之间的集中度}。
+配套还应看三个「偏离度」指标：用户兴趣分布与曝光分布的散度（KL/JS）、
+新创作者获得曝光的比例、以及头部内容的曝光占比。
+一旦这些指标持续恶化，说明排序在优化短期点击的同时在消耗生态。
+
+\subsection{负反馈与用户控制}
+
+负反馈（不感兴趣、屏蔽、举报、取消关注）是最高价值的信号之一，因为它比点击稀疏但更明确。
+工程上有三个要点：
+
+\begin{itemize}
+  \item \textbf{负反馈必须进入训练标签，而不是只作为过滤规则}。
+        只做过滤会让模型继续认为该内容「值得推荐」（因为它没有负样本），
+        过滤掉之后模型仍然反复生成同类内容。
+  \item \textbf{负反馈要区分强度}：举报、屏蔽、不感兴趣、快速划走是不同强度的信号，
+        不能共用一个权重。
+  \item \textbf{要给用户可解释的控制}：能看、能改、能撤销自己的兴趣偏好。
+        这既是合规要求（多家平台的推荐算法备案与透明度要求，具体以各地监管最新规定为准），
+        也是留存的手段——用户对「可控制」的系统容忍度更高。
+\end{itemize}
+
+\begin{pitfall}[把短期指标当北极星的三种后果]
+\begin{enumerate}
+  \item \textbf{标题党与封面党}：CTR 上升但完播率、二次访问下降；表现为「点击涨、留存跌」。
+  \item \textbf{内容同质化}：多样性指标下降，头部集中度上升，创作者生态萎缩，长期供给质量下滑。
+  \item \textbf{负反馈累积}：用户用「屏蔽」代替「退出」，短期看不出问题，直到卸载率跳升。
+\end{enumerate}
+对策是把「多样性、负反馈率、创作者集中度、长期留存」放进护栏指标，
+并让模型的优化目标含长期价值（例如用留存/LTV 加权，见 \cref{ch:growth}）。
+\end{pitfall}
+
+\section{监控、告警与治理}
+
+工程化的最后一个问题是：\kw{系统在没人盯着的时候是否还健康}。
+看板不是给老板看的，而是给值班同学在三分钟内定位问题用的。
+因此指标必须分层，并明确「谁看、多久看一次、什么阈值告警」。
+
+\begin{table}[htbp]
+\centering
+\caption{推荐系统监控看板的核心指标清单（20 项，阈值按业务基线设定）}
+\label{tab:monitor-metrics}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{3.0cm} L{2.6cm} Y}
+\toprule
+\tabhead{分类} & \tabhead{指标} & \tabhead{口径要点} & \tabhead{异常时的第一反应} \\
+\midrule
+流量 & 请求 QPS、成功率、超时率 & 按入口与场景拆分 & 先看是否单机房/单入口 \\
+\addlinespace
+流量 & 空结果率 & 返回 0 条结果的请求占比 & 查召回全失败或策略过滤过严 \\
+\addlinespace
+延迟 & 端到端 p50/p99 & 必须含网络与渲染 & 按级拆解定位到具体一级 \\
+\addlinespace
+延迟 & 各级 p99 与排队时长 & 计算耗时与排队耗时分开 & 排队涨则先限流 \\
+\addlinespace
+延迟 & GPU 利用率与批量分布 & 平均 batch 大小、空批比例 & 批量过小则调等待上限 \\
+\addlinespace
+质量 & 模型新鲜度（小时） & 最后一次成功更新的时间 & 超阈值直接告警训练链路 \\
+\addlinespace
+质量 & 特征 diff 率、空值率 & 按特征维度出日报 & 先定位到具体特征再回滚 \\
+\addlinespace
+质量 & 打分分布 PSI & 相对基线的偏移 & 分布漂移常先于效果下降出现 \\
+\addlinespace
+效果 & CTR、CVR、完播率 & 分场景、分人群、分端 & 先看是否全站一致下跌 \\
+\addlinespace
+效果 & 人均曝光数、人均消费时长 & 供给侧与需求侧分开看 & 曝光涨而时长跌要警惕 \\
+\addlinespace
+效果 & 千次曝光收益 & 自然与广告分开 & 与 eCPM 口径对齐 \\
+\addlinespace
+生态 & 类目熵、曝光 Gini & 按用户分层看趋势 & 集中度恶化要查打散参数 \\
+\addlinespace
+生态 & 新内容/新创作者曝光占比 & 定义「新」的时间窗口 & 通常是扶持策略失效 \\
+\addlinespace
+生态 & 负反馈率 & 举报、屏蔽、不感兴趣分列 & 与具体内容类别关联分析 \\
+\addlinespace
+一致性 & 离线在线 diff 率 & 抽样重放，不是读离线表 & 高于 0.5\% 阻断模型发布 \\
+\addlinespace
+一致性 & 训练/服务特征版本一致率 & 请求级记录版本号 & 不一致即回滚 \\
+\addlinespace
+实验 & SRM p 值 & 每个实验都要算 & p $<$ 0.001 判定实验无效 \\
+\addlinespace
+实验 & 实验覆盖流量与互斥冲突数 & 分层配置的校验 & 冲突则暂停新实验 \\
+\addlinespace
+稳定性 & 降级次数、兜底率、丢路率 & 按等级分类计数 & 降级频繁说明容量不足 \\
+\addlinespace
+成本 & 单请求算力成本、GPU 卡时 & 与效果指标一起看 & 边际收益低于阈值就缩减 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keypoint}[看板设计的三条原则]
+\begin{enumerate}
+  \item \textbf{分层：}第一层 5--8 个指标（一分钟能看完，判断「有没有事」）；
+        第二层按级拆解（定位到哪一级）；第三层按分群/分场景（定位到哪一类流量）。
+  \item \textbf{口径写进看板：}每个指标旁边写明口径、时间窗口、是否含兜底结果。
+        口径不清的指标一定会被误读。
+  \item \textbf{告警必须可行动：}「模型新鲜度 $>$ 4 小时」可行动；
+        「CTR 下降 2\%」不可行动。告警的设计目标是让人知道下一步做什么。
+\end{enumerate}
+\end{keypoint}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 端到端延迟由串行段、并行段最大值、排队与网络共同构成；先定每级预算，再选模型，
+        并且 \kw{利用率要压在 60\%--70\% 以买 p99 的保险}。
+  \item 特征平台分离线、近线、实时三层，分别对应天/小时级、分钟级、秒级时效；
+        一致性校验的正确做法是\kw{用同一份线上日志离线重放}，而不是读离线特征表。
+  \item 样本工程的四条硬规则：特征时刻严格早于曝光时刻、标签时刻晚于曝光时刻、
+        负例必须来自曝光集合、负采样必须校正（$p_{\text{true}} = p_s/(p_s + r(1-p_s))$）。
+  \item 延迟反馈是「数据新鲜度的收费」；用双轨（小时级短窗口 + 天级完整窗口）平衡时效与准确。
+  \item 在线服务的关键是动态 batching（按延迟预算求解最优批量，按等待上限实现）、
+        模型与特征绑定的原子热更新、以及被压测过的五级降级矩阵。
+  \item 训练系统用「全量 + 增量」双轨拿时效性，用时间衰减权重与向基线的 L2 约束防遗忘；
+        可回滚的前提是\kw{模型 + 特征 + 参数打包成不可变发布单元}。
+  \item 实验平台的三件套：分层正交分流（提升单位时间结论数）、CUPED（$\rho=0.7$ 时方差降约 51\%）、
+        A/A 与 SRM 校验（p $<$ 0.001 直接判定无效）；同时防多重比较与偷看数据。
+  \item 生态与体验必须进指标：多样性打散、类目熵与曝光 Gini、负反馈信号进训练而非只做过滤。
+  \item 监控看板分层设计，告警必须可行动；\kw{工程一致性是模型能力的乘数}，不是附属品。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item 一屏推荐的端到端延迟预算是 200\,ms，你会如何在召回、粗排、精排、重排、策略之间分配？依据是什么？
+  \item 如何保证离线特征与在线特征的一致性？如果发现线上效果比离线差很多，你的排查顺序是什么？
+  \item 增量训练或在线学习时，如何防止灾难性遗忘？如果必须回滚，回滚单元应该包含哪些东西？
+  \item 动态 batching 的批量大小如何确定？批越大吞吐越高，为什么不能一直加大？
+  \item 转化预估遇到延迟反馈（很多转化在几小时后才回传），有哪些处理方案？各自的代价是什么？
+  \item 如果让你设计一次推荐算法的 A/B 实验，你会怎么设计分流、指标与停止条件？
+  \item 什么是 CUPED？它在什么条件下有效、什么条件下无效甚至有害？
+  \item 如何度量推荐系统的信息茧房与生态健康度？哪些指标可以进护栏？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+推荐系统的工程骨架——特征、样本、服务、训练、实验——与搜索引擎的工程骨架高度同构，
+但搜索多了一个推荐系统里不存在的强信号：\kw{用户的显式查询}。
+下一章进入第 3 部分，我们从 \cref{ch:search} 开始，看看这套工程方法论在「用户主动表达意图」的场景下
+需要做哪些改造：倒排索引与分片、查询理解与改写、LTR 三阶段、
+以及为什么搜索的评价体系里必须加入「长点击」与「无结果率」这类与 CTR 不同向的指标。

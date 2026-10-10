@@ -1,0 +1,45 @@
+# LaTeX 中间文件
+*.aux
+*.bbl
+*.blg
+*.bcf
+*.fls
+*.fdb_latexmk
+*.log
+*.out
+*.run.xml
+*.toc
+*.lof
+*.lot
+*.xdv
+*.synctex.gz
+*.idx
+*.ind
+*.ilg
+*.nav
+*.snm
+*.vrb
+
+# 编译产物
+build/
+build_check/
+main.pdf
+
+# 临时/隔离编译沙箱（子代理或人工验证用）
+.tmp*/
+.tmp_*/
+*check*/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/

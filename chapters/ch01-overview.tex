@@ -1,0 +1,433 @@
+\chapter{导论：从信息检索到增长工程}
+\label{ch:overview}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 推荐、搜索、广告、SEO/GEO、跨境电商这五件事，为什么可以放在同一本书里？
+  \item 它们共享哪些\textbf{底层概念}（相关性、效用、竞价、归因、指标）？
+  \item 一个完整的「流量—转化—履约」系统，边界在哪里、接口在哪里？
+  \item 面对一个新业务，如何用 30 分钟画出它的指标体系与迭代路线？
+\end{enumerate}
+\end{insight}
+
+\section{五个领域的共同底层}
+
+\subsection{人类信息获取的三种模式}
+
+从用户视角看，互联网上获取信息／商品的方式只有三种：
+
+\begin{table}[htbp]
+\centering
+\caption{三种信息获取模式}
+\label{tab:three-modes}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{2.7cm} L{3.0cm} Y}
+\toprule
+\tabhead{模式} & \tabhead{用户意图} & \tabhead{典型系统} & \tabhead{核心技术问题} \\
+\midrule
+检索（Pull） & 明确、可表达 & 搜索引擎、站内搜索、电商搜索 &
+查询理解、召回相关性、排序、多样性与商业价值平衡 \\
+\addlinespace
+推荐（Push） & 模糊、难表达 & 信息流、短视频、电商「猜你喜欢」 &
+兴趣建模、冷启动、长期价值、内容生态健康度 \\
+\addlinespace
+广告（Bid） & 不关心（被动） & 搜索广告、信息流广告、视频贴片 &
+CTR/CVR 预估、机制设计、预算与出价、广告与体验的平衡 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+三者的数学骨架高度相似：都是在候选集合 $\mathcal{C}$ 上学习一个打分函数
+$s(u, c, \text{ctx})$，再按分数排序并施加约束。差别在于：
+
+\begin{itemize}
+  \item \textbf{优化的目标函数不同}。搜索优化「相关性 + 权威性」，推荐优化「长期留存/消费时长/GMV」，
+        广告优化「平台收入 + 广告主 ROI + 用户体验」的多方博弈。
+  \item \textbf{信号的性质不同}。搜索有明确的 query 作为监督信号；推荐只有隐式反馈（点击、停留、转化）；
+        广告有金钱出价作为显式信号，且存在\textbf{激励相容}问题（广告主会博弈）。
+  \item \textbf{约束不同}。搜索受权威性与时效约束，推荐受生态与多样性约束，广告受预算、频控与政策约束。
+\end{itemize}
+
+\begin{formulacard}[统一形式：带约束的排序问题]
+\begin{equation}
+\max_{\pi \in \Pi} \; \E_{u \sim \mathcal{U}} \Big[ \sum_{c \in \pi(u)} w_u \cdot \underbrace{v(u,c)}_{\text{效用}} \Big]
+\quad \text{s.t.} \quad
+\underbrace{g_j(\pi) \le b_j}_{\text{预算/频控/生态约束}},\; j = 1,\dots, m .
+\label{eq:unified}
+\end{equation}
+其中 $\pi$ 是排序策略，$v$ 是效用（相关性、CTR$\times$价值、观看时长等），
+$w_u$ 是用户权重（例如高价值用户权重更高），$g_j$ 是资源消耗函数。
+推荐、搜索、广告的差异，几乎全部落在 $v$、$w_u$ 与 $g_j$ 的定义上。
+\end{formulacard}
+
+\subsection{技术栈的四层复用}
+
+无论做哪个方向，工程实现都可以拆成四层，而且这四层在不同业务之间\textbf{高度复用}：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=left},
+  band/.style={draw=#1, rounded corners=3pt, minimum width=13.6cm, minimum height=1.15cm,
+               inner sep=6pt, text width=13.2cm}
+]
+\node[band=NavyDeep, fill=BoxBG] (l1) at (0,0) {\textbf{(1) 数据与特征层}：埋点/日志 $\to$ 数仓（ODS/DWD/DWS/ADS）$\to$ 特征平台（离线特征回填 + 实时特征透传）$\to$ 样本拼接};
+\node[band=NavyMid, fill=BoxBG] (l2) at (0,-1.45) {\textbf{(2) 模型与策略层}：召回（多路并行）$\to$ 粗排 $\to$ 精排（多目标）$\to$ 重排（多样性/打散/定坑）$\to$ 出价与预算分配};
+\node[band=TealDeep, fill=BoxBGAlt] (l3) at (0,-2.9) {\textbf{(3) 服务与工程层}：在线预估服务（GPU/CPU 混部、批推理、模型热更新）$\to$ 向量检索 $\to$ 缓存与降级 $\to$ 全链路压测};
+\node[band=AmberDeep, fill=white] (l4) at (0,-4.35) {\textbf{(4) 评估与实验层}：离线指标（AUC/GAUC/NDCG/Recall@K）$\to$ 在线 A/B $\to$ 因果与长期效应 $\to$ 归因与财务口径对齐};
+\draw[-{Stealth}, thick, SlateGray] (l1) -- (l2);
+\draw[-{Stealth}, thick, SlateGray] (l2) -- (l3);
+\draw[-{Stealth}, thick, SlateGray] (l3) -- (l4);
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] ([xshift=-1cm]l4.north) -- ([xshift=-1cm]l1.south)
+  node[midway, left=2pt, text width=1.2cm, rotate=90, font=\sffamily\tiny\color{CrimsonDeep}] {反馈闭环};
+\end{tikzpicture}
+\caption{推荐/搜索/广告共享的四层技术栈}
+\label{fig:fourier}
+\end{figure}
+
+\begin{keypoint}[可以带走的结论]
+\textbf{你在推荐系统里学到的样本构造、特征平台、多目标建模、A/B 实验能力，转去做搜索或广告，复用率超过 70\%。}
+反过来，做 SEO/GEO 的人如果不理解召回与排序，就永远只能靠经验猜算法；做跨境的人如果不理解指标体系，
+就无法判断「广告亏钱」到底是素材问题、定价问题还是履约成本问题。
+\end{keypoint}
+
+\section{信息检索：一切的起点}
+
+\subsection{倒排索引与布尔检索}
+
+搜索引擎的物理基础是\term{倒排索引}{Inverted Index}：把「文档 $\to$ 词」的映射翻转成「词 $\to$ 文档列表（posting list）」。
+每个 posting 记录文档 ID、词频（TF）、位置信息，用差值编码 + 跳表实现高效求交。
+
+一次「苹果 手机 价格」的查询，在布尔模型下就是三个 posting list 的求交：
+
+\begin{equation}
+\text{Result} = P(\text{苹果}) \cap P(\text{手机}) \cap P(\text{价格}).
+\end{equation}
+
+布尔模型的问题是\textbf{没有排序}——要么命中要么不命中。于是有了向量空间模型与概率模型。
+
+\subsection{从 VSM 到 BM25}
+
+\term{向量空间模型}{Vector Space Model, VSM} 把 query 与文档都表示为词权重向量，
+用余弦相似度排序，权重由 \term{TF-IDF}{Term Frequency--Inverse Document Frequency} 给出：
+
+\begin{equation}
+\text{tf-idf}(t, d) = \underbrace{\frac{f_{t,d}}{\max_{t'} f_{t',d}}}_{\text{归一化词频}} \cdot
+\underbrace{\log \frac{N}{n_t}}_{\text{逆文档频率}} .
+\end{equation}
+
+实践中更好用的是 \term{BM25}{Best Matching 25}，它引入了词频饱和与文档长度归一化：
+
+\begin{formulacard}[BM25（Okapi）]
+\begin{equation}
+\text{score}(q, d) = \sum_{t \in q} \text{IDF}(t) \cdot
+\frac{f_{t,d} \cdot (k_1 + 1)}{f_{t,d} + k_1 \cdot \left(1 - b + b \cdot \dfrac{|d|}{\text{avgdl}}\right)} ,
+\qquad
+\text{IDF}(t) = \log \frac{N - n_t + 0.5}{n_t + 0.5} .
+\label{eq:bm25}
+\end{equation}
+经验参数：$k_1 \in [1.2, 2.0]$（典型 $1.2 \sim 1.5$），$b \in [0.5, 0.8]$（典型 $0.75$）。
+$k_1$ 控制词频饱和速度，$b$ 控制长度惩罚强度。
+\end{formulacard}
+
+\begin{pitfall}[别把 BM25 当成「古典方法」]
+直到今天，\textbf{BM25 仍是绝大多数生产检索系统的兜底通道}，也是神经检索最重要的对照 baseline。
+在长尾 query、专有名词、型号（如「iPhone 15 Pro Max 256G 蓝色」）上，BM25 常常打败纯向量检索。
+工程上正确的做法是\textbf{混合检索（Hybrid）}：BM25/sparse 与 dense 各召回一批，再用融合或重排统一。
+见\cref{ch:search} 与 \cref{ch:rag}。
+\end{pitfall}
+
+\subsection{相关性之外的排序因素}
+
+真实搜索的排序分数从来不只是相关性：
+
+\begin{equation}
+\text{FinalScore} = \underbrace{\text{Rel}(q,d)}_{\text{相关性}} \times
+\underbrace{\text{Quality}(d)}_{\text{权威/质量}} \times
+\underbrace{\text{CTR}(q,d)}_{\text{行为反馈}} \times
+\underbrace{\text{Fresh}(d)}_{\text{时效}} \times
+\underbrace{\text{Loc}(u,d)}_{\text{个性化}} .
+\end{equation}
+
+Google 把它表述为「有用性」的几个维度：\textbf{相关性、质量、可用性、上下文}（见\cref{ch:seo}）。
+做 SEO 的本质，就是\textbf{在算法可观测的维度上提升这些因子}——而不是找漏洞。
+
+\section{推荐系统：从「人找货」到「货找人」}
+
+推荐系统的工业标准架构是\textbf{漏斗式的多级级联}，因为候选规模与模型复杂度必须分层：
+
+\begin{table}[htbp]
+\centering
+\caption{推荐系统典型四级漏斗}
+\label{tab:funnel}
+\small
+\begin{tabularx}{\textwidth}{L{1.6cm} L{2.0cm} L{2.3cm} Y}
+\toprule
+\tabhead{层级} & \tabhead{候选规模} & \tabhead{典型模型} & \tabhead{关键约束} \\
+\midrule
+召回 & $10^6 \sim 10^7 \to 10^3 \sim 10^4$ &
+i2i 协同、双塔、图召回、向量检索 &
+必须 $O(1)$ 或 $O(\log N)$ 级延迟，追求高召回率而非高精度 \\
+\addlinespace
+粗排 & $10^3 \sim 10^4 \to 10^2 \sim 10^3$ &
+轻量双塔、学生模型蒸馏 &
+延迟预算 10--30\,ms，与精排保持排序一致性 \\
+\addlinespace
+精排 & $10^2 \sim 10^3 \to 10^1 \sim 10^2$ &
+DIN/DIEN、MMoE/PLE、DCN 等多目标模型 &
+效果主战场，CTR/CVR/时长/GMV 多目标融合 \\
+\addlinespace
+重排 & $10^2 \to 10^1$ &
+DPP、序列生成、强化学习 &
+多样性、打散、定坑、业务规则与长期生态 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{casebox}[案例：YouTube 两阶段架构及其启示]
+YouTube 2016 年的经典论文 \cite{covington2016youtube} 把系统拆成\textbf{候选生成}（数百个视频）
+与\textbf{排序}（数十个）两段，并给出三条到今天仍然成立的工程经验：
+\begin{enumerate}
+  \item \textbf{把推荐当成极端多分类问题}：用 softmax 从百万级视频中选一个，负采样后可用 sampled softmax 高效训练；
+  \item \textbf{排序目标不是 CTR，而是期望观看时长}：用加权逻辑回归 $T_i \cdot \sigma(x)$ 直接优化时长，避免标题党；
+  \item \textbf{特征与样本的分布对齐极其关键}：训练用「下一条观看」，服务时是「下一屏推荐」，二者存在位置偏置，
+        必须引入位置特征并在服务时置零（position bias 的经典处理）。
+\end{enumerate}
+\textbf{启示}：论文里最值钱的往往不是模型结构，而是\textbf{目标函数设计}与\textbf{训练/服务一致性}的工程细节。
+\end{casebox}
+
+推荐系统的完整展开见第 2 部分（\cref{ch:recall}--\cref{ch:receng}）。
+
+\section{计算广告：把流量变成可定价的商品}
+
+广告是互联网最主要的商业模式。它的核心是三方（甚至四方）博弈：
+
+\begin{itemize}
+  \item \textbf{广告主}：想用最低成本获得转化；
+  \item \textbf{平台/媒体}：想最大化收入并维持用户体验与广告主留存；
+  \item \textbf{用户}：想看到有用的信息，并保留隐私与注意力；
+  \item （生态中还有）\textbf{DSP/SSP/ADX/联盟} 等多层中介。
+\end{itemize}
+
+\subsection{eCPM：广告世界的通用货币}
+
+不同计费方式（CPM/CPC/CPA）之间可以统一换算为 \term{千次展示期望收益}{eCPM}：
+
+\begin{formulacard}[eCPM 与排序]
+\begin{equation}
+\text{eCPM} = 1000 \times \underbrace{\text{pCTR} \times \text{bid}}_{\text{CPC 计费}}
+= 1000 \times \underbrace{\text{pCTR} \times \text{pCVR} \times \text{CPA}}_{\text{oCPM/oCPA 计费}} .
+\label{eq:ecpm}
+\end{equation}
+广告排序通常等价于\textbf{按 eCPM 降序}，但真实系统会加入质量分、体验惩罚、预算平滑与多样性修正：
+\begin{equation}
+\text{RankScore} = \text{eCPM} \times \text{QualityScore} \times \text{ExperiencePenalty} \times \text{PacingFactor}.
+\end{equation}
+\end{formulacard}
+
+\begin{keypoint}[广告与推荐的最大区别]
+推荐只要「用户满意」，广告必须同时让\textbf{三方}都满意。
+因此广告系统里充满了推荐系统里不存在的机制：拍卖、出价、预算约束、质量分、
+激励相容、保留价、第二价格与第一价格的切换。这部分内容见 \cref{ch:ad} 与 \cref{ch:admodel}。
+\end{keypoint}
+
+\section{流量获取：自然流量与付费流量}
+
+当视角从「平台方」切换到「商家方」，问题就变成：\textbf{如何以可接受的成本获得流量与转化？}
+
+\begin{table}[htbp]
+\centering
+\caption{主要流量渠道对比（量级为经验值，仅供建立直觉）}
+\label{tab:channels}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{1.9cm} L{1.9cm} Y}
+\toprule
+\tabhead{渠道} & \tabhead{成本特征} & \tabhead{启动速度} & \tabhead{关键依赖} \\
+\midrule
+自然搜索 SEO & 人力/内容成本，边际成本趋零 & 慢（3--12 个月） & 内容质量、技术健康度、外链、E-E-A-T \\
+\addlinespace
+GEO/AEO & 内容 + 结构化数据 & 中（与搜索改版同步） & 被 AI 摘要引用的可提取性、实体清晰度 \\
+\addlinespace
+Google 搜索广告 & CPC 高，意图精准 & 快（当天） & 关键词结构、落地页、出价与转化追踪 \\
+\addlinespace
+YouTube 视频 & CPM 中，素材驱动 & 中 & 前 5 秒钩子、人群包、频次控制 \\
+\addlinespace
+Meta（FB/IG） & CPM 中低，量级最大 & 快 & 素材迭代速度、Pixel/CAPI 信号质量 \\
+\addlinespace
+TikTok & CPM 低，波动大 & 快 & 内容原生度、达人矩阵、直播承接 \\
+\addlinespace
+红人/联盟 & 佣金 + 坑位费 & 中 & 选人匹配度、佣金结构、追踪链接 \\
+\addlinespace
+私域（邮件/短信/社群） & 边际成本极低 & 慢（需积累） & 列表规模、分层与生命周期运营 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[投放的「不可能三角」]
+\textbf{规模、成本、稳定性}三者往往只能取其二。
+想放量又想低 CAC，通常意味着容忍波动；想要稳定 ROI，通常要接受量级天花板。
+所有「投手技巧」本质上都是在某个时点上\textbf{重新分配这三者}——理解这一点，
+就不会被「7 天起量黑科技」这类话术带走。详见 \cref{ch:google} 与 \cref{ch:meta}。
+\end{insight}
+
+\section{跨境电商：把流量变成交付}
+
+流量解决「有人看到」，跨境解决「有人收到并复购」。这条链路比国内电商长得多：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  every node/.style={font=\sffamily\tiny, align=center},
+  st/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=8mm, minimum width=1.85cm, inner sep=3pt}
+]
+\node[st] (a) {选品\\调研};
+\node[st, right=of a] (b) {供应商\\打样};
+\node[st, right=of b] (c) {备货\\/采购};
+\node[st, right=of c] (d) {头程\\运输};
+\node[st, right=of d] (e) {清关\\关税};
+\node[st, right=of e] (f) {海外仓\\/平台仓};
+\node[st, right=of f] (g) {订单\\履约};
+\node[st, right=of g] (h) {尾程\\配送};
+\node[st, right=of h] (i) {签收\\售后};
+\foreach \x/\y in {a/b,b/c,c/d,d/e,e/f,f/g,g/h,h/i} \draw[-{Stealth}, SlateGray] (\x) -- (\y);
+\node[below=6mm of a, text width=15.5cm, font=\sffamily\tiny, align=left, draw=TealDeep, dashed, rounded corners=2pt, inner sep=4pt]
+  {\textbf{成本项}：采购成本 $\to$ 头程运费 $\to$ 关税/VAT $\to$ 仓储费 $\to$ 尾程派送 $\to$ 平台佣金 $\to$ 支付手续费 $\to$ 退货损耗 $\to$ 广告费。\\
+   \textbf{时间项}：打样 7--20 天，生产 15--45 天，海运 25--40 天，空运 5--10 天，清关 1--5 天。};
+\end{tikzpicture}
+\caption{跨境电商全链路：每个箭头都是一次成本与时效的取舍}
+\label{fig:cbec-chain}
+\end{figure}
+
+\begin{keypoint}[跨境的第一性原理]
+\textbf{利润 = 售价 $-$（货值 + 物流 + 关税 + 平台佣金 + 广告费 + 退货损耗）。}
+其中任何一项失控都会吃掉全部利润。Temu/SHEIN 的可怕之处不在于流量，
+而在于它们把\textbf{供应链、物流与定价}压缩成了一个几乎自动化的系统——见 \cref{ch:platform} 与 \cref{ch:supply}。
+\end{keypoint}
+
+\section{指标体系：所有方向的通用语言}
+
+\subsection{三层指标：北极星、过程、护栏}
+
+\begin{table}[htbp]
+\centering
+\caption{指标三层结构（以电商推荐/投放为例）}
+\label{tab:metrics3}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{4.2cm} Y}
+\toprule
+\tabhead{层级} & \tabhead{典型指标} & \tabhead{作用与注意事项} \\
+\midrule
+北极星 & GMV、DAU、留存、LTV/CAC、平台收入 & 少而稳定；必须与财务口径对齐；容易被「拆解炒作」 \\
+\addlinespace
+过程 & CTR、CVR、客单价、UV 价值、加购率、停留时长、CPM/CPC/CPA & 用于定位问题环节；可高频观测，但要防 Goodhart 效应 \\
+\addlinespace
+护栏 & 投诉率、退货率、加载延迟、多样性、生态集中度、广告密度 & 防止「指标涨了、体验崩了」；必须与实验同时监控 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{通用漏斗与乘法关系}
+
+几乎所有在线业务都遵循同一条乘法链：
+
+\begin{equation}
+\text{GMV} = \underbrace{\text{UV}}_{\text{流量}} \times \underbrace{\text{CTR}}_{\text{吸引}} \times \underbrace{\text{CVR}}_{\text{承接}} \times \underbrace{\text{AOV}}_{\text{客单}} \times \underbrace{(1 - \text{退货率})}_{\text{质量}} .
+\label{eq:funnel-chain}
+\end{equation}
+
+\begin{insight}[乘法链的两个用途]
+\begin{enumerate}
+  \item \textbf{定位问题}：GMV 下降 20\%，逐项拆解，先看 UV（流量端）还是 CVR（转化端）。
+  \item \textbf{找杠杆}：相对提升 10\% 的难度，在各项之间差别巨大。通常早期 UV 最好撬动（买量），
+        中期 CTR/CVR 收益最高（内容与落地页），后期靠 AOV 与复购（组货与会员）。
+\end{enumerate}
+诊断方法论的完整版见 \cref{ch:growth}。
+\end{insight}
+
+\subsection{离线指标与在线指标为什么经常不一致}
+
+\begin{pitfall}[AUC 涨了但大盘没涨——五种常见原因]
+\begin{enumerate}
+  \item \textbf{样本偏差}：训练样本来自旧策略（position bias、曝光偏差），离线评估的分布与线上不一致；
+  \item \textbf{目标错位}：离线优化的是点击，线上要的是 GMV 或留存；
+  \item \textbf{级联耦合}：精排 AUC 提升被召回的容量上限吃掉（精排再好，召回没覆盖就没用）；
+  \item \textbf{指标权重问题}：AUC 是全站平均，业务价值集中在头部与高价值人群（需看 GAUC、分群指标）；
+  \item \textbf{实验灵敏度不足}：样本量不够、指标方差大，或存在网络效应/互斥干扰。
+\end{enumerate}
+对应解法：GAUC + 分群评估、离线重放（replay）、反事实评估（IPS/DR）、双变量 A/A 检验与在线分层实验。
+\end{pitfall}
+
+\section{如何快速理解一个新业务}
+
+\begin{toolbox}[30 分钟业务拆解清单]
+面对任何新业务（无论是推荐、搜索、广告还是跨境店铺），按以下顺序问 10 个问题：
+\begin{enumerate}
+  \item \textbf{用户是谁、意图从哪来}？（搜索词、信息流、私域、达人）
+  \item \textbf{供给侧是什么}？（商品池/内容池规模、更新频率、质量分布）
+  \item \textbf{核心动作是什么}？（点击、观看、加购、下单、留资）
+  \item \textbf{钱从哪来、往哪去}？（收入项、成本项、单位经济模型）
+  \item \textbf{北极星指标是什么}？谁对它负责？
+  \item \textbf{当前瓶颈在哪一环}？（用 \cref{eq:funnel-chain} 逐项拆）
+  \item \textbf{数据有多少、延迟多大}？（样本量级决定模型复杂度上限）
+  \item \textbf{有没有实验能力}？（没有 A/B，一切优化都是玄学）
+  \item \textbf{约束是什么}？（预算、库存、合规、政策、供应链周期）
+  \item \textbf{当前最大的隐性成本是什么}？（退货、物流、素材制作、标注、算力）
+\end{enumerate}
+\end{toolbox}
+
+\section{术语速览（后续章节反复出现）}
+
+\begin{table}[htbp]
+\centering
+\caption{跨领域高频术语}
+\label{tab:terms-overview}
+\small
+\begin{tabularx}{\textwidth}{L{3.4cm} L{2.9cm} Y}
+\toprule
+\tabhead{术语} & \tabhead{英文} & \tabhead{一句话解释} \\
+\midrule
+召回 & Recall / Retrieval & 从海量候选中快速筛出千级小集合，追求覆盖而非精确 \\
+粗排 & Pre-ranking & 精排的廉价近似，解决延迟与算力瓶颈 \\
+精排 & Ranking & 用复杂模型精确预估每个候选的效用 \\
+重排 & Re-ranking / Rerank & 在精排结果上做多样性、打散、上下文级优化 \\
+向量检索 & ANN Search & 用 HNSW/IVF-PQ 等在稠密向量上做近似最近邻搜索 \\
+双塔 & Two-tower & 用户塔与物品塔分离编码，可离线预计算、线上内积检索 \\
+多目标 & Multi-task Learning & 一个模型同时预估 CTR/CVR/时长等，共享底层表示 \\
+拍卖 & Auction & 广告位分配与定价机制，常见 GSP、VCG、第一价格 \\
+eCPM & effective CPM & 千次展示期望收益，跨计费方式的统一货币 \\
+归因 & Attribution & 把转化功劳分配给各触点的规则或模型 \\
+增量实验 & Incrementality Test & 用地理/人群对照测量「本来不会发生」的转化 \\
+自然流量 & Organic Traffic & 不付费获得的搜索/推荐/社交流量 \\
+AI 摘要 & AI Overviews & 搜索引擎用生成式模型直接回答，减少点击的形态 \\
+全托管 & Fully-managed & 平台负责定价、物流、售后，卖家只供货 \\
+头程/尾程 & First/Last Mile & 从工厂到海外仓（头程）与从仓到消费者（尾程） \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 推荐、搜索、广告是同一类「带约束的排序优化」，共享四层技术栈；
+  \item 搜索的经济学是相关性，推荐的经济学是注意力，广告的经济学是拍卖与预算；
+  \item 商家侧的 SEO/GEO/投流解决「获取」，跨境与供应链解决「交付」，二者共同决定单位经济模型；
+  \item 所有方向的通用语言是\textbf{指标体系 + 漏斗拆解 + 增量实验}；
+  \item 学完本领域后，跨方向迁移成本远低于想象，但\textbf{约束条件}必须重新学习。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item 推荐系统和搜索引擎在技术架构上有哪些异同？
+  \item 如果让你从 0 搭建一个电商推荐系统，第一版你会做什么？
+  \item 广告系统和推荐系统的核心区别是什么？为什么广告需要「机制设计」？
+  \item GMV 下降 20\%，你会如何排查？
+  \item 自然流量和付费流量，什么时候该加大投入哪一边？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+下一章我们补齐数学与工程基础（\cref{ch:math}）：概率、优化、评估指标、特征工程与分布式训练的必备工具。
+这些工具在后面每一章都会被用到，建议先通读一遍，遇到具体章节时再回来查。

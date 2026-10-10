@@ -1,0 +1,967 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%  references.bib —— 《增长技术笔记》参考文献库
+%%  说明：条目按主题分区，key 采用 作者+年份+关键词 的可读格式。
+%%        正式引用前请自行核对页码/会议名等细节。
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%==============================================================================
+% 信息检索 / 搜索
+%==============================================================================
+@book{manning2008ir,
+  author    = {Manning, Christopher D. and Raghavan, Prabhakar and Sch{\"u}tze, Hinrich},
+  title     = {Introduction to Information Retrieval},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2008}
+}
+
+@book{croft2010search,
+  author    = {Croft, W. Bruce and Metzler, Donald and Strohman, Trevor},
+  title     = {Search Engines: Information Retrieval in Practice},
+  publisher = {Addison-Wesley},
+  address   = {Boston},
+  year      = {2010}
+}
+
+@article{salton1975vsm,
+  author  = {Salton, Gerard and Wong, Anita and Yang, Chung-Shu},
+  title   = {A Vector Space Model for Automatic Indexing},
+  journal = {Communications of the ACM},
+  volume  = {18},
+  number  = {11},
+  pages   = {613--620},
+  year    = {1975}
+}
+
+@article{robertson2009bm25,
+  author  = {Robertson, Stephen and Zaragoza, Hugo},
+  title   = {The Probabilistic Relevance Framework: BM25 and Beyond},
+  journal = {Foundations and Trends in Information Retrieval},
+  volume  = {3},
+  number  = {4},
+  pages   = {333--389},
+  year    = {2009}
+}
+
+@inproceedings{ponte1998ql,
+  author    = {Ponte, Jay M. and Croft, W. Bruce},
+  title     = {A Language Modeling Approach to Information Retrieval},
+  booktitle = {Proceedings of SIGIR},
+  pages     = {275--281},
+  year      = {1998}
+}
+
+@article{lavrenko2001rm,
+  author  = {Lavrenko, Victor and Croft, W. Bruce},
+  title   = {Relevance-Based Language Models},
+  journal = {Proceedings of SIGIR},
+  pages   = {120--127},
+  year    = {2001}
+}
+
+@article{deerwester1990lsi,
+  author  = {Deerwester, Scott and Dumais, Susan T. and Furnas, George W. and Landauer, Thomas K. and Harshman, Richard},
+  title   = {Indexing by Latent Semantic Analysis},
+  journal = {Journal of the American Society for Information Science},
+  volume  = {41},
+  number  = {6},
+  pages   = {391--407},
+  year    = {1990}
+}
+
+@article{blei2003lda,
+  author  = {Blei, David M. and Ng, Andrew Y. and Jordan, Michael I.},
+  title   = {Latent Dirichlet Allocation},
+  journal = {Journal of Machine Learning Research},
+  volume  = {3},
+  pages   = {993--1022},
+  year    = {2003}
+}
+
+@inproceedings{burges2005ranknet,
+  author    = {Burges, Chris and Shaked, Tal and Renshaw, Erin and Lazier, Ari and Deeds, Matt and Hamilton, Nicole and Hullender, Greg},
+  title     = {Learning to Rank using Gradient Descent},
+  booktitle = {Proceedings of ICML},
+  pages     = {89--96},
+  year      = {2005}
+}
+
+@article{burges2010ranknet,
+  author  = {Burges, Christopher J. C.},
+  title   = {From RankNet to LambdaRank to LambdaMART: An Overview},
+  journal = {Microsoft Research Technical Report MSR-TR-2010-82},
+  year    = {2010}
+}
+
+@inproceedings{wu2010lambdamart,
+  author    = {Wu, Qiang and Burges, Christopher J. C. and Svore, Krysta M. and Gao, Jianfeng},
+  title     = {Adapting Boosting for Information Retrieval Measures},
+  booktitle = {Information Retrieval Journal},
+  volume    = {13},
+  pages     = {254--270},
+  year      = {2010}
+}
+
+@inproceedings{cao2007listnet,
+  author    = {Cao, Zhe and Qin, Tao and Liu, Tie-Yan and Tsai, Ming-Feng and Li, Hang},
+  title     = {Learning to Rank: From Pairwise Approach to Listwise Approach},
+  booktitle = {Proceedings of ICML},
+  pages     = {129--136},
+  year      = {2007}
+}
+
+@inproceedings{joachims2006svmrank,
+  author    = {Joachims, Thorsten},
+  title     = {Training Linear SVMs in Linear Time},
+  booktitle = {Proceedings of KDD},
+  pages     = {217--226},
+  year      = {2006}
+}
+
+@inproceedings{robertson1994okapi,
+  author    = {Robertson, Stephen E. and Walker, Steve and Jones, Susan and Hancock-Beaulieu, Micheline M. and Gatford, Mike},
+  title     = {Okapi at TREC-3},
+  booktitle = {Proceedings of TREC},
+  year      = {1994}
+}
+
+@inproceedings{karpukhin2020dpr,
+  author    = {Karpukhin, Vladimir and O{\u{g}}uz, Barlas and Min, Sewon and Lewis, Patrick and Wu, Ledell and Edunov, Sergey and Chen, Danqi and Yih, Wen-tau},
+  title     = {Dense Passage Retrieval for Open-Domain Question Answering},
+  booktitle = {Proceedings of EMNLP},
+  pages     = {6769--6781},
+  year      = {2020}
+}
+
+@inproceedings{khattab2020colbert,
+  author    = {Khattab, Omar and Zaharia, Matei},
+  title     = {ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT},
+  booktitle = {Proceedings of SIGIR},
+  pages     = {39--48},
+  year      = {2020}
+}
+
+@inproceedings{xiong2020ance,
+  author    = {Xiong, Lee and Xiong, Chenyan and Li, Ye and Tang, Kwok-Fung and Liu, Jialin and Bennett, Paul and Ahmed, Junaid and Overwijk, Arnold},
+  title     = {Approximate Nearest Neighbor Negative Contrastive Learning for Dense Text Retrieval},
+  booktitle = {Proceedings of ICLR},
+  year      = {2021}
+}
+
+@inproceedings{formal2021splade,
+  author    = {Formal, Thibault and Piwowarski, Benjamin and Clinchant, St{\'e}phane},
+  title     = {SPLADE: Sparse Lexical and Expansion Model for First Stage Ranking},
+  booktitle = {Proceedings of SIGIR},
+  pages     = {2288--2292},
+  year      = {2021}
+}
+
+@inproceedings{reimers2019sbert,
+  author    = {Reimers, Nils and Gurevych, Iryna},
+  title     = {Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks},
+  booktitle = {Proceedings of EMNLP},
+  pages     = {3982--3992},
+  year      = {2019}
+}
+
+@inproceedings{nogueira2019monobert,
+  author    = {Nogueira, Rodrigo and Cho, Kyunghyun},
+  title     = {Passage Re-ranking with BERT},
+  booktitle = {arXiv preprint arXiv:1901.04085},
+  year      = {2019}
+}
+
+@inproceedings{johnson2019faiss,
+  author    = {Johnson, Jeff and Douze, Matthijs and J{\'e}gou, Herv{\'e}},
+  title     = {Billion-Scale Similarity Search with GPUs},
+  booktitle = {IEEE Transactions on Big Data},
+  volume    = {7},
+  number    = {3},
+  pages     = {535--547},
+  year      = {2019}
+}
+
+@inproceedings{malkov2020hnsw,
+  author    = {Malkov, Yury A. and Yashunin, Dmitry A.},
+  title     = {Efficient and Robust Approximate Nearest Neighbor Search using Hierarchical Navigable Small World Graphs},
+  booktitle = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume    = {42},
+  number    = {4},
+  pages     = {824--836},
+  year      = {2020}
+}
+
+%==============================================================================
+% 推荐系统
+%==============================================================================
+@book{ricci2015recsys,
+  author    = {Ricci, Francesco and Rokach, Lior and Shapira, Bracha},
+  title     = {Recommender Systems Handbook},
+  edition   = {2},
+  publisher = {Springer},
+  address   = {New York},
+  year      = {2015}
+}
+
+@article{adomavicius2005survey,
+  author  = {Adomavicius, Gediminas and Tuzhilin, Alexander},
+  title   = {Toward the Next Generation of Recommender Systems: A Survey of the State-of-the-Art and Possible Extensions},
+  journal = {IEEE Transactions on Knowledge and Data Engineering},
+  volume  = {17},
+  number  = {6},
+  pages   = {734--749},
+  year    = {2005}
+}
+
+@inproceedings{linden2003amazon,
+  author    = {Linden, Greg and Smith, Brent and York, Jeremy},
+  title     = {Amazon.com Recommendations: Item-to-Item Collaborative Filtering},
+  booktitle = {IEEE Internet Computing},
+  volume    = {7},
+  number    = {1},
+  pages     = {76--80},
+  year      = {2003}
+}
+
+@article{sarwar2001itemcf,
+  author  = {Sarwar, Badrul and Karypis, George and Konstan, Joseph and Riedl, John},
+  title   = {Item-Based Collaborative Filtering Recommendation Algorithms},
+  journal = {Proceedings of WWW},
+  pages   = {285--295},
+  year    = {2001}
+}
+
+@article{koren2009mf,
+  author  = {Koren, Yehuda and Bell, Robert and Volinsky, Chris},
+  title   = {Matrix Factorization Techniques for Recommender Systems},
+  journal = {Computer},
+  volume  = {42},
+  number  = {8},
+  pages   = {30--37},
+  year    = {2009}
+}
+
+@inproceedings{rendle2009bpr,
+  author    = {Rendle, Steffen and Freudenthaler, Christoph and Gantner, Zeno and Schmidt-Thieme, Lars},
+  title     = {BPR: Bayesian Personalized Ranking from Implicit Feedback},
+  booktitle = {Proceedings of UAI},
+  pages     = {452--461},
+  year      = {2009}
+}
+
+@inproceedings{rendle2010fm,
+  author    = {Rendle, Steffen},
+  title     = {Factorization Machines},
+  booktitle = {Proceedings of ICDM},
+  pages     = {995--1000},
+  year      = {2010}
+}
+
+@inproceedings{juan2017ffm,
+  author    = {Juan, Yuchin and Zhuang, Yong and Chin, Wei-Sheng and Lin, Chih-Jen},
+  title     = {Field-aware Factorization Machines for CTR Prediction},
+  booktitle = {Proceedings of RecSys},
+  pages     = {43--50},
+  year      = {2016}
+}
+
+@inproceedings{he2017ncf,
+  author    = {He, Xiangnan and Liao, Lizi and Zhang, Hanwang and Nie, Liqiang and Hu, Xia and Chua, Tat-Seng},
+  title     = {Neural Collaborative Filtering},
+  booktitle = {Proceedings of WWW},
+  pages     = {173--182},
+  year      = {2017}
+}
+
+@inproceedings{covington2016youtube,
+  author    = {Covington, Paul and Adams, Jay and Sargin, Emre},
+  title     = {Deep Neural Networks for YouTube Recommendations},
+  booktitle = {Proceedings of RecSys},
+  pages     = {191--198},
+  year      = {2016}
+}
+
+@inproceedings{cheng2016widendeep,
+  author    = {Cheng, Heng-Tze and Koc, Levent and Harmsen, Jeremiah and Shaked, Tal and Chandra, Tushar and Aradhye, Hrishi and Anderson, Glen and others},
+  title     = {Wide \& Deep Learning for Recommender Systems},
+  booktitle = {Proceedings of the 1st Workshop on Deep Learning for Recommender Systems},
+  pages     = {7--10},
+  year      = {2016}
+}
+
+@inproceedings{guo2017deepfm,
+  author    = {Guo, Huifeng and Tang, Ruiming and Ye, Yunming and Li, Zhenguo and He, Xiuqiang},
+  title     = {DeepFM: A Factorization-Machine Based Neural Network for CTR Prediction},
+  booktitle = {Proceedings of IJCAI},
+  pages     = {1725--1731},
+  year      = {2017}
+}
+
+@inproceedings{wang2021dcn,
+  author    = {Wang, Ruoxi and Shivanna, Rakesh and Cheng, Derek and Jain, Sagar and Lin, Dong and Hong, Lichan and Chi, Ed},
+  title     = {DCN V2: Improved Deep \& Cross Network and Practical Lessons for Web-scale Learning to Rank Systems},
+  booktitle = {Proceedings of WWW},
+  pages     = {1785--1797},
+  year      = {2021}
+}
+
+@inproceedings{naumov2019dlrm,
+  author    = {Naumov, Maxim and Mudigere, Dheevatsa and Shi, Hao-Jun Michael and Huang, Jianyu and Sundaraman, Narayanan and Park, Jongsoo and others},
+  title     = {Deep Learning Recommendation Model for Personalization and Recommendation Systems},
+  booktitle = {arXiv preprint arXiv:1906.00091},
+  year      = {2019}
+}
+
+@inproceedings{zhou2018din,
+  author    = {Zhou, Guorui and Zhu, Xiaoqiang and Song, Chenru and Fan, Ying and Zhu, Han and Ma, Xiao and Yan, Yanghui and Jin, Junqi and Li, Han and Gai, Kun},
+  title     = {Deep Interest Network for Click-Through Rate Prediction},
+  booktitle = {Proceedings of KDD},
+  pages     = {1059--1068},
+  year      = {2018}
+}
+
+@inproceedings{zhou2019dien,
+  author    = {Zhou, Guorui and Mou, Na and Fan, Ying and Pi, Qi and Bian, Weijie and Zhou, Chang and Zhu, Xiaoqiang and Gai, Kun},
+  title     = {Deep Interest Evolution Network for Click-Through Rate Prediction},
+  booktitle = {Proceedings of AAAI},
+  pages     = {5941--5948},
+  year      = {2019}
+}
+
+@inproceedings{pi2020dsin,
+  author    = {Feng, Yufei and Hu, Fuyu and Liu, Weiran and Nie, Liqiang and Sun, Fuxing},
+  title     = {Deep Session Interest Network for Click-Through Rate Prediction},
+  booktitle = {Proceedings of IJCAI},
+  pages     = {2301--2307},
+  year      = {2019}
+}
+
+@inproceedings{ma2018mmoe,
+  author    = {Ma, Jiaqi and Zhao, Zhe and Yi, Xinyang and Chen, Jilin and Hong, Lichan and Chi, Ed H.},
+  title     = {Modeling Task Relationships in Multi-task Learning with Multi-gate Mixture-of-Experts},
+  booktitle = {Proceedings of KDD},
+  pages     = {1930--1939},
+  year      = {2018}
+}
+
+@inproceedings{tang2020ple,
+  author    = {Tang, Hongyan and Liu, Junning and Zhao, Ming and Gong, Xudong},
+  title     = {Progressive Layered Extraction (PLE): A Novel Multi-Task Learning (MTL) Model for Personalized Recommendations},
+  booktitle = {Proceedings of RecSys},
+  pages     = {269--278},
+  year      = {2020}
+}
+
+@inproceedings{kang2018sasrec,
+  author    = {Kang, Wang-Cheng and McAuley, Julian},
+  title     = {Self-Attentive Sequential Recommendation},
+  booktitle = {Proceedings of ICDM},
+  pages     = {197--206},
+  year      = {2018}
+}
+
+@inproceedings{sun2019bert4rec,
+  author    = {Sun, Fei and Liu, Jun and Wu, Jian and Pei, Changhua and Lin, Xiao and Ou, Wenwu and Jiang, Peng},
+  title     = {BERT4Rec: Sequential Recommendation with Bidirectional Encoder Representations from Transformer},
+  booktitle = {Proceedings of CIKM},
+  pages     = {1441--1450},
+  year      = {2019}
+}
+
+@inproceedings{hidasi2016gru4rec,
+  author    = {Hidasi, Bal{\'a}zs and Karatzoglou, Alexandros and Baltrunas, Linas and Tikk, Domonkos},
+  title     = {Session-based Recommendations with Recurrent Neural Networks},
+  booktitle = {Proceedings of ICLR},
+  year      = {2016}
+}
+
+@inproceedings{hamilton2017graphsage,
+  author    = {Hamilton, William L. and Ying, Rex and Leskovec, Jure},
+  title     = {Inductive Representation Learning on Large Graphs},
+  booktitle = {Proceedings of NeurIPS},
+  pages     = {1024--1034},
+  year      = {2017}
+}
+
+@inproceedings{ying2018pinsage,
+  author    = {Ying, Rex and He, Ruining and Chen, Kaifeng and Eksombatchai, Pong and Hamilton, William L. and Leskovec, Jure},
+  title     = {Graph Convolutional Neural Networks for Web-Scale Recommender Systems},
+  booktitle = {Proceedings of KDD},
+  pages     = {974--983},
+  year      = {2018}
+}
+
+@inproceedings{he2020lightgcn,
+  author    = {He, Xiangnan and Deng, Kuan and Wang, Xiang and Li, Yan and Zhang, Yongdong and Wang, Meng},
+  title     = {LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation},
+  booktitle = {Proceedings of SIGIR},
+  pages     = {639--648},
+  year      = {2020}
+}
+
+@inproceedings{rajput2023tiger,
+  author    = {Rajput, Shashank and Mehta, Nikhil and Singh, Anima and Hulikal, Nikhil and others},
+  title     = {Recommender Systems with Generative Retrieval},
+  booktitle = {Proceedings of NeurIPS},
+  year      = {2023}
+}
+
+@inproceedings{zhai2024hstu,
+  author    = {Zhai, Jiaqi and Liao, Lucy and Liu, Xing and Wang, Yueming and Li, Rui and Cao, Xuan and Gao, Leon and Gong, Zhaojie and Gu, Fangda and L{\"u}, Mike and others},
+  title     = {Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations},
+  booktitle = {Proceedings of ICML},
+  year      = {2024}
+}
+
+@inproceedings{chen2019mind,
+  author    = {Wu, Fangzhao and Qiao, Ying and Chen, Jiun-Hung and Wu, Chuhan and Qi, Tao and Lian, Jianxun and Liu, Danyang and Xie, Xing and Gao, Jianfeng and Wu, Wu and Zhou, Ming},
+  title     = {MIND: A Large-scale Dataset for News Recommendation},
+  booktitle = {Proceedings of ACL},
+  year      = {2020}
+}
+
+@inproceedings{steck2011diversity,
+  author    = {Steck, Harald},
+  title     = {Item Popularity and Recommendation Accuracy},
+  booktitle = {Proceedings of RecSys},
+  pages     = {125--132},
+  year      = {2011}
+}
+
+@inproceedings{dudik2011ee,
+  author    = {Dud{\'i}k, Miroslav and Langford, John and Li, Lihong},
+  title     = {Doubly Robust Policy Evaluation and Learning},
+  booktitle = {Proceedings of ICML},
+  pages     = {1097--1104},
+  year      = {2011}
+}
+
+@inproceedings{swaminathan2015counterfactual,
+  author    = {Swaminathan, Adith and Joachims, Thorsten},
+  title     = {Counterfactual Risk Minimization: Learning from Logged Bandit Feedback},
+  booktitle = {Proceedings of ICML},
+  pages     = {814--823},
+  year      = {2015}
+}
+
+@article{saito2020doubly,
+  author  = {Saito, Yuta and Yaginuma, Suguru and Nishino, Yuta and Sakata, Hayato and Nakata, Kazuhide},
+  title   = {Unbiased Recommender Learning from Missing-Not-At-Random Implicit Feedback},
+  journal = {Proceedings of WSDM},
+  pages   = {501--509},
+  year    = {2020}
+}
+
+%==============================================================================
+% NLP / 深度学习 / 大模型
+%==============================================================================
+@article{mikolov2013word2vec,
+  author  = {Mikolov, Tomas and Sutskever, Ilya and Chen, Kai and Corrado, Greg and Dean, Jeffrey},
+  title   = {Distributed Representations of Words and Phrases and their Compositionality},
+  journal = {Proceedings of NeurIPS},
+  pages   = {3111--3119},
+  year    = {2013}
+}
+
+@inproceedings{pennington2014glove,
+  author    = {Pennington, Jeffrey and Socher, Richard and Manning, Christopher D.},
+  title     = {GloVe: Global Vectors for Word Representation},
+  booktitle = {Proceedings of EMNLP},
+  pages     = {1532--1543},
+  year      = {2014}
+}
+
+@article{bojanowski2017fasttext,
+  author  = {Bojanowski, Piotr and Grave, Edouard and Joulin, Armand and Mikolov, Tomas},
+  title   = {Enriching Word Vectors with Subword Information},
+  journal = {Transactions of the Association for Computational Linguistics},
+  volume  = {5},
+  pages   = {135--146},
+  year    = {2017}
+}
+
+@inproceedings{peters2018elmo,
+  author    = {Peters, Matthew E. and Neumann, Mark and Iyyer, Mohit and Gardner, Matt and Clark, Christopher and Lee, Kenton and Zettlemoyer, Luke},
+  title     = {Deep Contextualized Word Representations},
+  booktitle = {Proceedings of NAACL},
+  pages     = {2227--2237},
+  year      = {2018}
+}
+
+@inproceedings{vaswani2017attention,
+  author    = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N. and Kaiser, {\L}ukasz and Polosukhin, Illia},
+  title     = {Attention Is All You Need},
+  booktitle = {Proceedings of NeurIPS},
+  pages     = {5998--6008},
+  year      = {2017}
+}
+
+@inproceedings{devlin2019bert,
+  author    = {Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina},
+  title     = {BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+  booktitle = {Proceedings of NAACL},
+  pages     = {4171--4186},
+  year      = {2019}
+}
+
+@article{liu2019roberta,
+  author  = {Liu, Yinhan and Ott, Myle and Goyal, Naman and Du, Jingfei and Joshi, Mandar and Chen, Danqi and Levy, Omer and Lewis, Mike and Zettlemoyer, Luke and Stoyanov, Veselin},
+  title   = {RoBERTa: A Robustly Optimized BERT Pretraining Approach},
+  journal = {arXiv preprint arXiv:1907.11692},
+  year    = {2019}
+}
+
+@inproceedings{radford2019gpt2,
+  author    = {Radford, Alec and Wu, Jeffrey and Child, Rewon and Luan, David and Amodei, Dario and Sutskever, Ilya},
+  title     = {Language Models are Unsupervised Multitask Learners},
+  booktitle = {OpenAI Blog},
+  year      = {2019}
+}
+
+@inproceedings{brown2020gpt3,
+  author    = {Brown, Tom B. and Mann, Benjamin and Ryder, Nick and Subbiah, Melanie and Kaplan, Jared and Dhariwal, Prafulla and others},
+  title     = {Language Models are Few-Shot Learners},
+  booktitle = {Proceedings of NeurIPS},
+  pages     = {1877--1901},
+  year      = {2020}
+}
+
+@article{raffel2020t5,
+  author  = {Raffel, Colin and Shazeer, Noam and Roberts, Adam and Lee, Katherine and Narang, Sharan and Matena, Michael and Zhou, Yanqi and Li, Wei and Liu, Peter J.},
+  title   = {Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer},
+  journal = {Journal of Machine Learning Research},
+  volume  = {21},
+  number  = {140},
+  pages   = {1--67},
+  year    = {2020}
+}
+
+@article{kaplan2020scaling,
+  author  = {Kaplan, Jared and McCandlish, Sam and Henighan, Tom and Brown, Tom B. and Chess, Benjamin and Child, Rewon and others},
+  title   = {Scaling Laws for Neural Language Models},
+  journal = {arXiv preprint arXiv:2001.08361},
+  year    = {2020}
+}
+
+@article{hoffmann2022chinchilla,
+  author  = {Hoffmann, Jordan and Borgeaud, Sebastian and Mensch, Arthur and Buchatskaya, Elena and Cai, Trevor and Rutherford, Eliza and others},
+  title   = {Training Compute-Optimal Large Language Models},
+  journal = {arXiv preprint arXiv:2203.15556},
+  year    = {2022}
+}
+
+@inproceedings{ouyang2022instructgpt,
+  author    = {Ouyang, Long and Wu, Jeffrey and Jiang, Xu and Almeida, Diogo and Wainwright, Carroll and Mishkin, Pamela and others},
+  title     = {Training Language Models to Follow Instructions with Human Feedback},
+  booktitle = {Proceedings of NeurIPS},
+  year      = {2022}
+}
+
+@article{hu2021lora,
+  author  = {Hu, Edward J. and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+  title   = {LoRA: Low-Rank Adaptation of Large Language Models},
+  journal = {Proceedings of ICLR},
+  year    = {2022}
+}
+
+@inproceedings{lewis2021rag,
+  author    = {Lewis, Patrick and Perez, Ethan and Piktus, Aleksandra and Petroni, Fabio and Karpukhin, Vladimir and Goyal, Naman and others},
+  title     = {Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks},
+  booktitle = {Proceedings of NeurIPS},
+  pages     = {9459--9474},
+  year      = {2020}
+}
+
+@article{gao2023ragsurvey,
+  author  = {Gao, Yunfan and Xiong, Yun and Gao, Xinyu and Jia, Kangxiang and Pan, Jinliu and Bi, Yuxi and Dai, Yi and Sun, Jiawei and Wang, Meng and Wang, Haofen},
+  title   = {Retrieval-Augmented Generation for Large Language Models: A Survey},
+  journal = {arXiv preprint arXiv:2312.10997},
+  year    = {2023}
+}
+
+@article{lafferty2001crf,
+  author  = {Lafferty, John and McCallum, Andrew and Pereira, Fernando C. N.},
+  title   = {Conditional Random Fields: Probabilistic Models for Segmenting and Labeling Sequence Data},
+  journal = {Proceedings of ICML},
+  pages   = {282--289},
+  year    = {2001}
+}
+
+@inproceedings{sutskever2014seq2seq,
+  author    = {Sutskever, Ilya and Vinyals, Oriol and Le, Quoc V.},
+  title     = {Sequence to Sequence Learning with Neural Networks},
+  booktitle = {Proceedings of NeurIPS},
+  pages     = {3104--3112},
+  year      = {2014}
+}
+
+@inproceedings{bahdanau2015attention,
+  author    = {Bahdanau, Dzmitry and Cho, Kyunghyun and Bengio, Yoshua},
+  title     = {Neural Machine Translation by Jointly Learning to Align and Translate},
+  booktitle = {Proceedings of ICLR},
+  year      = {2015}
+}
+
+@inproceedings{he2016resnet,
+  author    = {He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  title     = {Deep Residual Learning for Image Recognition},
+  booktitle = {Proceedings of CVPR},
+  pages     = {770--778},
+  year      = {2016}
+}
+
+@inproceedings{dao2022flashattention,
+  author    = {Dao, Tri and Fu, Daniel Y. and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
+  title     = {FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness},
+  booktitle = {Proceedings of NeurIPS},
+  year      = {2022}
+}
+
+@article{ji2023hallucination,
+  author  = {Ji, Ziwei and Lee, Nayeon and Frieske, Rita and Yu, Tiezheng and Su, Dan and Xu, Yan and others},
+  title   = {Survey of Hallucination in Natural Language Generation},
+  journal = {ACM Computing Surveys},
+  volume  = {55},
+  number  = {12},
+  pages   = {1--38},
+  year    = {2023}
+}
+
+%==============================================================================
+% 计算广告
+%==============================================================================
+@inproceedings{edelman2007gsp,
+  author    = {Edelman, Benjamin and Ostrovsky, Michael and Schwarz, Michael},
+  title     = {Internet Advertising and the Generalized Second-Price Auction: Selling Billions of Dollars Worth of Keywords},
+  booktitle = {American Economic Review},
+  volume    = {97},
+  number    = {1},
+  pages     = {242--259},
+  year      = {2007}
+}
+
+@article{varian2007position,
+  author  = {Varian, Hal R.},
+  title   = {Position Auctions},
+  journal = {International Journal of Industrial Organization},
+  volume  = {25},
+  number  = {6},
+  pages   = {1163--1178},
+  year    = {2007}
+}
+
+@inproceedings{mcmahan2013ftrl,
+  author    = {McMahan, H. Brendan and Holt, Gary and Sculley, David and Young, Michael and Ebner, Dietmar and Grady, Julian and others},
+  title     = {Ad Click Prediction: A View from the Trenches},
+  booktitle = {Proceedings of KDD},
+  pages     = {1222--1230},
+  year      = {2013}
+}
+
+@inproceedings{he2014practical,
+  author    = {He, Xinran and Pan, Junfeng and Jin, Ou and Xu, Tianbing and Liu, Bo and Xu, Tao and Shi, Yanxin and Atallah, Antoine and Herbrich, Ralf and Bowers, Stuart and Candela, Joaquin Qui{\~n}onero},
+  title     = {Practical Lessons from Predicting Clicks on Ads at Facebook},
+  booktitle = {Proceedings of the 8th International Workshop on Data Mining for Online Advertising},
+  pages     = {1--9},
+  year      = {2014}
+}
+
+@article{vickrey1961counterspeculation,
+  author  = {Vickrey, William},
+  title   = {Counterspeculation, Auctions, and Competitive Sealed Tenders},
+  journal = {The Journal of Finance},
+  volume  = {16},
+  number  = {1},
+  pages   = {8--37},
+  year    = {1961}
+}
+
+@article{myerson1981optimal,
+  author  = {Myerson, Roger B.},
+  title   = {Optimal Auction Design},
+  journal = {Mathematics of Operations Research},
+  volume  = {6},
+  number  = {1},
+  pages   = {58--73},
+  year    = {1981}
+}
+
+@article{krengel2019firstprice,
+  author  = {Krengel, Max},
+  title   = {Google's Shift to First-Price Auctions},
+  journal = {Working Paper},
+  year    = {2019}
+}
+
+@inproceedings{zhang2016ocpc,
+  author    = {Zhang, Weinan and Yuan, Shuai and Wang, Jun},
+  title     = {Optimal Real-Time Bidding for Display Advertising},
+  booktitle = {Proceedings of KDD},
+  pages     = {1077--1086},
+  year      = {2014}
+}
+
+@inproceedings{perlich2012rtb,
+  author    = {Perlich, Claudia and Dalessandro, Brian and Hook, Rod and Stitelman, Ori and Raeder, Troy and Provost, Foster},
+  title     = {Bid Optimizing and Inventory Scoring in Targeted Online Advertising},
+  booktitle = {Proceedings of KDD},
+  pages     = {804--812},
+  year      = {2012}
+}
+
+@inproceedings{chapelle2014simple,
+  author    = {Chapelle, Olivier and Manavoglu, Eren and Rosales, Romer},
+  title     = {Simple and Scalable Response Prediction for Display Advertising},
+  booktitle = {ACM Transactions on Intelligent Systems and Technology},
+  volume    = {5},
+  number    = {4},
+  pages     = {1--34},
+  year      = {2014}
+}
+
+@inproceedings{dalessandro2012causal,
+  author    = {Dalessandro, Brian and Hook, Rod and Perlich, Claudia and Provost, Foster},
+  title     = {Evaluating and Optimizing Online Advertising: Forget the Click, but there are Good Proxies},
+  booktitle = {Proceedings of the 6th International Workshop on Data Mining for Online Advertising},
+  year      = {2012}
+}
+
+@article{shapley1953value,
+  author  = {Shapley, Lloyd S.},
+  title   = {A Value for n-Person Games},
+  journal = {Contributions to the Theory of Games},
+  volume  = {2},
+  number  = {28},
+  pages   = {307--317},
+  year    = {1953}
+}
+
+@article{shao2016attribution,
+  author  = {Shao, Xuhui and Li, Lexin},
+  title   = {Data-Driven Multi-Touch Attribution Models},
+  journal = {Proceedings of KDD},
+  pages   = {258--264},
+  year    = {2011}
+}
+
+%==============================================================================
+% 增长、SEO、GEO 与投放（实务类）
+%==============================================================================
+@misc{google2024quality,
+  author       = {{Google Search Central}},
+  title        = {Search Quality Rater Guidelines},
+  howpublished = {\url{https://guidelines.raterhub.com/searchqualityevaluatorguidelines.pdf}},
+  year         = {2024},
+  note         = {访问日期：2024}
+}
+
+@misc{google2024seostarter,
+  author       = {{Google Search Central}},
+  title        = {Search Engine Optimization (SEO) Starter Guide},
+  howpublished = {\url{https://developers.google.com/search/docs/fundamentals/seo-starter-guide}},
+  year         = {2024}
+}
+
+@misc{google2024corewebvitals,
+  author       = {{web.dev}},
+  title        = {Core Web Vitals},
+  howpublished = {\url{https://web.dev/articles/vitals}},
+  year         = {2024}
+}
+
+@misc{schemaorg,
+  author       = {{Schema.org Community Group}},
+  title        = {Schema.org Vocabulary},
+  howpublished = {\url{https://schema.org/}},
+  year         = {2024}
+}
+
+@misc{google2024ai_overviews,
+  author       = {{Google Search Central}},
+  title        = {AI Features and Your Website},
+  howpublished = {\url{https://developers.google.com/search/docs/appearance/ai-features}},
+  year         = {2024}
+}
+
+@misc{openaillmstxt,
+  author       = {{llms.txt Working Group}},
+  title        = {The llms.txt Proposal},
+  howpublished = {\url{https://llmstxt.org/}},
+  year         = {2024}
+}
+
+@misc{googleads_help,
+  author       = {{Google Ads Help}},
+  title        = {About Smart Bidding and Performance Max},
+  howpublished = {\url{https://support.google.com/google-ads}},
+  year         = {2024}
+}
+
+@misc{meta_advantage,
+  author       = {{Meta Business Help Center}},
+  title        = {About Advantage+ Campaigns and Meta Pixel / Conversions API},
+  howpublished = {\url{https://www.facebook.com/business/help}},
+  year         = {2024}
+}
+
+@book{ellis2021growth,
+  author    = {Ellis, Sean and Brown, Morgan},
+  title     = {Hacking Growth: How Today's Fastest-Growing Companies Drive Breakout Success},
+  publisher = {Crown Business},
+  address   = {New York},
+  year      = {2017}
+}
+
+@book{ries2011lean,
+  author    = {Ries, Eric},
+  title     = {The Lean Startup},
+  publisher = {Crown Business},
+  address   = {New York},
+  year      = {2011}
+}
+
+@book{kohavi2020trustworthy,
+  author    = {Kohavi, Ron and Tang, Diane and Xu, Ya},
+  title     = {Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2020}
+}
+
+@book{hyndman2021forecasting,
+  author    = {Hyndman, Rob J. and Athanasopoulos, George},
+  title     = {Forecasting: Principles and Practice},
+  edition   = {3},
+  publisher = {OTexts},
+  address   = {Melbourne},
+  year      = {2021}
+}
+
+@book{lee1997bullwhip,
+  author  = {Lee, Hau L. and Padmanabhan, V. and Whang, Seungjin},
+  title   = {Information Distortion in a Supply Chain: The Bullwhip Effect},
+  journal = {Management Science},
+  volume  = {43},
+  number  = {4},
+  pages   = {546--558},
+  year    = {1997}
+}
+
+@book{chopra2019supply,
+  author    = {Chopra, Sunil and Meindl, Peter},
+  title     = {Supply Chain Management: Strategy, Planning, and Operation},
+  edition   = {7},
+  publisher = {Pearson},
+  address   = {Harlow},
+  year      = {2019}
+}
+
+@book{silver1998inventory,
+  author    = {Silver, Edward A. and Pyke, David F. and Peterson, Rein},
+  title     = {Inventory Management and Production Planning and Scheduling},
+  edition   = {3},
+  publisher = {Wiley},
+  address   = {New York},
+  year      = {1998}
+}
+
+@book{goldratt2004goal,
+  author    = {Goldratt, Eliyahu M. and Cox, Jeff},
+  title     = {The Goal: A Process of Ongoing Improvement},
+  edition   = {3},
+  publisher = {North River Press},
+  address   = {Great Barrington},
+  year      = {2004}
+}
+
+@misc{incoterms2020,
+  author       = {{International Chamber of Commerce}},
+  title        = {Incoterms 2020},
+  howpublished = {\url{https://iccwbo.org/business-solutions/incoterms-rules/}},
+  year         = {2020}
+}
+
+@misc{eu_oss,
+  author       = {{European Commission}},
+  title        = {One-Stop Shop (OSS) for VAT in the EU},
+  howpublished = {\url{https://vat-one-stop-shop.ec.europa.eu/}},
+  year         = {2024}
+}
+
+@misc{temu_about,
+  author       = {{Temu}},
+  title        = {Temu Business Model and Seller Center Documentation},
+  howpublished = {\url{https://www.temu.com/}},
+  year         = {2024}
+}
+
+@misc{shein_about,
+  author       = {{SHEIN}},
+  title        = {SHEIN On-Demand Supply Chain and Seller Platform},
+  howpublished = {\url{https://www.shein.com/}},
+  year         = {2024}
+}
+
+@misc{tiktokshop_about,
+  author       = {{TikTok Shop}},
+  title        = {TikTok Shop Seller Center and Fulfillment by TikTok},
+  howpublished = {\url{https://seller.tiktok.com/}},
+  year         = {2024}
+}
+
+@misc{statista_ecommerce,
+  author       = {{Statista}},
+  title        = {Cross-Border E-Commerce Market Data},
+  howpublished = {\url{https://www.statista.com/}},
+  year         = {2024}
+}
+
+@article{goodhart1975,
+  author  = {Goodhart, Charles},
+  title   = {Problems of Monetary Management: The U.K. Experience},
+  journal = {Papers in Monetary Economics},
+  year    = {1975}
+}
+
+@article{ioannidis2005why,
+  author  = {Ioannidis, John P. A.},
+  title   = {Why Most Published Research Findings Are False},
+  journal = {PLoS Medicine},
+  volume  = {2},
+  number  = {8},
+  pages   = {e124},
+  year    = {2005}
+}
+
+@book{pearl2009causality,
+  author    = {Pearl, Judea},
+  title     = {Causality: Models, Reasoning, and Inference},
+  edition   = {2},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge},
+  year      = {2009}
+}
+
+@book{robbins1951stochastic,
+  author    = {Robbins, Herbert and Monro, Sutton},
+  title     = {A Stochastic Approximation Method},
+  journal   = {The Annals of Mathematical Statistics},
+  volume    = {22},
+  number    = {3},
+  pages     = {400--407},
+  year      = {1951}
+}
+
+@inproceedings{kingma2015adam,
+  author    = {Kingma, Diederik P. and Ba, Jimmy},
+  title     = {Adam: A Method for Stochastic Optimization},
+  booktitle = {Proceedings of ICLR},
+  year      = {2015}
+}
+
+@inproceedings{wojciechowski2017,
+  author    = {Wojciechowski, Jacek and others},
+  title     = {Real-Time Bidding: A Review},
+  booktitle = {arXiv preprint},
+  year      = {2017}
+}

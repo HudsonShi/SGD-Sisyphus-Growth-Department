@@ -1,0 +1,1062 @@
+\chapter{GEO / AEO：生成式引擎优化}
+\label{ch:geo}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 当搜索结果页不再给「十条蓝色链接」，而是直接给一段合成答案，\kw{优化目标}到底变成了什么？「排名第一」还是不是可交付的 KPI？
+  \item SEO、AEO、GEO、LLMO 这四个词经常被混用。它们在\emph{优化对象}、\emph{度量口径}、\emph{团队能力}上的真实差别是什么？
+  \item 生成式引擎（Google AI Overviews、Perplexity、ChatGPT Search 等）凭什么引用某个网页？可提取性、结构化程度、权威信号、新鲜度各占多重？
+  \item 传统排名工具失效之后，用什么指标衡量「AI 里的可见性」？提示词覆盖、品牌提及率、引用来源占比、AI 引荐流量怎么定义、怎么采样、怎么避免自欺？
+  \item 如果 AI 摘要让自然点击下滑，这笔损失怎么算到钱上？什么条件下应该「主动喂给 AI」而不是「封禁爬虫」？
+  \item 这个领域还没有统一标准，哪些结论可以下注，哪些只能当作假设去测？
+\end{enumerate}
+\end{insight}
+
+搜索正在从「给你十个链接」变成「直接给答案」。这句话在 2022 年还只是一个产品预测，
+到 2025 年已经是几十亿次查询每天真实发生的默认体验：用户在搜索框里输入一个偏完整句的问题，
+页面顶部先弹出一段带引用角标的综述，用户读完就离开，一次点击都没有发生。
+对增长团队来说，这不是「搜索算法又更新了」，而是\kw{分发形式的结构性改变}——
+过去十年积累的 SEO 方法论，其隐含前提（用户必须点进页面才能获得信息）正在被削弱。
+
+本章讨论的就是在这个前提动摇之后，增长团队该怎么做。整章的组织方式是：
+先做概念辨析与经济学测算（把「零点击」翻译成钱），再讲生成式引擎的形态与引用机制（把「被引用」翻译成特征），
+然后是技术手段与品牌层面手段（把特征翻译成动作），接着是度量体系（把动作翻译成可回归的指标），
+最后是实操计划、时效性与风险。
+
+一个贯穿全章的立场必须开篇就说明：\textbf{本主题的行业标准尚未统一}。
+平台政策、爬虫名单、引用行为几个月就可能变一次；公开研究的样本量通常很小、领域集中、
+且结论高度依赖当时的模型版本。因此本章所有的数字都会标注来源性质——
+\emph{公开研究}、\emph{行业通识}、\emph{示范量级}三者之一，绝不把示范量级包装成实测统计。
+凡涉及平台政策、爬虫用户代理、robots 指令、产品形态的内容，一律\textbf{以官方最新文档为准}。
+读者应把本章当作一套\emph{可证伪的假设集合 + 一套度量方法}，而不是一本操作手册。
+
+\section{概念辨析：从排名到被引用}
+\label{sec:geo-concepts}
+
+\subsection{SEO / AEO / GEO / LLMO 的四个操作对象}
+
+这四个缩写在行业里被混用得厉害。要理清它们，最有效的办法不是背定义，
+而是问一个工程问题：\textbf{这项优化工作的交付物，最终作用在哪一个对象的排序函数上？}
+
+\begin{table}[htbp]
+\centering
+\caption{SEO / AEO / GEO / LLMO 的操作对象、交付物与度量口径对比}
+\label{tab:geo-seo-compare}
+\small
+\begin{tabularx}{\textwidth}{L{1.5cm} L{2.6cm} L{3.4cm} L{2.6cm} Y}
+\toprule
+\tabhead{缩写} & \tabhead{全称} & \tabhead{优化的对象} & \tabhead{主 KPI} & \tabhead{失效信号} \\
+\midrule
+SEO & Search Engine Optimization & 检索系统的\emph{排序函数}：文档集合 $\to$ 有序列表 & 排名、自然点击、非品牌词流量 & 排名稳定但点击率持续下滑 \\
+AEO & Answer Engine Optimization & 问答型入口的\emph{答案槽位}：片段、知识面板、语音播报 & 选中率、被朗读次数、零点击曝光 & 被选中但用户不产生后续动作 \\
+GEO & Generative Engine Optimization & 生成模型的\emph{引用集合}：哪些源进入上下文窗口 & 引用率、提及率、引用来源占比 & 被提及但未附带链接 \\
+LLMO & Large Language Model Optimization & 模型\emph{参数化记忆}中的品牌事实与情感 & 无提示品牌回忆、情感极性 & 模型说错品牌事实 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+按 \cref{tab:geo-seo-compare} 来读，四者的关系其实是嵌套而非并列：
+
+\begin{itemize}
+  \item \textbf{SEO 是地基}。传统排名不是被取代了，而是从「终点」变成了「入场券」。
+        多数生成式引擎的检索层仍然是经典的倒排 + 向量召回 + 学习排序，
+        召回不到你，后面所有的生成动作都与你无关。这一点在 \cref{ch:search} 讲过的级联结构里看得很清楚：
+        生成层只是又一个更昂贵的重排器。
+  \item \textbf{AEO 是答案形态的工程}。它关心的是「我这段内容能不能被原样摘出来」——
+        这正是 \cref{ch:rag} 里 \term{抽取式问答}{extractive QA} 的老问题，
+        只是现在被放在了营销语境里。
+  \item \textbf{GEO 是 AEO 的泛化}。区别在于 AEO 面对的是确定性抽取（模板片段），
+        GEO 面对的是回译式生成：引擎先从多个源里读，再合成一段新文本，最后附上引用角标。
+        源与最终句子之间不再是一一映射，因此「被抽取」不等于「被引用」。
+  \item \textbf{LLMO 是品牌资产的长期投资}。它影响的是用户\emph{不查资料}直接问模型时得到的印象，
+        与检索无关，只与预训练语料、微调数据、以及模型侧的检索工具配置有关。
+        可操作性最弱，但对品牌溢价的杠杆最大。
+\end{itemize}
+
+\begin{keypoint}[一句话区分：你优化的是「排序」还是「证据」]
+\textbf{SEO 优化的是「让系统认为你该排在前面」；GEO 优化的是「让系统认为你是可以被引用的证据」。}
+前者的对手是同一页结果上的其他文档；后者的对手是模型上下文窗口里已经被放进去的其他段落。
+后者是零和的、而且是可被删掉的——引擎完全可以引用你、却只给你一个不带链接的品牌名。
+这解释了一个反直觉现象：某些站点的品牌提及率上升、品牌搜索量上升，但自然点击量下降。
+\end{keypoint}
+
+\subsection{零点击搜索的经济学：把「点击率下滑」翻译成钱}
+
+\term{零点击搜索}{zero-click search}是指在结果页上直接完成信息满足、不产生任何出站点击的查询。
+生成式摘要把这件事从「一部分查询」推向了「默认体验」。行业通识层面的判断是：
+带 AI 摘要的查询，其首位自然结果的点击率显著低于不带摘要的同一查询；
+但具体幅度高度依赖查询意图（导航型几乎不受影响，信息型受影响最大）、
+行业、以及摘要是否给出可点击的来源链接。因此任何单一百分比都不可信，
+团队必须用自己的对照组测。
+
+真正需要的是把点击率变化翻译成收入变化的模型。设某站点日均曝光（搜索结果展现）为 $I$，
+基线点击率为 $\CTR_0$，基线转化率为 $\CVR_0$，客单价为 $\AOV$，
+则在 AI 摘要覆盖率为 $\theta$、被覆盖查询组的点击率相对衰减为 $\delta$ 的假设下，
+日收入损失为：
+
+\begin{equation}
+\Delta R \;=\; I \cdot \theta \cdot \delta \cdot \CTR_0 \cdot \CVR_0 \cdot \AOV ,
+\label{eq:zero-click-erosion}
+\end{equation}
+
+其中 $\delta \in [0,1]$ 是相对衰减比例，$\theta$ 是受影响曝光占比。这个式子刻意做得很朴素，
+因为它的价值不在于精度，而在于\emph{把三个可辩论的参数显式化}：
+$\theta$（覆盖面）、$\delta$（衰减幅度）、$\AOV \cdot \CVR_0$（单位点击价值）。
+争论「AI 会不会毁掉 SEO」是没有产出的；争论「$\theta$ 是 30\% 还是 60\%」是有产出的，因为那可以做实验。
+
+\begin{example}[示范量级：一个中型 B2B 站点的算账方式]
+假设某 B2B 站点日曝光 $I = 2\times 10^{5}$，$\CTR_0 = 3\%$，$\CVR_0 = 2\%$，
+年合同价值折算单次成单 $\AOV = 2\times 10^{4}$ 元，AI 摘要覆盖信息型查询的比例 $\theta = 40\%$，
+该组点击率衰减 $\delta = 25\%$（示范量级，非公开实测）。代入 \cref{eq:zero-click-erosion}：
+
+\[
+\Delta R \approx 2\times 10^{5} \times 0.40 \times 0.25 \times 0.03 \times 0.02 \times 2\times 10^{4}
+\approx 2.4\times 10^{4} \ \text{元/日} .
+\]
+
+量级上相当于年化数百万级的收入暴露。请注意这个数字是\emph{参数敏感性}的演示：
+把 $\delta$ 从 25\% 改成 45\%，损失几乎翻倍。所以正确的用法是——
+先定 $\theta$ 与 $\delta$ 的置信区间，再看这笔钱是否值得投入 GEO 团队；
+而不是拿一个精确的损失数字去要预算。
+\end{example}
+
+\begin{pitfall}[把「AI 摘要导致点击下滑」当成已证事实]
+\textbf{现象}：团队拿两份不同时期的报表做前后对比，发现自然流量下滑，
+直接把差额归因给 AI 摘要，并据此申请 GEO 预算。\\
+\textbf{根因}：同时期还发生了至少四件事——
+核心算法更新（见 \cref{ch:seo}）、竞争对手内容升级、季节性、以及自身站点改版或 Core Web Vitals 恶化。
+前后对比无法把这些因素与 AI 摘要分离开，属于典型的混淆归因。\\
+\textbf{排查方法}：(1) 用「按查询意图分层」的对照组：同一意图簇内，比较\emph{出现}摘要与\emph{未出现}摘要的查询，
+而不是比较两个时间窗口；(2) 检查曝光是否同步下滑——若曝光稳定而点击率下滑，摘要的可能性上升；
+若曝光与点击率同降，更可能是排名与索引问题；(3) 用 \cref{ch:growth} 的增量实验框架做地理或查询分层的随机化，
+哪怕只能做出弱实验，也比一份时间序列强。
+\end{pitfall}
+
+\section{生成式引擎的形态与产品谱系}
+
+\subsection{四类入口}
+
+不同产品的取源方式与展现方式差别很大，直接决定了优化手段的优先级。
+按「答案如何产生」可以把当前主流入口分成 \cref{tab:geo-engines} 中的四类：
+
+\begin{table}[htbp]
+\centering
+\caption{生成式引擎的四类形态及其对内容方的含义（产品形态以官方最新文档为准）}
+\label{tab:geo-engines}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{2.9cm} L{2.5cm} L{2.9cm} Y}
+\toprule
+\tabhead{类别} & \tabhead{代表形态} & \tabhead{取源方式} & \tabhead{展现方式} & \tabhead{对内容方的含义} \\
+\midrule
+搜索内嵌摘要 & Google AI Overviews、AI Mode、Bing 中的 Copilot 答案 &
+传统索引 + 生成层 & 结果页顶部的综述 + 来源角标 &
+排名仍是入场券；摘要可折叠可展开，曝光口径极难归因 \\
+独立答案引擎 & Perplexity、部分国内 AI 搜索 &
+自建抓取 + 多路检索 + 重排 & 答案段落 + 编号引用列表 &
+引用链接最外显，内容结构直接影响被摘取概率 \\
+对话助手带检索 & ChatGPT Search、元宝、Kimi、豆包等 &
+用户提问触发检索工具 & 行内提及 + 可点来源 &
+链路最长，被提及与带来点击的相关性最弱 \\
+纯参数化问答 & 无检索的对话模式 &
+无检索 & 仅文本 & 只能靠预训练语料与品牌事实密度，短期不可操作 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+国内产品的生态还有两个结构性差异需要提醒：
+一是内容源池不同（公众号、知乎、小红书、B 站等社区内容在检索层的权重往往高于独立站点），
+因此「第三方源布局」在国内比在海外更重要；
+二是合规与信息来源资质要求更严，医疗、金融等类目的引用行为受监管约束，
+这类行业的内容策略必须先过合规评审。具体产品能力与来源范围请以各自官方最新文档为准。
+
+\begin{insight}[同一个页面，四种命运]
+\textbf{生成式引擎的取源是「检索衰减 + 生成再选择」的两段过程，因此同一个页面在不同产品里可能完全不同命。}
+在搜索内嵌摘要里，它依赖主索引，被抓到就有机会；在独立答案引擎里，它依赖对方自建抓取，
+被 robots 或 WAF 挡住就彻底出局；在对话助手里，它依赖用户提问是否触发检索工具——
+同一个问题问十次，可能只有三次触发联网，于是引用率天然低于前两类产品。
+这解释了一个常见困惑：为什么同一批内容在 A 产品里表现很好、在 B 产品里几乎为零。
+在得出「内容不行」的结论之前，先确认\emph{该产品是否真的能抓到并检索到你的内容}，
+否则你是在比较两套完全不同的候选池。
+\end{insight}
+
+\subsection{从十蓝链到 AI 答案：形态演进}
+
+形态变化不只是「位置变了」，而是\emph{信息单元}变了：从「文档」变成「段落」，甚至变成「命题」。
+这带来三个连锁后果，如 \cref{fig:geo-evolution} 所示。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  stage/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=8mm,
+                inner sep=4pt, text width=2.5cm, align=center, font=\sffamily\scriptsize},
+  stagea/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=8mm,
+                inner sep=4pt, text width=2.5cm, align=center, font=\sffamily\scriptsize},
+  lbl/.style={font=\sffamily\tiny\color{SlateGray}, align=center, text width=2.5cm}
+]
+\node[stage] (s1) at (0,0) {十条蓝链\\（2000s）};
+\node[stage] (s2) at (3.1,0) {精选摘要\\知识面板（2010s）};
+\node[stage] (s3) at (6.2,0) {多源合成摘要\\（2023 起）};
+\node[stagea] (s4) at (9.3,0) {任务型代理\\（进行中）};
+\draw[-{Stealth}, thick, SlateGray] (s1) -- (s2);
+\draw[-{Stealth}, thick, SlateGray] (s2) -- (s3);
+\draw[-{Stealth}, thick, TealDeep, dashed] (s3) -- (s4);
+\node[lbl] at (0,-1.15) {优化单元：\\整页文档};
+\node[lbl] at (3.1,-1.15) {优化单元：\\一个片段};
+\node[lbl] at (6.2,-1.15) {优化单元：\\多个段落 + 实体};
+\node[lbl] at (9.3,-1.15) {优化单元：\\结构化事实与接口};
+\node[draw=RuleGray, fill=white, rounded corners=2pt, inner sep=3pt,
+      font=\sffamily\tiny, text width=11.6cm, align=left] at (4.65,-2.35)
+  {每一代都缩小优化单元、缩短用户停留：文档 $\to$ 片段 $\to$ 段落 $\to$ 事实。
+   点击机会随之下降，而「被引用」的判定标准从位置转向可验证性};
+\end{tikzpicture}
+\caption{搜索结果形态的四段演进，以及优化单元的持续缩小（时间点为行业通识）}
+\label{fig:geo-evolution}
+\end{figure}
+
+第一个后果是\textbf{曝光与点击脱钩}。用户读完摘要就走了，但他确实「看到了」你的品牌名。
+传统的曝光口径（结果页展现）会把这段阅读计入曝光，把零点击计入跳出，于是报表看起来全面恶化，
+而真实的品牌触达可能并没有恶化。这是度量体系必须重建的根本原因。
+
+第二个后果是\textbf{内容被切碎使用}。引擎引用的是你的一个段落，而不是你的页面。
+如果段落依赖上下文才能理解（「如上所述，该方案成本更低」），它一旦脱离页面就毫无价值，
+被摘取的概率随之下降。这就是后文「每段自洽」这条规则的由来。
+
+第三个后果是\textbf{归因链路断裂}。纯参数化回答与部分对话式检索不传递来源链接，
+GA4 里就不会出现任何 referrer。于是 AI 带来的价值在报表上是「零」，
+但品牌搜索量、直接流量、稍后的品牌词转化可能上升。归因缺失会让 GEO 在预算评审中系统性吃亏。
+
+\section{引用机制：生成式引擎如何选源}
+\label{sec:geo-citation}
+
+本节是对公开研究的综合。必须强调：目前没有权威机构发布过完整的引用排序算法文档，
+学术界与工业界的公开研究样本通常集中在少数领域（学术问答、健康、新闻），
+因此下面的六维特征应被视为\textbf{待验证的假设排序}，而非权重表。
+
+\subsection{六个特征维度}
+
+\begin{table}[htbp]
+\centering
+\caption{生成式引擎选源的六个特征维度：定义、可操作手段与验证方式（公开研究的综合，权重未知）}
+\label{tab:citation-features}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{3.2cm} L{3.5cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{直觉定义} & \tabhead{可操作手段} & \tabhead{如何验证是否起作用} \\
+\midrule
+可提取性 & 单段能否不依赖上下文独立成义 &
+答案前置、每段自洽、控制段长为 40--60 字答案块 & 把段落单独贴给模型问「这段话回答了什么问题」 \\
+结构化程度 & 机器能否低成本定位事实 &
+对比表、参数表、步骤列表、FAQ / HowTo 标记 & 去掉样式后纯文本是否仍可解析出字段 \\
+权威信号 & 谁说的、凭什么信 &
+一手数据、方法透明、作者与机构署名、被权威源引用 & 对比同题不同权威度来源的引用占比 \\
+新鲜度 & 事实是否仍在有效期内 &
+显式标注更新时间、版本号、适用范围 & 按内容年龄分组看引用率衰减曲线 \\
+实体一致性 & 品牌、产品、人名是否指同一事物 &
+统一命名、维护实体页、Schema 标注 \code{sameAs} & 搜「品牌别名 + 产品」看引擎给出的是否同一实体 \\
+多源交叉验证 & 同一说法是否有独立来源 &
+让第三方独立复述你的数据，而不是自己复制自己 & 统计同一命题的被引源数量与来源独立性 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+其中\kw{多源交叉验证}最容易被忽视，也最重要。\cref{tab:citation-features} 里最下面那一行
+在实践中往往比其他五行更难做到，因为它要求的是\emph{别人}替你说。
+生成式引擎在合成一段事实性陈述时，
+更倾向于选择\emph{多个独立来源都支持}的说法，因为这在统计上更安全、也更不容易触发幻觉惩罚
+（关于幻觉的成因与缓解，可参见 \cite{ji2023hallucination}）。
+这解释了一个常见的挫败：某品牌在自己的官网、自己的公众号、自己的 LinkedIn 上
+用同样措辞发布了同一个数据，结果没有被引用；而一篇第三方行业媒体的报道用了类似数据，反而进了引用列表。
+原因不是权威度，而是\emph{来源独立性}——引擎把自我复制视为一个源，而不是三个。
+
+\subsection{与经典排名的关系：排名是入场券，不是入场后的座位}
+\label{sec:geo-ranking-relation}
+
+公开研究的普遍结论（也是与本领域从业者的行业通识一致）是：
+被引用的来源与排在传统结果首页的来源\emph{高度重叠但不完全相同}。
+可以做两个方向的观察：
+
+\begin{itemize}
+  \item \textbf{排名高但未被引用}。常见于三类页面：
+        内容需要用户交互才能获得答案（登录墙、表单、懒加载）；
+        内容虽然相关但缺少可摘取的事实句（大量形容词、没有数字）；
+        内容被大量同质页面稀释（同一品牌下几十个近重复页面，检索层无法确定引用哪个）。
+  \item \textbf{排名不高但被频繁引用}。常见于四类页面：
+        结构化数据集页面（参数表、对照表）；术语定义页；
+        问答型社区内容（论坛、问答站，因为其语境天然是「问题 + 回答」）；
+        行业媒体的原创报道（权威信号 + 新鲜度 + 独立来源三重加成）。
+\end{itemize}
+
+\begin{insight}[「入场券」比喻的工程含义]
+把排名当入场券，意味着 GEO 的资源分配应该是\textbf{两段式}的：
+第一段投入保证\emph{可召回到场}（技术 SEO、索引覆盖、站点速度、内链结构），
+这部分与 \cref{ch:seo} 完全重合，不能省；
+第二段投入保证\emph{到场后被引用}（内容单元化、结构化、可验证性）。
+两段的投入产出曲线形状不同：第一段是阈值型（不做就是零），第二段是线性偏凹的（做得越多边际收益越低）。
+常见的资源错配是：团队只做第二段，写了很多「AI 友好」的内容，但站点抓取与索引有硬伤，
+于是连入场券都没拿到，却把失败归因于「AI 不喜欢我们」。
+\end{insight}
+
+\subsection{源选择与引用决策的形式化}
+
+把上述过程粗略形式化，有助于理解度量的边界。设引擎在一个答案槽位上从候选集合 $C$ 中选源。
+对每个候选 $j$，其被引用的倾向可写为特征的加权和：
+
+\begin{equation}
+s_j \;=\; \sum_{k=1}^{K} w_k \, f_{k,j} \;+\; \lambda \, \mathrm{rank}_j \;+\; \varepsilon_j ,
+\label{eq:source-score}
+\end{equation}
+
+其中 $f_{k,j} \in [0,1]$ 是第 $k$ 个归一化特征（可提取性、结构化程度等），
+$\mathrm{rank}_j$ 是经典排序分（或归一化位次），$\lambda$ 是「入场券」系数，
+$\varepsilon_j$ 代表无法观测的生成侧随机性。要点有三个：
+(1) 权重 $w_k$ 未知、且随查询意图与产品版本变化，因此\textbf{不可拟合，只能实验}；
+(2) $\lambda$ 可以是分段函数而非线性——排名低于某阈值时该项直接切断；
+(3) $\varepsilon_j$ 相当大，同一提示词重复采样会得到不同的引用集合，
+这意味着\textbf{任何单次测量的引用率都不可靠}，必须多次采样取分布。
+
+由此定义\term{AI 引用率}{AI Citation Rate}。设提示词集合 $\mathcal{P}$（后文称 \term{提示词集}{prompt set}），
+对提示词 $p$ 重复采样 $n$ 次，第 $r$ 次得到答案及其引用来源集合 $S_{p,r}$：
+
+\begin{equation}
+\mathrm{ACR}(p) \;=\; \frac{1}{n}\sum_{r=1}^{n} \mathbf{1}\!\left\{\, \exists\, s \in S_{p,r} : \mathrm{owner}(s) = b \,\right\} ,
+\qquad
+\mathrm{ACR} \;=\; \frac{1}{\abs{\mathcal{P}}} \sum_{p \in \mathcal{P}} \mathrm{ACR}(p) ,
+\label{eq:ai-citation-rate}
+\end{equation}
+
+其中 $b$ 是目标品牌，$\mathrm{owner}(s)$ 返回来源的主域名归属。
+若把指示函数换成「答案正文中出现品牌名」的判定，就得到\term{品牌提及率}{Brand Mention Rate}：
+
+\begin{equation}
+\mathrm{BMR}(p) \;=\; \frac{1}{n}\sum_{r=1}^{n} \mathbf{1}\!\left\{\, b \in \mathrm{text}\big(\mathrm{ans}_{p,r}\big) \,\right\} ,
+\qquad
+\mathrm{BMR} \;=\; \frac{1}{\abs{\mathcal{P}}} \sum_{p \in \mathcal{P}} \mathrm{BMR}(p) .
+\label{eq:brand-mention-rate}
+\end{equation}
+
+这两个量必须分开跟踪，因为它们的差值是重要的诊断信号：
+$\mathrm{BMR} \gg \mathrm{ACR}$ 意味着引擎在谈论你、但不给你链接（品牌建设有效、流量获取无效）；
+$\mathrm{ACR} \gg \mathrm{BMR}$ 意味着你的页面被当作资料引用、但品牌没被记住（典型的技术文档或数据集页面）。
+
+\begin{formulacard}[引用与提及的度量口径]
+\textbf{引用率}：$\mathrm{ACR} = \frac{1}{\abs{\mathcal{P}}}\sum_p \frac{1}{n}\sum_r \mathbf{1}\{\text{来源归属} = b\}$，
+统计单位是「提示词 $\times$ 采样」。\\
+\textbf{提及率}：$\mathrm{BMR}$ 同上，但判定条件换成「答案正文出现品牌名或别名」。\\
+\textbf{口径警告}：无链接的提及在多数引擎的界面里无法从 DOM 稳定提取，
+因此线上监测通常只统计\emph{可见引用}，得到的是 $\mathrm{ACR}$ 的\emph{下界}。
+报告里必须写清这一点，否则会系统性低估效果、并做出「关了 GEO 算了」的错误决策。
+\end{formulacard}
+
+\section{GEO 技术手段：把内容改造成「可引用的证据」}
+
+\subsection{内容分块：每段自洽与结论前置}
+
+\term{内容分块}{content chunking}是 GEO 里投入产出比最高的动作，因为它的本质是
+\emph{降低检索层与生成层的解析成本}。多数检索与重排系统以「段」或「窗口」为最小单位
+（回顾 \cref{ch:rag} 里关于切分粒度对召回质量影响的讨论），
+生成层也倾向于直接复制一个完整句子而不是拼接半个从句。
+
+三条可执行规则（对比效果见 \cref{fig:geo-extractability}）：
+
+\begin{enumerate}
+  \item \textbf{结论前置}。把答案放在段落第一句，之后才是条件、例外、背景。
+        原因很直接：抽取式摘要与生成式摘取都偏好句首信息，
+        读者在 AI 摘要里看到的也往往是第一句。
+  \item \textbf{每段自洽}。禁止使用「如上所述」「如下图所示」「前文提到」这类依赖上下文的指代。
+        每段应能被单独剪下来贴在另一个页面上而不歧义。
+        实践做法是在段落里重复关键限定词：「iPhone 15 的电池容量」而不是「该机型的该参数」。
+  \item \textbf{答案块 40--60 字}。这是行业通识给出的经验区间（\textbf{示范量级}，非实测最优值）：
+        太短则信息不完整、容易被判定为低质量片段；太长则一次摘取成本高、且容易被截断。
+        中文在 40--60 字通常能容纳「对象 + 属性 + 数值 + 条件」四要素，
+        例如：「在 25 摄氏度室温、屏幕亮度 200 尼特的条件下，该机型连续视频播放续航为 18 小时 20 分。」
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  plain/.style={draw=RuleGray, fill=white, rounded corners=2pt, minimum height=7mm,
+                inner sep=4pt, text width=4.2cm, align=left, font=\sffamily\scriptsize},
+  good/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm,
+               inner sep=4pt, text width=4.2cm, align=left, font=\sffamily\scriptsize},
+  hdr/.style={font=\sffamily\scriptsize\bfseries\color{NavyDeep}}
+]
+\node[hdr] (h1) at (-3.2,1.0) {弱可提取段落};
+\node[plain] (a) at (-3.2,0.1)
+  {如上所述，该方案在成本上更有优势，具体数据请见下图。本公司的产品在这一领域深耕多年，深受客户好评。};
+\node[hdr] (h2) at (3.2,1.0) {强可提取段落};
+\node[good] (b) at (3.2,0.1)
+  {在日活 10 万量级的 B2B 场景下，该方案的单次推理成本为 0.8 分钱，比对照方案低 42\%（来源：本团队 2024 年内部压测，样本 30 天）。};
+\node[draw=CrimsonDeep, fill=white, rounded corners=2pt, inner sep=3pt,
+      font=\sffamily\tiny, text width=3.6cm, align=left] at (-3.2,-1.6)
+  {问题：指代依赖上下文；无可验证数字；评价性形容词无信息量};
+\node[draw=TealDeep, fill=white, rounded corners=2pt, inner sep=3pt,
+      font=\sffamily\tiny, text width=3.6cm, align=left] at (3.2,-1.6)
+  {要点：条件 + 数值 + 对比基准 + 来源与样本量，四要素齐备};
+\draw[-{Stealth}, thick, CrimsonDeep] (-5.6,0.1) -- (a.west);
+\draw[-{Stealth}, thick, TealDeep] (1.0,0.1) -- (b.west);
+\end{tikzpicture}
+\caption{可提取性的直观对比：答案块需要自带条件、数值、对比基准与来源}
+\label{fig:geo-extractability}
+\end{figure}
+
+可以用一个打分函数把这件事变成可回归的对象。
+设片段 $u$ 的六项子分为：自洽性 $\mathrm{sc}(u)$、结构度 $\mathrm{st}(u)$、
+权威性 $\mathrm{au}(u)$、新鲜度 $\mathrm{fr}(u)$、实体一致 $\mathrm{en}(u)$、交叉验证 $\mathrm{cv}(u)$，
+各取值于 $[0,1]$，则\term{可提取性评分}{Extractability Score}为：
+
+\begin{equation}
+\mathrm{EX}(u) \;=\; \sum_{k \in \{\mathrm{sc,st,au,fr,en,cv}\}} w_k \, g_k(u) ,
+\qquad \sum_k w_k = 1 ,\quad w_k \ge 0 ,
+\label{eq:extractability-score}
+\end{equation}
+
+其中 $g_k$ 是各维度的归一化映射（例如新鲜度可用 $g_{\mathrm{fr}} = \exp(-t/\tau)$，
+$t$ 为距上次实质更新的天数，$\tau$ 为半衰常数）。
+这个式子的工程用途不是「算出真值」，而是\textbf{让内容团队在发布前有一致的自检口径}，
+以及让 A/B 实验有一个可分层的中介变量：先验证「提高 $\mathrm{EX}$ 是否提高 $\mathrm{ACR}$」，
+再决定要不要把 $\mathrm{EX}$ 纳入发布门禁。
+
+\subsection{问答式结构：FAQ 与 HowTo}
+
+检索层的用户提问是自然语言长句，而大量营销内容写的是名词短语标题。
+两者之间的\emph{词汇鸿沟}（见 \cref{ch:search} 关于查询理解的讨论）会直接体现在召回率上。
+解决办法是把标题与段落改写成问题形态，并配一个直接答案。
+
+可行的做法：
+
+\begin{itemize}
+  \item \textbf{一页一主问题}。每篇文章围绕一个明确问题，标题就是该问题的自然表述，
+        首段给出 40--60 字的直接回答，其余部分才是展开。
+  \item \textbf{FAQ 区块}。把长尾子问题收进页面底部，每问一段、每段自洽，
+        用 \code{FAQPage} 结构化数据标注。注意：结构化数据能提升\emph{机器可解析性}，
+        但它\emph{不保证}被生成式引擎引用；把标记当作「降低解析成本」而不是「提高优先级」更稳妥。
+  \item \textbf{HowTo 与步骤列表}。流程类内容用有序列表 + 每步一句可执行动作，
+        并写清前置条件、失败时的回退动作。这类内容在多源交叉验证中优势明显，
+        因为步骤序列是可验证的（他人照做能复现）。
+  \item \textbf{避免自问自答式关键词堆砌}。「XX 哪家好？XX 哪家好？」这类伪 FAQ 会被质量评估判为低价值内容，
+        与 \cite{google2024quality} 中的质量评估思路一致。
+\end{itemize}
+
+\subsection{数据与引用：一手数据是唯一护城河}
+
+在生成式引擎的评价体系里，最难被复制、最容易被引用的内容形态是\kw{一手数据}：
+你自己跑出来的、别人没有的、且方法可核验的统计。
+原因还是多源交叉验证：如果一段事实只有你能提供，那么任何想陈述该事实的引擎都只能引用你；
+而如果你只是复述别人的数据，引擎可以直接去看原始来源。
+
+一手数据的三个及格线：
+
+\begin{enumerate}
+  \item \textbf{样本与口径可复现}。写清样本量、时间窗口、筛选条件、口径定义。
+        「我们调研了用户」不合格；「2024 年 3--5 月，对 1,240 名月活用户做站内问卷，回收有效样本 1,013 份」合格。
+  \item \textbf{数字带不确定度}。给区间或置信区间，而不是假精确。
+        「转化率提升 37.2\%」在专业读者眼里是可疑信号；「提升约 30\%--40\%（样本 1,013，误差约 $\pm 3$ 个百分点）」更可信。
+  \item \textbf{可被独立引用}。把数据做成独立页面（数据页、年度报告、交互式图表），
+        有稳定的 URL 与明确的引用格式，方便第三方媒体与研究者引用。
+        这同时也让被引用后的\emph{回溯链接}能落到正确的页面上。
+\end{enumerate}
+
+\begin{pitfall}[把 llms.txt 当成排名魔法]
+\textbf{现象}：团队看到「给 AI 喂一份 llms.txt 就能被优先引用」的说法，
+立刻上线 \code{/llms.txt}，然后期待引用率上升；一个月后没有任何变化，得出「GEO 是骗局」的结论。\\
+\textbf{根因}：\code{llms.txt} 是一个社区提案 \cite{openaillmstxt}，
+它给出的是一种「把站点要点整理成机器可读清单」的\emph{约定}，而不是任何引擎的官方收录协议。
+检索层能否用上它，取决于各家引擎是否实现该约定；在实现之前，它的作用与一份普通的站点导览页没有本质区别。
+把它当作唯一的 GEO 手段，等于把全部筹码压在一个未被采纳的约定上。\\
+\textbf{排查方法}：(1) 查官方文档，确认目标引擎是否声明支持该文件；没有声明就按「无效果」预期投入，
+只花一天成本做实验；(2) 把资源优先投到一定有效的地方：抓取可及性、内容分块、一手数据、结构化数据；
+(3) 记录上线日期与对照组，用 \cref{eq:ai-citation-rate} 的指标做前后对比——
+如果连一个能证伪的实验都没设计，就不该宣称「没有效果」。
+\end{pitfall}
+
+\subsection{structured data、实体标注与 llms.txt 的现状}
+
+\term{结构化数据}{structured data}的价值在生成式时代被重新定价：它的作用从「争取富摘要展示」
+变成了「降低机器理解成本」。业界通用的词表是 Schema.org \cite{schemaorg}，
+对 GEO 最相关的几个类型是：
+
+\begin{itemize}
+  \item \code{Organization} / \code{Brand}：声明品牌实体，用 \code{sameAs} 指向维基数据、官方社交账号、
+        权威媒体页面，这是解决「实体一致性」的主要手段。
+  \item \code{Product} / \code{Offer}：声明参数、价格区间、适用范围。
+        \textbf{注意}：价格与库存是高频变化字段，必须与页面可见内容一致，
+        否则会触发结构化数据违规处置；以搜索引擎官方最新文档为准。
+  \item \code{FAQPage} / \code{HowTo}：声明问答与流程。
+  \item \code{Dataset}：声明一手数据集的字段、时间范围、许可与引用方式——
+        这是让第三方\emph{规范引用}你的数据的最低成本手段。
+  \item \code{Article} 及 \code{dateModified}：声明新鲜度。更新内容时务必同步修改该字段，
+        否则新鲜度信号与实际不符。
+\end{itemize}
+
+关于 \code{llms.txt} / \code{ai.txt} 的争议，可以总结为三点判断（均属行业通识，非官方结论）：
+\textbf{第一}，它们是社区约定，不属于任何检索协议的强制标准，采纳度低且不确定；
+\textbf{第二}，无论采纳与否，它们\emph{不会}改变抓取权限——权限由 robots 规则与服务器配置决定，
+两者是不同层面的东西，混为一谈是常见概念错误；
+\textbf{第三}，在没有官方采纳之前，它们的合理定位是「低成本的实验性补充」，
+用于把品牌、关键事实、数据出处集中成一份人类与机器都读得懂的索引，顺便作为内链枢纽。
+
+\subsection{可抓取性与 AI 爬虫管理}
+\label{sec:geo-crawler}
+
+内容再好，抓不到就是零。AI 相关抓取与传统搜索引擎抓取有三点不同：
+\textbf{抓取频次与深度}通常更保守（没有站点地图与历史信任积累时尤甚）；
+\textbf{渲染依赖}更强（很多 AI 抓取器不执行 JavaScript，纯前端渲染的内容等于不存在）；
+\textbf{用途边界}更模糊（同一家公司可能用不同用户代理解析为「索引」与「训练」两种用途）。
+
+业界通见的做法是\emph{按用途分类管理}，而不是一刀切封禁。\cref{tab:ai-crawlers} 列出常见用户代理及其典型用途，
+\textbf{具体字符串与用途请以各家官方最新文档为准}：
+
+\begin{table}[htbp]
+\centering
+\caption{常见 AI 相关爬虫用户代理与 robots.txt 策略取向（字符串与用途以官方最新文档为准）}
+\label{tab:ai-crawlers}
+\small
+\begin{tabularx}{\textwidth}{L{2.9cm} L{2.1cm} L{2.1cm} Y}
+\toprule
+\tabhead{用户代理 / 令牌} & \tabhead{典型用途} & \tabhead{建议策略} & \tabhead{理由} \\
+\midrule
+\code{GPTBot} & 语料抓取 & 允许或按内容分层 & 语料影响模型的长期品牌记忆（LLMO） \\
+\code{OAI-SearchBot} & 检索索引 & 允许 & 封禁等于退出该入口的引用候选池 \\
+\code{ChatGPT-User} & 用户触发的实时抓取 & 允许 & 与用户访问同性质，封禁会伤害真实用户 \\
+\code{Google-Extended} & 生成式用途的\emph{控制令牌} & 允许（按合规评估定） & 它不是爬虫名，而是在 robots 中控制内容是否可用于生成式用途的开关 \\
+\code{Googlebot} & 通用索引与排名 & 允许 & AI Overviews 的取源仍依赖主索引，封禁等于放弃入场券 \\
+\code{ClaudeBot} / \code{anthropic-ai} & 语料抓取 & 按内容分层 & 与 \code{GPTBot} 同理 \\
+\code{PerplexityBot} & 检索索引 & 允许 & 该入口引用链接最外显，收益直接 \\
+\code{CCBot} & 公共语料库 & 视商业模式 & 公共语料库二次分发不可控，需评估品牌安全 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[AI 爬虫与抓取健康度的 30 分钟自查清单]
+\begin{enumerate}
+  \item \textbf{服务器日志确认实际行为}。不要只看 robots.txt 文本，要看日志里这些用户代理
+        是否真的在抓、抓了哪些路径、状态码分布如何。常见问题是 robots 允许、但 WAF 或 CDN 把非浏览器 UA 拦了。
+  \item \textbf{区分「索引用途」与「训练用途」}。前者影响今天的引用，后者影响明年的品牌记忆，优先级不同。
+        如果商业模式不允许训练用途，就在 robots 层面对应地写，而不是全站封禁。
+  \item \textbf{关闭对答案块的渲染依赖}。把关键事实做成服务端渲染的纯文本；
+        纯 JS 注入的参数表在多数 AI 抓取器眼里不存在。
+  \item \textbf{检查分段与内链}。AI 抓取深度通常浅于传统爬虫，
+        重要内容应在三次点击内可达，并在站点地图里显式声明更新时间。
+  \item \textbf{确定封禁清单的审批流程}。封禁某个用户代理是\emph{不可逆的品牌决策}（历史语料无法收回），
+        应由市场与法务共同签字，并留下决策记录与复查日期。
+  \item \textbf{建立可证伪的对照}。对同一批提示词，在封禁/放开前后各跑一轮采样，
+        记录 $\mathrm{ACR}$ 变化。没有对照的封禁决策，六个月后无法复盘。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{时效性与内容衰减}
+
+生成式引擎对新鲜度的偏好在不同意图下差异极大：
+「今天的股价」必须分钟级，「如何写一封道歉邮件」可以十年不变。
+因此把内容按\emph{事实半衰期}分类，比按发布年份分类更有用。
+用一个简单的一阶衰减模型描述片段被引用倾向随时间的变化：
+
+\begin{equation}
+\mathrm{fr}(u, t) \;=\; \exp\!\left(-\frac{t - t_0(u)}{\tau(u)}\right) ,
+\label{eq:content-decay}
+\end{equation}
+
+其中 $t_0(u)$ 是最近一次\emph{实质更新}时间，$\tau(u)$ 是该类内容的特征半衰常数。
+示范量级（\textbf{非实测拟合值}，仅供团队内部排序用）：
+监管与费率类内容 $\tau$ 可能只有 1--3 个月；
+工具版本与 API 文档类约 6--12 个月；
+方法论与基础概念类可以到 2--5 年。
+这个模型的实际用途是驱动\textbf{更新节奏}：对 $\tau$ 小的内容簇建立定期复核日历，
+而不是等流量下滑了才想起来更新。
+
+需要提醒的是，\cref{eq:content-decay} 只是工程近似，
+真实系统里「更新」本身也可能带来排名震荡（内容被重新评估、临时掉权），
+因此大改之前应先在低价值页面验证，再推广到核心页面。
+
+\section{品牌层面的 GEO：实体、第三方源与口碑一致性}
+
+技术手段解决「这段内容能不能被引用」，品牌手段解决「引擎认为你是谁、值不值得提」。
+后者更慢，但更抗算法更新。
+
+\subsection{品牌实体建设}
+
+生成式引擎在合成答案时会做\term{实体消歧}{entity disambiguation}：
+它需要判断「这个品牌名」指的是同一个实体，并与正确的属性、产品、人物关联。
+如果这一步失败，会出现「张冠李戴」式的引用错误——比如把你公司的产品参数套到同名竞品上。
+
+实体建设的三层动作：
+
+\begin{enumerate}
+  \item \textbf{奠基层：维基百科与维基数据}。这是最被广泛使用的开放实体来源。
+        注意两点：一是必须满足收录标准（关注度要求），
+        自建词条通常会被删除，反而留下负面痕迹；二是维基数据条目（QID）比百科正文更关键，
+        因为它以结构化三元组描述实体，是很多知识图谱的上游。
+        做法是在\emph{有权威媒体报道之后}再去完善维基数据条目，顺序不能颠倒。
+  \item \textbf{承载层：知识面板与官方页面}。搜索引擎的知识面板与站点的「关于我们」「品牌中心」页
+        必须口径一致：全称、简称、成立时间、总部、主要产品线。
+        任何一处不一致都会削弱实体信号。用 \code{sameAs} 把这些页面互连。
+  \item \textbf{背书层：权威媒体报道}。第三方独立报道是权威信号的唯一可靠来源，
+        也是维基百科收录标准所要求的「可靠来源」。这里要接受一个现实：
+        背书层无法短期制造，只能长期积累；公关稿件不算独立来源。
+\end{enumerate}
+
+\subsection{第三方引用源布局}
+
+既然多源交叉验证看重独立性，那么内容策略就不能停在自有站点。
+\cref{tab:third-party-sources} 把可布局的第三方源分成四类，其可控性与信任度大致呈反比：
+
+\begin{table}[htbp]
+\centering
+\caption{四类第三方引用源的可控性、典型信任度与运营要点（行业通识）}
+\label{tab:third-party-sources}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{2.0cm} L{2.2cm} L{3.0cm} Y}
+\toprule
+\tabhead{来源类型} & \tabhead{可控性} & \tabhead{典型信任度} & \tabhead{运营要点} & \tabhead{主要风险} \\
+\midrule
+行业媒体 & 低 & 高 & 提供独家数据与可核验素材，接受编辑独立判断 & 稿件被改写成竞品对比，需准备口径 \\
+评测站 / 榜单 & 中 & 中高 & 保证送测样机与参数一致，主动纠正错误参数 & 排名不可购买，付费位可能损害信任 \\
+专业社区（技术论坛） & 低 & 中高 & 由工程师实名参与技术讨论，不刷帖 & 营销化发言会被识别并反噬 \\
+大众问答社区 & 中 & 中低 & 只回答真实问题，答案自带可验证来源 &
+  同一账号批量回答同质问题会被判为水军 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+国内场景要额外考虑平台生态：公众号、知乎、B 站、小红书等内容在部分国产 AI 检索链路中权重较高，
+且这些平台的内容通常不被外部爬虫抓取，只在平台内被检索。
+这意味着「国内 AI 可见性」往往需要在每个平台内单独建设与单独度量，
+不能只靠一个官网。具体平台的抓取与授权政策以官方最新文档为准。
+
+\begin{casebox}[案例：某 B2B 品牌用「原始数据 + 结构化答案块」提升 AI 引用率（示范）]
+\textbf{背景}（示范构造，用于说明方法而非引用真实统计）：
+一家做工业检测设备的 B2B 企业，官网有 300 多篇技术文章，
+传统自然流量稳定，但在 AI 问答里几乎从不被提及，竞品却频繁出现。\\
+\textbf{诊断}：抽查 50 个提示词，发现三个问题——
+(1) 文章平均段长 180 字以上，一段里混了定义、参数、案例三件事，难以摘取；
+(2) 关键参数写在产品手册 PDF 里，网页上是模糊描述（「检测精度高」）；
+(3) 没有任何第三方来源引用其参数，唯一来源是自家站。\\
+\textbf{动作}（30 天）：
+(1) 把 12 个核心产品的参数整理成独立参数表页面，全部服务端渲染纯文本，每行一个「条件 + 数值 + 标准」；
+(2) 把 20 篇核心文章改为「结论前置 + 40--60 字答案块」结构，删掉所有依赖上下文的指代；
+(3) 上线 \code{Dataset} 与 \code{Product} 结构化数据，用 \code{sameAs} 关联品牌实体页；
+(4) 把三个内部测试数据集整理成公开数据页，附方法与样本量；
+(5) 邀请两家行业媒体基于其公开数据撰写对比报道。\\
+\textbf{观察}（示范量级，非行业基准）：
+在固定 50 个提示词、每词采样 5 次的设置下，
+「答案正文出现品牌名」的比例（$\mathrm{BMR}$）在两个月内从约 1 成提升到约 4 成；
+「附带可点引用链接」的比例（$\mathrm{ACR}$）提升幅度明显更小，
+说明国内外的共同规律是：被提及比被链接容易得多。\\
+\textbf{结论}：真正起作用的不是「为 AI 写作」，而是\textbf{把原本藏在 PDF 与长段落里的可验证事实挪到了机器可读的位置}。
+同一批改动对人类读者的转化率也略有提升，因为它同时降低了阅读成本。
+\end{casebox}
+
+\subsection{口碑与评论一致性}
+
+评论是生成式引擎最喜欢的源之一：它天然是「问题 + 观点 + 情境」的结构，
+且带有多来源交叉验证的特性。但评论也是最容易被误用的地方，有三条底线：
+
+\begin{itemize}
+  \item \textbf{跨平台口径一致}。如果官网说「续航 18 小时」、电商详情页说「续航 20 小时」、
+        评测站说「14 小时」，引擎在合成时会倾向于采用多数或更权威的说法，
+        或者在答案里写出相互矛盾的表述——这对转化率的伤害大于任何单点优化。
+        做法是建立一份\emph{事实单一来源}（single source of truth）文档，所有渠道从它派生。
+  \item \textbf{不制造虚假评论}。伪造评论既违反平台政策（以各平台官方最新文档为准），
+        也带来法律与品牌风险，且一旦被识别，会反向污染模型的品牌记忆。
+  \item \textbf{主动经营负面事实的语境}。差评无法删除，但可以补充「适用条件」的说明页。
+        引擎在合成负面评价时，通常会连带引用官方对条件与适用范围的解释，从而降低伤害。
+\end{itemize}
+
+\section{度量与监测：建立 AI 可见性看板}
+\label{sec:geo-measurement}
+
+\subsection{传统排名工具失效之后}
+
+传统排名追踪器的工作原理是「给定关键词，抓取结果页，找我的域名在第几位」。
+生成式引擎至少从三个方向击穿了这个方法：
+答案里没有稳定的「位次」概念；结果页因用户、地域、历史而个性化；
+引用集合每次采样都可能不同。因此必须换成\emph{以提示词为样本单位、以采样分布为结果}的度量体系。
+
+一个可落地的 AI 可见性看板包含五层数据，其数据流见 \cref{fig:geo-dashboard}：
+
+\begin{enumerate}
+  \item \textbf{提示词层}：提示词集的定义与覆盖。
+  \item \textbf{答案层}：每次采样得到答案文本、引用来源列表、是否提及品牌。
+  \item \textbf{来源层}：引用来源的域名、页面类型、是否自有、是否付费媒体。
+  \item \textbf{流量层}：站内 GA4 中可识别的 AI 引荐会话及其下游转化。
+  \item \textbf{质量层}：答案中的品牌事实准确率与情感极性。
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  src/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+              inner sep=3pt, text width=2.1cm, align=center, font=\sffamily\scriptsize},
+  proc/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=7mm,
+               inner sep=3pt, text width=2.1cm, align=center, font=\sffamily\scriptsize},
+  obox/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm,
+              inner sep=3pt, text width=2.2cm, align=center, font=\sffamily\scriptsize}
+]
+\node[src] (p) at (0,0) {提示词集\\prompt set};
+\node[proc] (s) at (2.7,0) {多引擎\\重复采样};
+\node[proc] (r) at (5.4,0) {答案与引用\\解析};
+\node[proc] (w) at (8.1,0) {指标计算\\引用率/提及率/SoV};
+\node[obox] (d) at (10.8,0) {看板\\告警/周报};
+\node[src] (g) at (0,-1.7) {GA4\\referrer};
+\node[src] (a) at (0,-3.4) {人工/模型\\事实核查};
+\node[proc] (j) at (5.4,-1.7) {流量与转化\\归因};
+\node[proc] (q) at (5.4,-3.4) {准确率\\与情感};
+\draw[-{Stealth}, thick, SlateGray] (p) -- (s);
+\draw[-{Stealth}, thick, SlateGray] (s) -- (r);
+\draw[-{Stealth}, thick, SlateGray] (r) -- (w);
+\draw[-{Stealth}, thick, TealDeep] (w) -- (d);
+\draw[-{Stealth}, thick, SlateGray] (g) -- (j);
+\draw[-{Stealth}, thick, SlateGray] (a) -- (q);
+\draw[-{Stealth}, thick, SlateGray] (j) -- (w);
+\draw[-{Stealth}, thick, SlateGray] (q) -- (w);
+\node[draw=RuleGray, fill=white, rounded corners=2pt, inner sep=3pt,
+      font=\sffamily\tiny, text width=10.6cm, align=left] at (5.4,-4.5)
+  {三条数据线必须同位对齐到「提示词 $\times$ 周期」两个维度，
+   否则看板只能给出相关性，无法回答「这批内容改动是否提升了被引用率」};
+\end{tikzpicture}
+\caption{AI 可见性看板的数据流：提示词采样、GA4 引荐、事实核查三条线汇聚到同一张表}
+\label{fig:geo-dashboard}
+\end{figure}
+
+\subsection{核心指标定义}
+
+\textbf{提示词覆盖率}：衡量你的监测样本能否代表真实提问分布。设 $\mathcal{P}_{\text{all}}$ 为该业务相关的
+全部潜在提问集合，$\mathcal{P}$ 为实际监测的提示词集，则
+
+\begin{equation}
+\mathrm{Cov}_{\mathcal{P}} \;=\; \frac{\abs{\mathcal{P}}}{\abs{\mathcal{P}_{\text{all}}}} ,
+\qquad
+\overline{\mathrm{ACR}}_{\text{weighted}} \;=\; \sum_{p \in \mathcal{P}} \pi_p \, \mathrm{ACR}(p) ,
+\label{eq:prompt-coverage}
+\end{equation}
+
+其中 $\pi_p$ 是按预估查询量或商业价值给出的权重，$\sum_p \pi_p = 1$。
+这里的关键取舍是：\emph{覆盖率与权重都是估计值}，
+因此报告里必须同时给出「未加权引用率」与「加权引用率」两个数字——
+两者的缺口本身就是信息（说明高价值提示词表现好于平均，或者相反）。
+
+\textbf{引用来源占比（AI 答案内的声量）}：衡量在竞品共同出现的提示词组里，
+你的被引次数占该组总被引次数的比例。设提示词组 $G$，竞品集合 $\mathcal{B}$：
+
+\begin{equation}
+\mathrm{SoV}_b(G) \;=\; \frac{\sum_{p \in G}\sum_{r=1}^{n} \abs{\,S_{p,r} \cap \mathrm{sources}(b)\,}}
+{\sum_{p \in G}\sum_{r=1}^{n} \abs{\,S_{p,r} \cap \mathrm{sources}(\mathcal{B})\,}} ,
+\label{eq:share-of-voice}
+\end{equation}
+
+即「品牌 $b$ 的被引来源次数」除以「该组内所有被监测品牌的被引来源次数」。
+它对应传统 SEO 里的声量份额，但要注意分母口径：如果竞品集合选得不全，
+这个比例会系统性虚高。建议固定一份竞品名单并季度复核。
+
+\textbf{AI 引荐流量占比}：在 GA4 里，AI 引荐通常只能通过来源域名匹配识别：
+
+\begin{equation}
+\mathrm{Share}_{\mathrm{AI}} \;=\;
+\frac{\sum_{d \in \mathcal{D}_{\mathrm{AI}}} \mathrm{sess}(d)}
+{\sum_{d \in \mathcal{D}_{\text{all}}} \mathrm{sess}(d)} ,
+\label{eq:ai-referral-share}
+\end{equation}
+
+其中 $\mathcal{D}_{\mathrm{AI}}$ 是人工维护的 AI 来源域名清单
+（例如搜索引擎的 AI 子域、独立答案引擎域名、对话助手域名，具体域名以各家官方文档为准）。
+三个必须写进口径说明的注意事项：
+其一，\textbf{大量 AI 应用不传递 referrer}，这些会话会落进「直接访问」或「自然搜索」，
+因此 \cref{eq:ai-referral-share} 是\textbf{下界}；
+其二，清单必须版本化管理，因为域名频繁变动；
+其三，用「直接流量与品牌词自然搜索的异常上升」作为交叉验证信号，
+若两者同期显著上升而 AI 引荐几乎为零，很可能是归因丢失而非真的没有效果。
+
+\textbf{答案准确率}：生成式引擎可能把你的品牌事实说错（参数、价格、定位、甚至归属）。
+定义准确率为符合事实的采样占比：
+
+\begin{equation}
+\mathrm{Acc} \;=\; \frac{1}{\abs{\mathcal{P}} \cdot n}
+\sum_{p \in \mathcal{P}} \sum_{r=1}^{n}
+\mathbf{1}\!\left\{\, \mathrm{judge}\big(\mathrm{ans}_{p,r}, b\big) \ge \eta \,\right\} ,
+\label{eq:answer-accuracy}
+\end{equation}
+
+其中 $\mathrm{judge}$ 是事实一致性判定函数（可用小规模人工标注 + 模型裁判的混合方案，
+$\eta$ 为判定阈值）。这里的风险是\emph{裁判与被判者同源}：
+用模型 A 判模型 A 的输出会偏乐观。
+可靠做法是用另一家模型做裁判，并对 5\%--10\% 的样本做人工复核，
+定期校准模型裁判与人工判断的一致率。
+
+\textbf{零点击侵蚀的收入影响}见 \cref{eq:zero-click-erosion}。
+在此基础上可以定义\kw{投喂的盈亏平衡点}：
+只有当「通过被引用带来的增量转化价值」超过「因摘要而损失的点击价值」时，
+放开 AI 抓取才在经济上成立。用一阶近似写出条件：
+
+\begin{equation}
+\underbrace{I\cdot\theta\cdot\delta\cdot\CTR_0\cdot\CVR_0\cdot\AOV}_{\text{被摘要吞噬的点击价值}}
+\;<\;
+\underbrace{I\cdot\theta\cdot\mathrm{ACR}\cdot\kappa\cdot\CTR_{\mathrm{ai}}\cdot\CVR_{\mathrm{ai}}\cdot\AOV}_{\text{被引用带来的增量价值}} ,
+\label{eq:feed-breakeven}
+\end{equation}
+
+其中 $\kappa$ 是「被引用 $\to$ 用户实际点击来源链接」的条件概率，
+$\CTR_{\mathrm{ai}}$、$\CVR_{\mathrm{ai}}$ 是被引用流量在引用列表内的点击率与转化率。
+两边约掉共同因子，得到一条可操作的判据：
+\textbf{只要 $\mathrm{ACR} \cdot \kappa \cdot \CTR_{\mathrm{ai}} \cdot \CVR_{\mathrm{ai}} > \delta \cdot \CTR_0 \cdot \CVR_0$，
+就应该放开抓取并争取被引用}。直觉上：把内容喂给 AI 是否划算，
+取决于「被引用后用户回来的概率」与「不喂时被摘要吃掉的概率」之比。
+
+\subsection{提示词集的构建与维护}
+
+提示词集是整个度量体系的样本框，它的质量决定了所有指标的可信度。构建原则有四条：
+
+\begin{enumerate}
+  \item \textbf{按意图分层，不按关键词堆量}。典型分层：
+        品类认知（「什么是 X」）、方案比较（「X 和 Y 哪个好」）、
+        品牌确认（「A 品牌怎么样」）、故障排查（「X 报错怎么办」）、
+        交易决策（「X 多少钱」）。每层采样 20--50 个提示词即可起步。
+  \item \textbf{用真实问句，不用关键词}。提示词应接近用户对助手说话的方式，
+        带情境与约束（「预算 5000 元以内，给一个做视频剪辑的轻薄本推荐」）。
+  \item \textbf{固定基线、滚动扩充}。变更提示词集会破坏时间序列可比性，
+        因此新增应放在\emph{扩展集}里，只在季度复盘时合并进主集，并标注断点。
+  \item \textbf{纳入竞品与负面场景}。只测自家优势场景等于自欺；
+        必须包含「X 有什么缺点」「X 和 Y 相比哪里不足」这类提示词，
+        才能看到真实的风险暴露。
+\end{enumerate}
+
+\begin{toolbox}[AI 可见性监测表的最小字段设计]
+\begin{itemize}
+  \item \code{prompt\_id}、\code{prompt\_text}、\code{intent\_layer}（意图分层）、\code{weight}（权重）
+  \item \code{engine}、\code{region}、\code{sample\_ts}（采样时间）、\code{sample\_idx}（第几次采样）
+  \item \code{brand\_mentioned}（布尔）、\code{cited\_own}（布尔）、\code{citation\_domains}（列表）
+  \item \code{answer\_hash}（答案指纹，用于检测答案是否变化）、\code{answer\_excerpt}（截断存档）
+  \item \code{fact\_ok}（事实是否正确）、\code{sentiment}（情感极性）
+  \item \code{ga4\_sessions}、\code{ga4\_conversions}（按周期聚合后回填）
+\end{itemize}
+\textbf{两个容易漏的设计点}：第一，必须存 \code{sample\_idx}，
+否则无法计算采样分布方差，会把「这一次恰好被引用」误读为趋势；
+第二，必须存 \code{answer\_hash}，因为引擎的答案更新往往先于引用变化，
+答案指纹变化是内容需要复核的早期信号。
+\end{toolbox}
+
+\begin{pitfall}[用单次采样做趋势判断]
+\textbf{现象}：运营同学每周手工问几次 AI，把结果记进表格，
+某周看到「被提到了」就宣布 GEO 见效，下一周「没提到」又宣布失效，团队情绪随之起伏。\\
+\textbf{根因}：生成式答案存在显著的采样随机性。同一提示词在同一引擎上重复询问，
+引用集合与措辞都会变化。$n=1$ 的观测无法与噪声区分，
+更不能与竞品或历史做因果比较。\\
+\textbf{排查方法}：(1) 把单提示词采样数提到 $n \ge 5$，报告均值与区间，而不是单次结果；
+(2) 用固定脚本自动采样并留存原始答案，避免人工挑选；
+(3) 先做「同周重复采样」的稳定性测试——
+如果同一周的 $\mathrm{ACR}(p)$ 波动幅度就超过你预期的改进幅度，
+那么任何短期结论都是伪信号，必须先提高采样量再谈优化。
+\end{pitfall}
+
+\section{实操策略：30 天行动计划与内容形态重构}
+
+\subsection{内容形态重构：四个高引用率的形态}
+
+从引用概率的角度看，\cref{tab:content-forms} 中的四种内容形态投资回报最高
+（依据公开研究与行业通识的共性，非精确排序）：
+
+\begin{table}[htbp]
+\centering
+\caption{四种高引用率内容形态：适用场景、结构与常见错误}
+\label{tab:content-forms}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{2.6cm} L{3.4cm} Y}
+\toprule
+\tabhead{形态} & \tabhead{适用场景} & \tabhead{结构要点} & \tabhead{常见错误} \\
+\midrule
+对比表 & 方案选型、竞品比较 &
+  行是对象、列是维度，每格给数值或「不适用」，表下附口径说明 &
+  只写「优/良/差」，没有数值与测试条件 \\
+清单 & 步骤、检查项、清单式决策 &
+  每项一句可执行动作，含前置条件与失败回退 &
+  条目抽象（如「做好优化」），无法执行 \\
+参数表 & 硬件、软件、服务规格 &
+  每行「参数 + 条件 + 数值 + 标准来源」，标注版本与日期 &
+  参数与详情页不一致，缺测试条件 \\
+权威定义 & 行业术语、指标口径 &
+  一句话定义 + 与近义概念的区别 + 适用范围 &
+  定义冗长、混入营销语，缺少与近义词的边界 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+一个反直觉但重要的判断：\textbf{这些形态同时也是人类读者最需要的形态}。
+「为 AI 写作导致人类读者流失」的担忧，在多数情况下是把「写得公式化」
+误当成「结构化」。真正的问题不是结构，而是\emph{失去了观点与情境}——
+把文章写成参数罗列却没有解释「什么情况下该选它」，人类读者会走，引擎也不会因此多引用你，
+因为后者同样需要适用条件才能安全地复述。
+
+\subsection{成为原始来源，而不是聚合者}
+
+这是 GEO 与 SEO 在战略层面最大的差异点。在 SEO 时代，聚合内容可以靠标题覆盖与内链结构获得排名；
+在生成式时代，聚合内容的价值被结构性削弱，因为引擎自己就是最强的聚合者——
+它能同时读遍所有源，不需要你替它汇总。相反，\emph{原始来源}的价值被抬高，因为它是交叉验证的锚点。
+
+判断自己是哪一种，问三个问题：
+\textbf{这个事实，如果我的页面消失，网络上的其他来源还能提供吗？}
+如果能，你是聚合者；
+\textbf{我有没有别人无法复制的数据、样本或实验？}没有则难以成为原始来源；
+\textbf{我的结论有没有方法章节让第三方复现？}没有则无法被规范引用。
+
+\begin{casebox}[案例：从聚合者转为原始来源的三种路径（示范）]
+以下三种路径是行业通识层面的常见做法，此处用示范方式说明，不引用具体统计数据。\\
+\textbf{路径一：把服务过程数据化}。一家代运营服务商过去写「如何提升复购」的方法论文章，
+与其他几百篇同类文章竞争；后来改为每季度发布一份「我们服务的 120 家店铺复购率中位数与分位分布」报告，
+把方法论压缩成报告的一节。原始数据成为被行业媒体引用的对象，方法论文章反而获得了更多自然外链。\\
+\textbf{路径二：把内部工具公开化}。一家 SaaS 公司把内部使用的「落地页诊断清单」做成公开的在线检查工具，
+每个检查项配口径说明与阈值。工具本身是原始来源，且天然带结构化字段。\\
+\textbf{路径三：把测试标准化}。一家硬件品牌把评测流程标准化并公开（测试环境、仪器、样本批次、重复次数），
+然后邀请第三方按其流程复测。标准本身可被引用，复测结果形成多源交叉验证。\\
+\textbf{共同点}：三者都放弃了「比别人写得更全」这条路，
+转而选择「提供别人没有的事实来源」——这与 \cref{ch:growth} 里内容增长的逻辑一致：
+增长来自不可替代的供给，而不是更勤奋的复制。
+\end{casebox}
+
+\subsection{多平台分发：跨模态取源}
+
+生成式引擎的检索层正在跨模态扩展：视频字幕、播客转录、文档与 PDF、开源仓库的 README 都可能成为源。
+行业通识层面的判断是：\emph{文本化程度决定可检索性}——
+一个只存在于视频里的观点，除非有字幕或文字稿，否则很难被检索层拿到。
+因此多平台分发的正确理解不是「多发几个渠道」，而是「让同一份事实以多种可解析的形态存在」：
+
+\begin{itemize}
+  \item \textbf{视频}：上传后必须提供准确字幕（人工校对，不要只依赖自动识别），
+        并在站内发布结构化文字稿，两者互相链接。
+  \item \textbf{播客}：发布完整转录文本，附时间戳与关键结论摘要；
+        转录文本应可被独立引用。
+  \item \textbf{文档}：技术白皮书与手册不要只给 PDF。
+        PDF 的抓取与解析成本明显高于 HTML，且更新后 URL 常常不变导致新鲜度信号混乱。
+        做法是提供 HTML 版本作为主页面，PDF 作为下载选项。
+  \item \textbf{代码与数据仓库}：README 是极高频的被引用源，
+        应写清用途、安装、参数、限制与引用方式，并附 \code{Dataset} 或 \code{SoftwareSourceCode} 标记。
+\end{itemize}
+
+\begin{toolbox}[GEO 30 天行动计划]
+\textbf{第 1 周：基线与可抓取性}
+\begin{enumerate}
+  \item 建 100--150 个提示词的主集（五层意图分层，含竞品与负面场景），写清权重。
+  \item 搭自动采样脚本，$n=5$，留存答案原文、引用域名、答案指纹，跑出第一版 $\mathrm{ACR}$、$\mathrm{BMR}$、$\mathrm{SoV}$。
+  \item 抓取体检：检查 AI 相关用户代理在服务器日志中的状态码分布；
+        确认关键内容服务端渲染；确认 robots 与 WAF 不冲突。
+  \item 在 GA4 建 AI 引荐来源组，并把「直接流量 + 品牌词自然搜索」设为对照组。
+\end{enumerate}
+\textbf{第 2 周：内容单元化}
+\begin{enumerate}
+  \item 选 20 个高价值页面，逐段改造：结论前置、每段自洽、答案块 40--60 字。
+  \item 把这 20 页里的核心参数从 PDF / 图片中提出来，做成 HTML 参数表。
+  \item 页面级结构化数据补齐：\code{Article} + \code{dateModified}、\code{FAQPage}、\code{Product}。
+\end{enumerate}
+\textbf{第 3 周：一手数据与实体}
+\begin{enumerate}
+  \item 选 1 个能公开的原始数据集，整理成数据页（口径、样本量、时间窗、许可、引用格式）。
+  \item 检查品牌实体口径：官网、知识面板、社交账号、维基数据是否一致；补 \code{sameAs}。
+  \item 梳理第三方源：列出现有被引用源清单，标出哪些是自有、哪些是独立第三方。
+\end{enumerate}
+\textbf{第 4 周：复盘与制度化}
+\begin{enumerate}
+  \item 重跑第 1 周的同一提示词集，比较 $\mathrm{ACR}$、$\mathrm{BMR}$、引用来源构成，标注变化与置信区间。
+  \item 把「可提取性自检」纳入发布门禁（用 \cref{eq:extractability-score} 的口径做人工评分）。
+  \item 确定更新日历：按 \cref{eq:content-decay} 的 $\tau$ 分类给内容打复核频率标签。
+  \item 输出一页看板与一份风险清单（封禁决策、平台政策变化、事实错误告警）。
+\end{enumerate}
+\end{toolbox}
+
+\section{时效性与风险}
+
+\subsection{AI 摘要的流量侵蚀}
+
+流量侵蚀的形式不止一种，需要区分清楚，否则应对手段会错位：
+
+\begin{itemize}
+  \item \textbf{点击被摘要替代}。用户在结果页完成信息满足。应对：把内容做成需要点击才有价值的东西
+        （工具、计算器、模板下载、深度案例），而不是把全部信息摊在首屏。
+  \item \textbf{引用不带链接}。品牌被提及但无法回站。应对：强化品牌搜索承接
+        （品牌词落地页、站内搜索优化），把「被提及」转化为「被搜索」。
+  \item \textbf{内容被整段改写后使用}。你的原创分析被别人改写后获得引用。
+        这是最难处理的一种，涉及版权与事实归属。应对：公开可核验的方法与数据引用格式，
+        让规范引用成本低于改写成本；同时保留发布记录作为原创时间证据。
+  \item \textbf{索引层竞争上升}。同一提示词的候选源集合被压缩到少数几个权威域，
+        中小站点连入场券都拿不到。应对：在细分长尾意图上建立不可替代性，
+        而不是在头部大词上与其硬碰。
+\end{itemize}
+
+\subsection{平台政策不确定性}
+
+这是本领域最大的不可控风险，体现在四个层面：
+\textbf{抓取政策}（哪些用户代理被允许、允许用于何种用途）；
+\textbf{引用展示政策}（是否展示来源链接、展示几个、是否展示品牌名）；
+\textbf{商业化政策}（是否出现付费引用位或赞助答案）；
+\textbf{内容责任政策}（对医疗、金融等类目的事实准确性要求）。
+
+工程上的应对是\kw{把策略抽象成可切换的配置}：
+抓取策略、内容形态、分发渠道都要能在一个季度内调整而不需要重写内容。
+具体做法：内容以结构化的方式维护（事实单一来源 + 多形态导出），
+而不是把事实硬编码在几十个页面里。这样当平台政策变化时，
+只需要改导出与发布环节，不必改事实源。
+所有政策类判断请\textbf{以官方最新文档为准}，并建立季度复核机制。
+
+\subsection{内容被滥用与品牌安全}
+
+三类风险需要在制度层面预防：
+
+\begin{enumerate}
+  \item \textbf{事实被错误归因}。引擎把你的参数套到竞品上，或把你的负面案例当成推荐。
+        应对：对「品牌 + 竞品」共现的提示词单独报警，准确率口径见 \cref{eq:answer-accuracy}；
+        在实体层用 \code{sameAs} 与品牌别名列表强化消歧；
+        发现错误时通过官方反馈渠道提交更正，并记录提交时间与结果。
+  \item \textbf{语料滥用与版权}。公开可抓取不等于放弃权利。
+        对核心资产（数据集、方法论、图表）应明确授权条款与引用格式；
+        对不希望进入训练语料的页面，用 robots 层面对应的控制令牌表达，
+        而不是指望对方自觉。合规判断需结合当地法律与平台政策，必要时由法务评估。
+  \item \textbf{品牌安全}。AI 摘要可能把你的品牌与不相关或负面内容并列。
+        应对：监控品牌共现词的分布，把「共现词清单」作为看板的固定一栏；
+        对高风险共现，用权威来源的澄清内容（官方说明页、第三方核实报道）去覆盖语境，
+        而不是直接对抗算法。
+\end{enumerate}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 生成式引擎把分发形式从「十个链接」变成「一段答案」，
+        优化目标从\emph{排名}变成\emph{被引用}；但排名仍是入场券，技术 SEO 不能省。
+  \item SEO / AEO / GEO / LLMO 的操作对象依次是排序函数、答案槽位、引用集合、模型记忆，
+        度量口径各不相同，混用会导致 KPI 与手段错配。
+  \item 零点击侵蚀的收入影响可用 \cref{eq:zero-click-erosion} 显式参数化：
+        争论 $\theta$ 与 $\delta$ 的取值，而不是争论「AI 会不会毁掉 SEO」。
+  \item 引用机制可拆成六个特征维度（可提取性、结构化程度、权威信号、新鲜度、实体一致性、多源交叉验证），
+        权重未知、必须实验；生成侧随机性大，单次观测不可作为结论。
+  \item 内容分块是投入产出比最高的动作：结论前置、每段自洽、答案块 40--60 字。
+  \item 结构化数据与 \code{llms.txt} 的定位不同：前者是已被广泛支持的解析约定，
+        后者是采纳度不确定的社区提案，两者都不改变抓取权限。
+  \item AI 爬虫应按\emph{用途}分类管理，封禁是不可逆决策，需要跨部门签字与对照实验。
+  \item 品牌层面的 GEO 靠实体一致性、独立第三方源与评论口径统一，
+        它的收益比技术手段慢，但更抗平台变化。
+  \item 度量体系的核心是把「提示词 $\times$ 采样」作为统计单位，
+        同时跟踪 $\mathrm{ACR}$、$\mathrm{BMR}$、引用来源构成、AI 引荐流量与答案准确率，
+        并公开承认归因缺失使 AI 引荐流量只是下界。
+  \item 一切政策、爬虫名单、产品形态\textbf{以官方最新文档为准}；
+        战略上应「成为被引用的原始来源」，而非更勤奋的聚合者。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item GEO 与 SEO 的核心差异是什么？如果只能保留一个指标来衡量 GEO 的效果，你选哪个，为什么？
+  \item 你如何度量「AI 里的品牌可见性」？请说明提示词集怎么构建、采样次数怎么定、如何避免单次采样的噪声导致错误结论。
+  \item 「排名高不等于被引用」。请给出至少三个「排名靠前却未被 AI 引用」的可能原因，以及各自的排查方法。
+  \item 团队讨论要不要在 robots.txt 里封禁 \code{GPTBot}。请给出你的决策框架：需要哪些数据、涉及哪些部门、如何设计对照实验。
+  \item 如何把「零点击搜索导致的点击率下滑」翻译成收入影响？请写出模型并说明每个参数的不确定性来源。
+  \item 你觉得 \code{llms.txt} 值得投入吗？请区分「抓取权限」与「内容可解析性」两个层面回答。
+  \item 如何判断一个内容团队是在「为 AI 写作」还是在「为人类写作」？两者会不会冲突，冲突时你怎么取舍？
+  \item 如果明天某个主流引擎宣布不再在答案中展示来源链接，你的 GEO 策略要改什么？请给出具体的调整顺序。
+\end{enumerate}
+\end{interview}
+
+\noindent\textbf{过渡。}
+GEO 讨论的是「不付费的可见性」——如何让引擎在合成答案时想到你、引用你。
+但可见性的另一半是\emph{可控的付费触达}：在搜索、视频与展示网络上，
+用竞价与出价策略精确购买意图。当自然点击被摘要侵蚀时，
+付费渠道的相对价值会上升，同时也更贵。下一章进入 \cref{ch:google}，
+讨论 Google Ads 与 YouTube 投流的账户结构、出价机制与素材体系，
+以及它与本章谈的自然可见性如何配合分担同一份用户意图。

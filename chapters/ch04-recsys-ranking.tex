@@ -1,0 +1,1535 @@
+\chapter{排序模型：从 LR 到多任务学习}
+\label{ch:ranking}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 召回已经交出几百到几千个候选，\textbf{精排到底在做什么决策}？它和召回的目标函数为什么必须不同？
+  \item 从 LR、GBDT+LR、FM 家族到 DIN、DIEN、DSIN，每一代模型的\textbf{真实增量来自哪里}——
+        是特征交叉能力、是序列建模能力，还是样本与目标定义的变化？
+  \item 一个页面同时要优化点击、加购、下单、停留时长，这些目标\textbf{天然互相冲突}，
+        为什么 Shared-Bottom 会「跷跷板」，MMoE 与 PLE 又各自付了什么代价？
+  \item 训练时用曝光日志、服务时按分数排序，\textbf{位置偏差}如何让模型变成「位置的复读机」，
+        PAL 又如何用一个乘性分解把它拆开？
+  \item pCTR 预估偏高 20\% 会带来什么后果，为什么「AUC 很好」不等于「概率可用」？
+  \item 模型越堆越深、特征越加越多，为什么线上反而更差？三个最常见的原因是什么？
+\end{enumerate}
+\end{insight}
+
+如果把推荐系统比作一条流水线，召回负责「别漏」，精排负责「排对」，重排负责「排得好看」。
+\cref{ch:recall} 讨论过：召回的目标是覆盖率，宁可把不确定的候选放进池子，
+也不能漏掉用户真正想要的那个；而精排的任务恰恰相反——它已经拿到了一个\textbf{容量受限}的小集合，
+必须在有限的展示位里，把用户最可能产生价值的候选挑出来并排在最前面。
+这个任务的本质是一次\textbf{收益最大化}：给定候选集 $\mathcal{C}$ 与展示位 $K$，选择排序 $\pi$ 使期望总效用最大。
+
+\begin{definition}[精排问题]
+给定用户 $u$、上下文 $c$、候选集合 $\mathcal{C} = \{i_1, \dots, i_n\}$（$n$ 为百级到千级），
+学习一个打分函数 $s_\theta(u, i, c)$，输出排序 $\pi$ 使得
+\begin{equation}
+\pi^\star = \argmax_{\pi \in \Pi_K} \; \E\Big[ \sum_{k=1}^{K} \; \mathrm{decay}(k) \cdot v\big(u, i_{\pi(k)}, c\big) \Big],
+\label{eq:ranking-objective}
+\end{equation}
+其中 $\mathrm{decay}(k)$ 是位置折损（越靠后价值越低），$v$ 是候选对业务的真实价值。
+\end{definition}
+
+这个定义里藏着一个行业里最容易被忽视的事实：\textbf{精排模型估的不是「用户喜不喜欢」，
+而是「$v$ 的期望」}。$v$ 可以是二值的点击（$v \in \{0,1\}$），
+也可以是多级的（曝光 0、点击 1、加购 3、下单 10），还可以是连续的（观看时长、GMV）。
+把 $v$ 定义清楚，比把网络加深两层重要得多。
+
+\begin{keypoint}[本章的主线]
+本章所有模型，都可以放在下面这条主线上理解：
+\textbf{（1）表达能力}（能不能拟合特征之间的高阶交叉）
+$\to$ \textbf{（2）个性化表达}（同样的特征对不同用户是否给出不同权重）
+$\to$ \textbf{（3）多目标结构}（多个目标如何共享又互不干扰）
+$\to$ \textbf{（4）偏差与校准}（训练分布与服务分布不一致时如何修正）
+$\to$ \textbf{（5）工程一致性}（离线与在线的特征、样本、数值是否对齐）。
+前四项是论文贡献的主战场，第五项才是线上收益的主战场。
+\end{keypoint}
+
+\section{问题定义与指标体系}
+
+\subsection{输入、输出与损失}
+
+精排模型的输入是一个\textbf{样本三元组}，输出是一个或多个标量概率。
+
+\begin{table}[htbp]
+\centering
+\caption{精排模型的输入特征与典型处理方式}
+\label{tab:feature-types}
+\small
+\begin{tabularx}{\dimexpr\textwidth-28pt\relax}{@{}L{1.9cm} L{3.0cm} L{2.9cm} Y@{}}
+\toprule
+\tabhead{特征类型} & \tabhead{典型字段} & \tabhead{常见编码} & \tabhead{坑与代价} \\
+\midrule
+用户侧静态 & 性别、年龄分桶、注册时长、会员等级 &
+one-hot / embedding & 基数小但长尾严重；分桶边界一旦改动，历史模型全部失效 \\
+\addlinespace
+用户侧动态 & 近 1/7/30 日点击率、加购数、品类偏好向量 &
+数值分桶 + embedding & 必须与线上同口径；窗口定义差 1 小时就会掉点 \\
+\addlinespace
+物品侧 & 类目、品牌、价格、CTR 后验、质量分 &
+embedding + 连续值 & 价格类特征需要分位数分桶（log 变换）否则分布漂移剧烈 \\
+\addlinespace
+交叉特征 & 用户品类 $\times$ 物品品类、年龄 $\times$ 价格带 &
+手工笛卡尔 / 模型自动 & 手工交叉是 LR 时代的核心工作量，也是维数爆炸的根源 \\
+\addlinespace
+序列特征 & 最近 $N$ 次点击/购买的 item id、类目、时长 &
+池化 / 注意力 / RNN & 存储与拼接成本高；长度截断策略直接影响效果上限 \\
+\addlinespace
+上下文 & 小时、星期、网络、机型、页面来源 &
+embedding & 训练与推理必须取同一时刻的值，否则构成时间穿越 \\
+\addlinespace
+位置 & 展示位次 $k$、是否有图、是否首屏 &
+embedding + 服务置零 & 训练可用、服务必须置零，否则排序被位置自我强化 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+输出侧，CTR 预估的标准做法是\textbf{二分类 + 交叉熵}：
+
+\begin{equation}
+\mathcal{L}_{\mathrm{CE}} = -\frac{1}{N}\sum_{j=1}^{N}\Big[ y_j \log \hat{p}_j + (1 - y_j)\log(1 - \hat{p}_j) \Big],
+\qquad \hat{p}_j = \sigmoid\big(s_\theta(x_j)\big).
+\label{eq:logloss}
+\end{equation}
+
+交叉熵的梯度有一个非常漂亮的解释，这也是它统治 CTR 领域二十年的原因。
+对单个样本，令 $z = s_\theta(x)$，则
+
+\begin{equation}
+\frac{\partial \mathcal{L}}{\partial z} = \hat{p} - y .
+\label{eq:logloss-grad}
+\end{equation}
+
+\begin{insight}[交叉熵梯度 $=$ 预估误差]
+\cref{eq:logloss-grad} 说明：逻辑回归的梯度就是\textbf{预估概率与真实标签之差}。
+预测错了（$y=1$ 但 $\hat{p}=0.01$）梯度接近 $-1$，更新幅度最大；
+预测对了（$y=1$ 且 $\hat{p}=0.99$）梯度接近 $0$，几乎不更新。
+这带来两个直接推论：
+\begin{enumerate}
+  \item \textbf{样本即权重}：每个样本对梯度的贡献与它的「惊讶程度」成正比，
+        因此重复曝光的高频负样本会主导训练——这就是负采样与样本降权必须存在的原因；
+  \item \textbf{校准天然有偏}：如果训练集的正负比例被采样改变（例如负采样只保留 $1/10$），
+        梯度会系统性地把 $\hat{p}$ 推低，产出的是「相对序」而不是「绝对概率」。
+        后续的校准一节就是处理这个问题。
+\end{enumerate}
+\end{insight}
+
+\subsection{指标体系：AUC、GAUC 与 LogLoss 的分工}
+
+\begin{table}[htbp]
+\centering
+\caption{精排离线指标的分工与常见误读}
+\label{tab:ranking-metrics}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{3.2cm} L{2.4cm} Y}
+\toprule
+\tabhead{指标} & \tabhead{定义要点} & \tabhead{敏感于} & \tabhead{常见误读} \\
+\midrule
+\metric{AUC} &
+任意取一正一负，正样本分数更高的概率；等价于 $\Prob(\hat{p}_+ > \hat{p}_-)$ &
+全局排序能力 & 全站混算，被高频低价值曝光主导；AUC 涨 0.002 可能只来自尾部类目 \\
+\addlinespace
+\metric{GAUC} &
+按用户/会话分组，组内算 AUC 再按权重平均，即 $\AUC_u$ 的加权平均 &
+组内排序能力 & 权重 $w_u$ 取曝光数会让大流量用户主导；取 $1$ 又让小样本用户噪声放大 \\
+\addlinespace
+\metric{LogLoss} &
+\cref{eq:logloss}，衡量概率的准确性 &
+概率校准度 & LogLoss 好不代表排序好，也不代表能直接用于出价 \\
+\addlinespace
+\metric{PR-AUC} &
+查准与查全曲线的下面积，对正例稀缺更敏感 &
+头部质量 & 正例率低于 $1\%$ 时比 AUC 更能反映头部表现 \\
+\addlinespace
+\metric{Calibration} &
+预测均值 $\bar{\hat{p}}$ 与真实 CTR $\bar{y}$ 的偏差 &
+绝对概率 & 「校准好」只说明均值对，分桶内部仍可能严重畸变 \\
+\addlinespace
+\metric{NDCG@K} &
+带折损的排序质量，即 $\sum_{k} (2^{rel_k}-1)$ 除以 $\log_2(k+1)$ 后求和 &
+顶部位次 & 需要相关性分级标注，CTR 二值标签下退化为位置加权 AUC \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+AUC 与 GAUC 的差别值得单独说。假设站内有两个用户：用户 A 的会话里有 50 个候选，
+用户 B 只有 3 个。全站 AUC 会把 A 的 50 个候选与 B 的 3 个候选放在同一个池子里比较正负对，
+结果是——\textbf{大流量用户决定了指标}。而业务关心的是「每个用户自己的列表排得好不好」，
+这正是 GAUC 的定义：
+
+\begin{equation}
+\metric{GAUC} = \frac{\sum_{u \in \mathcal{U}} w_u \cdot \AUC_u}{\sum_{u \in \mathcal{U}} w_u},
+\qquad
+\AUC_u = \frac{1}{|\mathcal{P}_u| \cdot |\mathcal{N}_u|}
+\sum_{p \in \mathcal{P}_u}\sum_{q \in \mathcal{N}_u} \mathbf{1}\big[\hat{p}_{u,p} > \hat{p}_{u,q}\big],
+\label{eq:gauc}
+\end{equation}
+
+其中 $\mathcal{P}_u$ 与 $\mathcal{N}_u$ 分别是用户 $u$ 的正负样本集合。
+工程实践里 $w_u$ 常用 $\min(\text{曝光数}, C)$ 截断，避免极端头部用户吃满权重；
+同时必须过滤掉「只有单类样本」的会话（$\AUC_u$ 无定义）。
+
+\begin{pitfall}[离线指标涨、线上不涨的四种精排特因]
+\begin{enumerate}
+  \item \textbf{GAUC 没涨而 AUC 涨了}：提升来自跨用户的偏好校准（例如模型学会了「女装用户点击率普遍高」），
+        但排序发生在单个用户的列表内部，这部分能力对最终排序毫无贡献；
+  \item \textbf{训练样本带位置偏差}：模型学到的是「第 1 位点击率高」，离线评估时位置特征仍在，
+        AUC 自然好看，线上置零后能力消失；
+  \item \textbf{特征穿越}：训练样本用了曝光之后才产生的特征（例如用户这次会话后续的行为统计），
+        离线指标虚高，线上该特征永远拿不到；
+  \item \textbf{级联上限}：精排提升的是「已曝光候选」的排序，如果召回没有覆盖用户真正想要的物品，
+        精排再准也无从体现，表现为「离线涨点全部被大盘吸收」。
+\end{enumerate}
+排查顺序建议：先查 3（特征口径 diff），再查 2（位置偏差实验），再查 1（分群指标拆解），最后归因 4。
+\end{pitfall}
+
+\section{LR 与 GBDT+LR：特征工程时代}
+
+\subsection{逻辑回归：一个仍然不可替代的基线}
+
+\term{逻辑回归}{Logistic Regression, LR} 把特征线性组合后过一个 sigmoid：
+
+\begin{equation}
+\hat{p} = \sigmoid\Big( w_0 + \sum_{j=1}^{d} w_j x_j \Big),
+\qquad
+\hat{p} = \frac{1}{1 + \exp\big(-(w_0 + \bm{w}\T \bm{x})\big)} .
+\label{eq:lr}
+\end{equation}
+
+它的优点是记忆性强、可解释、训练快、增量更新容易（配合 FTRL-Proximal
+还能得到极稀疏的解，见 \cite{mcmahan2013ftrl}）。
+它的致命缺陷是\textbf{只建模线性加权，不会自动做特征交叉}。
+「25 岁以下」与「篮球鞋」单独看都是弱特征，
+只有组合起来才是强特征——而 LR 要表达这个组合，
+必须在特征工程阶段显式构造 $x_{\text{age}<25} \cdot x_{\text{basketball}}$ 这样的乘积项。
+
+这就是 2010 年前后工业界的真实工作状态：算法工程师 80\% 的时间在做特征组合，
+特征规模从百万级膨胀到十亿级稀疏特征。它带来三个恶果：
+（1）组合爆炸，人工枚举不可能覆盖高阶交叉；
+（2）稀有组合的样本量不足，权重估计方差极大；
+（3）新特征从提出到上线周期以周计。
+
+\subsection{GBDT+LR：用树做交叉，用 LR 做校准}
+
+Facebook 在 2014 年公开的 GBDT+LR \cite{he2014practical} 给出了一个优雅的解法，它把任务拆成两段：
+
+\begin{itemize}
+  \item \textbf{GBDT 段}：用梯度提升树在原始特征上做非线性变换。
+        每棵树的每个叶子节点代表原始特征空间中的一个\textbf{区域}（一种特征组合），
+        样本落到哪个叶子就是一个二值指示特征。
+        所有树的叶子拼起来，就得到一条高维稀疏的 0/1 向量；
+  \item \textbf{LR 段}：把这条稀疏向量当作输入，训练逻辑回归。
+\end{itemize}
+
+\begin{formulacard}[GBDT+LR 的形式化]
+设第 $m$ 棵树有 $L_m$ 个叶子，第 $m$ 棵树把样本 $x$ 映射到叶子编号 $\ell_m(x) \in \{1,\dots,L_m\}$，
+则送入 LR 的特征为
+\begin{equation}
+\phi(x) = \Big[ \mathbf{1}\big[\ell_1(x)=1\big], \dots, \mathbf{1}\big[\ell_1(x)=L_1\big], \;
+\mathbf{1}\big[\ell_2(x)=1\big], \dots, \mathbf{1}\big[\ell_M(x)=L_M\big] \Big]\T \in \{0,1\}^{\sum_m L_m},
+\label{eq:gbdt-lr}
+\end{equation}
+最终预估值 $\hat{p} = \sigmoid\big(\bm{w}\T \phi(x)\big)$。
+注意 LR 的每一维权重对应「一个树叶子区域」的贡献，因此模型仍然是可解释的：
+可以回溯到「落在第 3 棵树的第 7 个叶子」这个具体条件组合。
+\end{formulacard}
+
+为什么这套组合在当年有效？
+
+\begin{enumerate}
+  \item \textbf{树天然做非线性交叉}：一次深度为 $d$ 的树路径就是 $d$ 个条件判断的合取，
+        等价于 $d$ 阶特征交叉，且是数据驱动的、自动搜索的；
+  \item \textbf{树对连续值鲁棒}：不需要人工分桶，分裂点由数据决定；
+  \item \textbf{LR 负责校准与融合}：树输出的叶子指示本身没有概率意义，
+        LR 在叶子特征上做加权求和与 sigmoid，输出的才是可用概率；
+  \item \textbf{训练可分离}：GBDT 与 LR 可以分别训练，GBDT 甚至可以离线为新特征离线重跑，
+        工程上比端到端训练容易落地得多。
+\end{enumerate}
+
+\begin{pitfall}[GBDT+LR 的三个隐性成本]
+\begin{enumerate}
+  \item \textbf{树是「硬」划分}：样本要么落进叶子、要么不落，没有平滑。
+        相邻叶子之间不共享统计强度，稀有组合所在的叶子样本极少，权重估计极不稳定；
+  \item \textbf{GBDT 部分无法在线增量更新}：树的叶子编号会随增量重训而全部改变，
+        原有的 LR 权重立刻失效，因此必须「GBDT 冻结 + LR 增量」或「全量重训」；
+  \item \textbf{表达能力仍有上限}：树的深度与数量受显存和推理延迟限制，
+        而叶子特征维度 $\sum_m L_m$ 往往上万维，稀疏且低效。
+        本质问题是：\textbf{特征交叉被离散化为「有没有落进同一个格子」，
+        而不是被表示成一个可学习的连续权重}。
+\end{enumerate}
+这个「离散 vs 连续」的张力，直接催生了 FM 家族。
+\end{pitfall}
+
+\section{因子分解机家族：从 FM 到 xDeepFM}
+
+\subsection{FM：二阶交叉的线性复杂度}
+
+\term{因子分解机}{Factorization Machine, FM} 由 Rendle 提出 \cite{rendle2010fm}，
+动机是同时解决两个问题：二阶交叉的表达能力，与稀疏数据下的泛化能力。
+
+朴素二阶多项式模型写作：
+
+\begin{equation}
+\hat{y}_{\mathrm{poly}} = w_0 + \sum_{i=1}^{d} w_i x_i + \sum_{i=1}^{d}\sum_{j=i+1}^{d} w_{ij} x_i x_j .
+\label{eq:poly2}
+\end{equation}
+
+问题在于 $w_{ij}$ 有 $O(d^2)$ 个参数，而大多数 $(i,j)$ 组合在数据中从未共现
+（例如「凌晨 3 点 + 某小众品牌」），$w_{ij}$ 永远得不到有效训练。
+
+FM 的核心假设是\textbf{低秩}：交叉权重矩阵 $W = (w_{ij})$ 可以分解为
+$W = V V\T$，其中 $V \in \R^{d \times k}$，$k \ll d$。
+于是每个特征 $i$ 有一个 $k$ 维隐向量 $\bm{v}_i$，
+交叉权重被参数化为两个隐向量的内积：
+
+\begin{equation}
+\hat{y}_{\mathrm{FM}} = w_0 + \sum_{i=1}^{d} w_i x_i
++ \sum_{i=1}^{d}\sum_{j=i+1}^{d} \inner{\bm{v}_i}{\bm{v}_j} \, x_i x_j .
+\label{eq:fm}
+\end{equation}
+
+朴素计算是 $O(k d^2)$，但利用内积的对称性可以做代数恒等变形，把它降到 $O(k d)$：
+
+\begin{equation}
+\sum_{i=1}^{d}\sum_{j=i+1}^{d} \inner{\bm{v}_i}{\bm{v}_j} x_i x_j
+= \frac{1}{2}\left[ \Big\| \sum_{i=1}^{d} \bm{v}_i x_i \Big\|^2
+- \sum_{i=1}^{d} \norm{\bm{v}_i}^2 x_i^2 \right] .
+\label{eq:fm-linear}
+\end{equation}
+
+\begin{formulacard}[FM 二阶项的线性化（必背推导）]
+\begin{align}
+\sum_{i=1}^{d}\sum_{j=i+1}^{d} \inner{\bm{v}_i}{\bm{v}_j} x_i x_j
+&= \frac{1}{2}\left[ \sum_{i}\sum_{j} \inner{\bm{v}_i}{\bm{v}_j} x_i x_j
+   - \sum_{i} \inner{\bm{v}_i}{\bm{v}_i} x_i^2 \right] \notag \\
+&= \frac{1}{2}\left[ \sum_{i}\sum_{j}\sum_{f=1}^{k} v_{i,f} v_{j,f} x_i x_j
+   - \sum_{i}\sum_{f=1}^{k} v_{i,f}^2 x_i^2 \right] \notag \\
+&= \frac{1}{2}\sum_{f=1}^{k}\left[ \Big(\sum_{i} v_{i,f} x_i\Big)^2
+   - \sum_{i} v_{i,f}^2 x_i^2 \right] .
+\label{eq:fm-expand}
+\end{align}
+方括号内第一项是「先按特征求和、再平方」，只需求一次 $\sum_i v_{i,f} x_i$，
+复杂度从 $O(kd^2)$ 降到 $O(kd)$。\textbf{这是 FM 能在工业界活下来的唯一理由}。
+\end{formulacard}
+
+\begin{insight}[低秩假设的代价]
+低秩假设带来两件事：泛化与表达上界。
+泛化是好的——即使 $(i,j)$ 从未共现，只要 $i$ 与 $j$ 分别与其他特征共现过，
+$\bm{v}_i$ 与 $\bm{v}_j$ 就已经被训练，可以给出合理的先验交叉权重。
+代价是表达能力被 $k$ 卡住：真实世界的高阶交叉模式未必落在低秩子空间里。
+这就是后续所有模型的工作方向——\textbf{在保留低秩泛化的同时，补回高频组合的记忆能力}。
+一个重要的实践细节：$k$ 的取值通常在 4--32 之间；$k$ 太小表达不足，
+$k$ 太大在稀疏数据上过拟合，且在 one-hot 输入下等价于让每个特征与所有特征自由交叉。
+\end{insight}
+
+\subsection{FFM：引入 Field 概念}
+
+FM 中每个特征只有一个隐向量，意味着\textbf{该特征与任何其他特征交叉时用的是同一个表示}。
+但直觉上「性别」在与「品类」交叉时关注的维度，和与「价格带」交叉时关注的维度并不相同。
+
+\term{域感知因子分解机}{Field-aware Factorization Machine, FFM} \cite{juan2017ffm}
+把特征按语义分组为「域」（field，如用户域、物品域、上下文域），
+每个特征对每个域各有一组隐向量：
+
+\begin{equation}
+\hat{y}_{\mathrm{FFM}} = w_0 + \sum_{i=1}^{d} w_i x_i
++ \sum_{i=1}^{d}\sum_{j=i+1}^{d} \inner{\bm{v}_{i, f_j}}{\bm{v}_{j, f_i}} \, x_i x_j ,
+\label{eq:ffm}
+\end{equation}
+
+其中 $f_j$ 是特征 $j$ 所属的域，$\bm{v}_{i,f_j}$ 表示「特征 $i$ 在与域 $f_j$ 的特征交叉时」使用的隐向量。
+
+\begin{table}[htbp]
+\centering
+\caption{FM 家族的表达能力与代价对照（参数规模按 $d$ 特征、$F$ 个域、$k$ 维隐向量估算）}
+\label{tab:fm-family}
+\small
+\begin{tabularx}{\dimexpr\textwidth-16pt\relax}{@{}L{1.7cm} L{2.15cm} L{2.05cm} Y@{}}
+\toprule
+\tabhead{模型} & \tabhead{交叉方式} & \tabhead{参数规模} & \tabhead{取舍与适用场景} \\
+\midrule
+LR & 无自动交叉 & $O(d)$ & 极快、可解释；完全依赖人工特征工程 \\
+\addlinespace
+Poly2 & 显式二阶，稠密 & $O(d^2)$ & 稀疏数据下大量 $w_{ij}$ 训练不足，几乎不可用 \\
+\addlinespace
+FM & 隐式二阶，低秩共享 & $O(dk)$ & 泛化好、线性复杂度；无法表达域相关的交叉差异 \\
+\addlinespace
+FFM & 隐式二阶，域感知 & $O(dkF)$ & 效果通常优于 FM，但参数量涨 $F$ 倍，训练慢、易过拟合，需早停 \\
+\addlinespace
+AFM & 二阶项加注意力权重 & $O(dk)$ & 给每个交叉项学一个重要性权重，可解释；仍是二阶 \\
+\addlinespace
+DeepFM & FM 二阶 $+$ 深层隐式高阶 & $O(dk)$ + MLP & 共享 Embedding，端到端；高阶部分不可解释 \\
+\addlinespace
+xDeepFM & 压缩交互网络显式高阶 & $O(dk)$ + CIN & 显式建模任意阶、向量级交叉；CIN 计算量随阶数增长 \\
+\addlinespace
+DCN/DCNv2 & 交叉网络显式高阶 & $O(d \cdot L_c)$ & 每层保留原始特征，参数量线性；结构简洁、稳定易调 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+FFM 的代价很直接：参数量是 FM 的 $F$ 倍。当域数 $F$ 在 10--30 量级、
+特征数 $d$ 在百万量级时，隐向量表的显存会迅速吃掉预算。
+更重要的是训练数据量必须跟上参数增长，
+否则每个 $\bm{v}_{i,f}$ 分到的样本更少，方差更大——这是典型的「参数越多越难训」。
+
+\subsection{从 Wide\&Deep 到 DeepFM：记忆与泛化的分工}
+
+Google 的 \term{Wide\&Deep}{Wide \& Deep Learning} \cite{cheng2016widendeep} 给了
+一个至今仍然被反复引用的框架：把模型拆成\textbf{记忆（Memorization）}与\textbf{泛化（Generalization）}两支。
+
+\begin{itemize}
+  \item \textbf{Wide 侧}：$\bm{w}_{\text{wide}}\T [\bm{x}, \phi(\bm{x})] + b$，
+        其中 $\phi(\bm{x})$ 是人工构造的交叉特征（论文中为「已安装应用 $\times$ 曝光应用」这类笛卡尔积）。
+        这一侧是线性模型，负责\textbf{记住}高频共现的组合；
+  \item \textbf{Deep 侧}：把稀疏类别特征转成 embedding，拼接后过 MLP，
+        负责\textbf{泛化}到训练中未见过或低频的组合。
+  \item \textbf{联合训练}：$\hat{p} = \sigmoid\big(\bm{w}_{\text{wide}}\T[\bm{x},\phi(\bm{x})]
+        + \bm{w}_{\text{deep}}\T a^{(l_f)} + b\big)$，
+        用同一个 LogLoss 做联合反向传播（注意不是分别训练再融合）。
+\end{itemize}
+
+\begin{equation}
+\hat{p}_{\mathrm{W\&D}} = \sigmoid\Big( \underbrace{\bm{w}_{\text{wide}}\T [\bm{x}, \phi(\bm{x})]}_{\text{记忆}}
++ \underbrace{\bm{w}_{\text{deep}}\T a^{(l_f)} + b}_{\text{泛化}} \Big).
+\label{eq:widendeep}
+\end{equation}
+
+Wide\&Deep 的遗留问题是：\textbf{Wide 侧仍然需要人工设计 $\phi(\bm{x})$}。
+对于候选成千上万的推荐场景，逐对枚举交叉特征的代价不可接受。
+DeepFM \cite{guo2017deepfm} 的贡献就是用 FM 替换 Wide 侧，
+同时让 FM 与 Deep 共享同一份 embedding：
+
+\begin{equation}
+\hat{p}_{\mathrm{DeepFM}} = \sigmoid\Big(
+\underbrace{w_0 + \sum_i w_i x_i + \sum_{i<j}\inner{\bm{v}_i}{\bm{v}_j} x_i x_j}_{\text{FM 部分（二阶显式）}}
++ \underbrace{\MLP\big(\concat[\bm{e}_1,\dots,\bm{e}_d]\big)}_{\text{Deep 部分（高阶隐式）}} \Big).
+\label{eq:deepfm}
+\end{equation}
+
+共享 embedding 是一个经常被低估的设计：
+
+\begin{insight}[共享 Embedding 的双重作用]
+如果 FM 与 Deep 各自维护一份 embedding 表，会发生两件坏事：
+（1）显存与训练开销翻倍；
+（2）两套表示各自被自己的梯度拉扯，可能收敛到互不一致的语义空间，
+而最终预估值又要相加，造成耦合噪声。
+共享一份 embedding 后，FM 的\textbf{二阶显式梯度}与 Deep 的\textbf{高阶隐式梯度}同时作用于同一张表，
+相当于给低维表示加了多任务正则，客观上起到了稳定训练的作用。
+代价是两侧的最优表示维度可能不同——实践中 $k$ 通常取 8--16，
+再深的高阶部分用同样的 $k$ 拼接，容量略显紧张。
+\end{insight}
+
+\subsection{xDeepFM 与 DCN：显式高阶交叉的两种路线}
+
+FM 只到二阶，DeepFM 的高阶部分在 MLP 中「隐式」完成——
+没有人能说清第 3 层第 5 个神经元到底代表了什么交叉。
+\term{压缩交互网络}{Compressed Interaction Network, CIN}（xDeepFM）
+与 \term{深度交叉网络}{Deep \& Cross Network, DCN} 分别给出了两条显式高阶路线。
+
+CIN 在第 $l$ 层维护一个张量 $X^l \in \R^{H_l \times d}$，
+通过与第 $0$ 层（原始 embedding 矩阵）做外积并压缩，显式构造 $l+1$ 阶交叉：
+
+\begin{equation}
+X^{l+1}_{h,:} = \sum_{i=1}^{H_l}\sum_{j=1}^{d}
+W^{l,h}_{i,j} \big( X^{l}_{i,:} \circ X^{0}_{j,:} \big),
+\label{eq:cin}
+\end{equation}
+
+其中 $\circ$ 表示逐元素乘。这个设计的代价是：每层要做 $H_l \times d$ 次外积再压缩，
+计算量随阶数增长，显存占用大，实践中 $H_l$ 一般取 100--200、
+层数取 2--3 就已收益递减。
+
+DCN（以及后来的 DCNv2 \cite{wang2021dcn}）走的是另一条路。
+交叉层保留原始输入 $\bm{x}_0$：
+
+\begin{equation}
+\bm{x}_{l+1} = \bm{x}_0 \odot \big( W_l \bm{x}_l + \bm{b}_l \big) + \bm{x}_l ,
+\label{eq:dcn}
+\end{equation}
+
+其中 $\odot$ 是逐元素乘。逐元素乘等价于「每个维度与原始特征的所有维度做一次加权交叉」，
+参数量只有 $O(d \cdot L_c)$，比 CIN 轻得多。
+DCNv2 进一步把 $W_l$ 分解为低秩形式 $W_l = U_l V_l\T$（$U_l, V_l \in \R^{d \times r}$），
+并提出「混合专家式」的交叉层，让不同的专家负责不同的交叉模式。
+
+\begin{casebox}[案例：Google Wide\&Deep 的公开实验结论]
+Wide\&Deep 论文 \cite{cheng2016widendeep} 中报告了 Google Play 的线上 A/B 结果：
+相对仅 Wide 与仅 Deep 的对照组，联合模型在应用获取率上取得了提升
+（论文给出的是相对提升的百分比量级，不构成可直接迁移的绝对数字）。
+更值得注意的是论文披露的\textbf{工程细节}：
+\begin{enumerate}
+  \item \textbf{训练用「连续训练 + 冷启动」}：新模型先用历史数据训练到收敛，
+        之后每天用新数据增量更新，避免每次全量重训带来的天级延迟；
+  \item \textbf{单个模型的服务延迟必须压住}：论文强调「多模型拼接」的组合方案会带来延迟与维护成本，
+        因此坚持单模型同时优化多个目标；
+  \item \textbf{Wide 侧的交叉特征用「用户已安装应用」与「曝光应用」的笛卡尔积}，
+        由离线 pipeline 生成，而不是在线上拼接。
+\end{enumerate}
+\textbf{启示}：Wide\&Deep 真正被工业界继承的，不是「wide 加 deep」这个形式，
+而是「记忆与泛化分工」这个思想，以及「少模型、低延迟、增量训练」的工程原则。
+\end{casebox}
+
+\begin{pitfall}[Embedding 维度爆炸与 OOV]
+\textbf{现象}：新模型上线后显存打满、推理延迟翻倍，且新物品的预估严重偏低。
+\textbf{根因}：
+（1）高基数特征（item id 级别，百万到千万量级）如果全部建 embedding，
+按 $\text{参数量} \times 4\,\text{字节}$ 估算，一千万个 id 乘 16 维就是 $1.6 \times 10^{8}$ 个浮点数，
+约 640\,MB，仅一张表；
+（2）哈希冲突或 OOV 桶（把未见过的 id 映射到同一个 \code{<UNK>} 桶）会让所有新物品共享同一表示，
+模型无法区分它们，表现为新物品的预估值被整体拉向均值。
+\textbf{排查方法}：
+（1）统计特征基数分布，对超过阈值的特征改用\textbf{哈希 + 分桶}或\textbf{类目级 embedding + 属性特征}；
+（2）为每个高基数特征单独保留 OOV 桶，并监控其命中率——命中率超过 5\% 说明词表更新滞后；
+（3）检查是否有 embedding 表使用率低于 10\% 的「僵尸维度」，
+这种表可以直接砍掉维度而几乎不损失效果。
+\end{pitfall}
+
+\section{深度兴趣建模：DIN、DIEN 与 DSIN}
+
+\subsection{DIN：注意力激活单元}
+
+DeepFM 类模型处理用户历史行为的方式非常粗暴：把历史物品的 embedding 做\textbf{求和或平均池化}，
+得到一个固定长度的用户兴趣向量，再与候选物品 embedding 拼接。
+
+这个做法有一个根本缺陷：\textbf{用户兴趣是多峰的，且与候选物品相关}。
+一个既买奶粉又买机械键盘的用户，其兴趣向量被平均后变成一个「母婴与外设的中间态」，
+对两类候选都表达不充分。更严重的是，平均池化\textbf{与候选无关}——
+不管候选是奶粉还是键盘，用户表示都是同一个。
+
+阿里的 \term{深度兴趣网络}{Deep Interest Network, DIN} \cite{zhou2018din} 的解法是
+让历史行为的聚合权重\textbf{依赖候选物品}。它引入 \term{激活单元}{Activation Unit}：
+
+\begin{equation}
+\bm{v}_u(i) = \sum_{j=1}^{L} a\big(\bm{e}_i, \bm{e}_j\big) \, \bm{e}_j ,
+\qquad
+a(\bm{e}_i, \bm{e}_j) = \frac{\exp\big( \bm{w}\T \relu( W_1 [\bm{e}_i, \bm{e}_j, \bm{e}_i - \bm{e}_j, \bm{e}_i \odot \bm{e}_j] + \bm{b}_1 ) \big)}
+{\sum_{l=1}^{L} \exp\big( \bm{w}\T \relu( W_1 [\bm{e}_i, \bm{e}_l, \bm{e}_i - \bm{e}_l, \bm{e}_i \odot \bm{e}_l] + \bm{b}_1 ) \big)},
+\label{eq:din}
+\end{equation}
+
+其中 $\bm{e}_i$ 是候选物品 embedding，$\bm{e}_j$ 是第 $j$ 条历史行为的物品 embedding，
+$L$ 是行为序列长度。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  bx/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7.5mm,
+             minimum width=2.0cm, inner sep=3pt},
+  au/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=7.5mm,
+             minimum width=2.3cm, inner sep=3pt},
+  ou/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7.5mm,
+             minimum width=2.0cm, inner sep=3pt}
+]
+\node[bx] (cand) {候选物品\\$\bm{e}_i$};
+\node[bx, below=8mm of cand] (h1) {历史行为 1\\$\bm{e}_1$};
+\node[bx, below=4mm of h1] (h2) {历史行为 2\\$\bm{e}_2$};
+\node[font=\sffamily\scriptsize, below=2mm of h2] (hdots) {$\vdots$};
+\node[bx, below=2mm of hdots] (hL) {历史行为 $L$\\$\bm{e}_L$};
+
+\node[au, right=12mm of h1] (a1) {Activation\\Unit};
+\node[au, right=12mm of h2] (a2) {Activation\\Unit};
+\node[au, right=12mm of hL] (aL) {Activation\\Unit};
+
+\node[ou, right=11mm of a2, minimum height=16mm, text width=2.1cm] (pool) {加权求和\\$\bm{v}_u(i)=\sum_j a_j \bm{e}_j$};
+\node[ou, above=7mm of pool] (cat) {拼接 + MLP};
+\node[ou, above=6mm of cat] (out) {$\hat{p}_{\mathrm{CTR}}$};
+
+\draw[-{Stealth}, SlateGray] (cand.east) -- ++(6mm,0) |- (a1.north west);
+\draw[-{Stealth}, SlateGray] (cand.east) -- ++(6mm,0) |- (a2.north west);
+\draw[-{Stealth}, SlateGray] (cand.east) -- ++(6mm,0) |- (aL.north west);
+\draw[-{Stealth}, SlateGray] (h1) -- (a1);
+\draw[-{Stealth}, SlateGray] (h2) -- (a2);
+\draw[-{Stealth}, SlateGray] (hL) -- (aL);
+\draw[-{Stealth}, SlateGray] (a1.east) -- ++(3mm,0) |- (pool.west);
+\draw[-{Stealth}, SlateGray] (a2) -- (pool);
+\draw[-{Stealth}, SlateGray] (aL.east) -- ++(3mm,0) |- (pool.west);
+\draw[-{Stealth}, SlateGray] (pool) -- (cat);
+\draw[-{Stealth}, SlateGray] (cat) -- (out);
+\end{tikzpicture}
+\caption{DIN 结构：候选物品参与历史行为的注意力打分，用户表示随候选变化}
+\label{fig:din}
+\end{figure}
+
+\begin{insight}[DIN 的本质是「用户表示随查询变化」]
+把 DIN 与双塔召回（\cref{ch:recall}）对照看会非常清晰：
+双塔要求用户表示\textbf{离线可预计算}，因此用户塔不能看到候选物品，
+这是双塔结构性缺陷的来源。
+DIN 放弃了「预计算」这个约束（精排本来就在线算），
+于是用户表示可以做成 $\bm{v}_u(i)$——\textbf{一个以候选为条件的函数}。
+这也解释了 DIN 论文为什么强调「DIN 不能用于召回」：
+一旦要在一千万候选上做最近邻检索，$\bm{v}_u(i)$ 就必须对每个候选重算，代价无法接受。
+工程上的折中是用 DIN 蒸馏一个双塔学生模型，让召回侧近似逼近精排的用户表示——
+这条「蒸馏 + 一致性」的思路见 \cref{ch:receng}。
+\end{insight}
+
+DIN 论文还有两个常被忽略的工程贡献，它们的价值甚至超过注意力结构本身：
+
+\begin{enumerate}
+  \item \textbf{自适应正则}：对 embedding 做 mini-batch aware 的 L2 正则，
+        只对当前 batch 中出现过的稀疏特征计算正则项，避免遍历全量参数。
+        在亿级参数表上，这把每步训练开销从「与参数量成正比」降到「与 batch 大小成正比」；
+  \item \textbf{数据自适应激活函数 Dice}：把 PReLU 的固定拐点改成由数据统计量决定，
+        对小批量噪声更鲁棒。
+\end{enumerate}
+
+\subsection{DIEN：兴趣的演化}
+
+DIN 把历史行为当成\textbf{无序集合}，忽略了一个事实：用户兴趣随时间演化。
+昨天在看婴儿车，今天在看儿童安全座椅——这两条行为不是并列的，后者更能预测下一跳。
+
+\term{深度兴趣演化网络}{Deep Interest Evolution Network, DIEN} \cite{zhou2019dien}
+用两层组件刻画这种演化：
+
+\begin{itemize}
+  \item \textbf{兴趣抽取层}：用 GRU 在行为序列上建模，
+        但\textbf{不是直接用 GRU 的隐状态}做用户表示。原因是 GRU 的隐状态只对「下一跳行为预测」负责，
+        不一定对「候选点击」负责。DIEN 因此引入\textbf{辅助损失}：
+        用第 $t$ 步的隐状态 $\bm{h}_t$ 去预测第 $t+1$ 步的真实行为 $\bm{e}_{t+1}$，
+        形式上 $\mathcal{L}_{\mathrm{aux}} = -\frac{1}{N}\sum \log \sigmoid(\bm{h}_t\T \bm{e}_{t+1})$，
+        只有落在真实物品上的正类，负类来自随机负采样。
+        这保证了 $\bm{h}_t$ 确实承载了「兴趣」而不是「序列噪声」；
+  \item \textbf{兴趣演化层}：用 AUGRU（带注意力更新门的 GRU）做序列聚合，
+        注意力分数 $a_t$ 由候选物品与 $\bm{h}_t$ 计算（与 DIN 同构），
+        并\emph{直接作用于更新门}：
+        $\tilde{\bm{u}}_t = a_t \cdot \bm{u}_t$，
+        隐状态更新为 $\bm{h}_t' = (1 - \tilde{\bm{u}}_t) \odot \bm{h}_{t-1}' + \tilde{\bm{u}}_t \odot \tilde{\bm{h}}_t$。
+        \textbf{这与 DIN 的 softmax 加权平均有本质区别}：
+        注意力乘在门上时，一条与候选不相关的历史不会「被平均掉」，
+        而是直接\textbf{阻断该步的信息流动}，历史建模的动态范围更大。
+\end{itemize}
+
+\subsection{DSIN：会话划分与「会话内兴趣」}
+
+DIEN 仍然把整条行为序列当成一个连续的演化过程，但真实行为序列常常是\textbf{分段}的：
+上午在挑办公椅，下午在看跑鞋，两段之间没有因果关系。
+强行用 GRU 跨段传递状态，会把上午的状态污染下午的表示。
+
+\term{深度会话兴趣网络}{Deep Session Interest Network, DSIN} \cite{pi2020dsin}
+的做法是先做\textbf{会话划分}：相邻行为间隔超过 30 分钟即切分为新会话
+（阈值是可配超参，不同业务最优值不同，需要用离线实验选）。
+之后三层处理：
+
+\begin{enumerate}
+  \item \textbf{会话内建模}：用带偏置编码的多头自注意力（Transformer 层）对会话内行为建模。
+        注意这里用自注意力而非 GRU，因为会话内行为长度短（通常 5--20 条）、
+        并行度高、且顺序信息用位置编码就够了；
+  \item \textbf{会话兴趣提取}：对会话表示做注意力池化，得到每个会话的兴趣向量，
+        这一步的作用是压掉会话内的噪声行为；
+  \item \textbf{会话间建模}：把所有会话兴趣向量再送一个 Bi-LSTM 建模会话间演化，
+        最后用由候选物品驱动的注意力（与 DIN 同构）融合所有会话兴趣。
+\end{enumerate}
+
+\begin{table}[htbp]
+\centering
+\caption{兴趣建模模型的对照：聚合方式决定了能力边界}
+\label{tab:interest-models}
+\small
+\begin{tabularx}{\textwidth}{L{1.5cm} L{2.6cm} L{2.3cm} Y}
+\toprule
+\tabhead{模型} & \tabhead{历史聚合} & \tabhead{是否依赖候选} & \tabhead{能力与限制} \\
+\midrule
+DeepFM & 简单求平均 & 否 & 用户表示固定；多峰兴趣被抹平 \\
+\addlinespace
+DIN & 注意力加权和 & 是 & 用户表示随候选变化；忽略行为顺序 \\
+\addlinespace
+DIEN & AUGRU 序列聚合 & 是 & 建模兴趣演化；GRU 串行，长序列训练慢 \\
+\addlinespace
+DSIN & 会话划分 + 会话内自注意力 + 会话间 Bi-LSTM & 是 & 显式利用会话结构；依赖会话切分阈值，多一层超参 \\
+\addlinespace
+BST & 全序列 Transformer & 是 & 并行度高、可扩展；长序列显存 $O(L^2)$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{BST 与自动交叉：Transformer 化的两条旁支}
+
+\term{行为序列 Transformer}{Behavior Sequence Transformer, BST} 的思路最直接：
+把用户行为序列当成一句话，候选物品当成 query，用标准 Transformer 编码器建模。
+它的价值不在结构新颖，而在于\textbf{把序列建模的统一范式（自注意力 + 位置编码）引入了精排}，
+并且实验上验证了两点工程经验：
+（1）序列长度收益在 10--50 之间快速饱和，再长需要更强的截断与去重策略；
+（2）位置编码对精排有帮助，说明「最近行为更重要」这个先验确实值得显式建模。
+BST 的代价是显存随序列长度平方增长，实践中通常在 50 以内截断，
+更长的序列需要走两阶段检索（见 \cref{ch:sequence}）。
+
+同一时期还有两条提升特征交叉的旁支，它们不涉及序列：
+\term{AutoInt}{Automatic Feature Interaction} 用\textbf{多头自注意力}在特征维度上做交互，
+让每个特征与其他所有特征交互，并用注意力权重提供可解释性；
+\term{FiBiNET}{Feature Importance and Bilinear interaction Network} 引入 SE 模块
+（Squeeze-and-Excitation，来自视觉领域）做特征重要性重加权，
+再用双线性函数替代内积计算交叉。二者的共同局限是：
+\textbf{交互阶数被固定为二阶或一层}，与 xDeepFM/DCN 的高阶路线相比，
+在特征空间复杂时不够；优势则是结构轻、可解释、易于与其他结构叠加。
+
+\section{多任务学习：结构决定冲突的形态}
+
+\subsection{为什么需要多任务}
+
+一个推荐页面上的行为是有层级的：曝光 $\to$ 点击 $\to$ 详情页 $\to$ 加购 $\to$ 下单 $\to$ 复购。
+如果只优化 CTR，模型会倾向于推荐「标题党」式的低质内容；
+如果只优化 CVR，模型会倾向于只推给「本来就会买」的高确定性人群，
+量级崩塌。业务真正要的是\textbf{多个目标的加权和}，
+而多任务学习（Multi-Task Learning, MTL）的基本假设是：
+多个相关任务共享底层表示，可以互相正则、互相补足数据稀疏。
+
+理想情况下 MTL 的收益来自三个机制（这是 Caruana 时代的经典论证）：
+\textbf{隐式数据增强}（每个任务为共享层提供额外监督信号）、
+\textbf{注意力聚焦}（共享层被迫学习对多个任务都有用的特征，抑制任务噪声）、
+\textbf{窃听（eavesdropping）}（任务 A 难以学习的特征，可以从任务 B 的表示中借用）。
+
+但现实中 MTL 经常失败，最典型的表现是\textbf{跷跷板（seesaw）}：
+CTR 涨了 CVR 掉了，或者反过来。
+
+\subsection{Shared-Bottom 与跷跷板的成因}
+
+最朴素的结构是 \term{共享底层}{Shared-Bottom}：
+所有任务共享若干层，之后分叉出各自的任务塔：
+
+\begin{equation}
+\hat{y}_t = f_t\big( g(\bm{x}) \big), \quad t = 1, \dots, T,
+\qquad
+\mathcal{L} = \sum_{t=1}^{T} \lambda_t \mathcal{L}_t ,
+\label{eq:shared-bottom}
+\end{equation}
+
+其中 $g$ 是共享层，$f_t$ 是任务塔，$\lambda_t$ 是任务权重。
+
+跷跷板的根因是\textbf{梯度冲突}。设共享层参数为 $\bm{\theta}$，
+任务 $t$ 的梯度为 $\bm{g}_t = \nabla_{\bm{\theta}} \mathcal{L}_t$，
+实际更新方向是 $\sum_t \lambda_t \bm{g}_t$。当两个任务的梯度夹角大于 $90^\circ$ 时（$\inner{\bm{g}_1}{\bm{g}_2} < 0$），
+它们的和向量可能对两个任务都是「坏方向」——这就是\textbf{负迁移}。
+数据越稀疏、任务相关性越低，梯度冲突越严重。
+
+\begin{itemize}
+  \item 相关性高的任务对（点击 vs 加购，都是「浅层兴趣」）通常能互相帮忙；
+  \item 相关性低的任务对（点击 vs 长期复购，前者由短期刺激驱动、后者由需求刚性驱动）
+        共享底层几乎必然出现跷跷板；
+  \item 样本量差异大的任务对（CTR 样本是 CVR 的几十倍）会让共享层实质上被 CTR 主导。
+\end{itemize}
+
+\subsection{MMoE：用门控做软性任务隔离}
+
+Google 的 \term{多门混合专家}{Multi-gate Mixture-of-Experts, MMoE} \cite{ma2018mmoe}
+把共享层拆成 $n$ 个\textbf{专家}（每个专家就是一个小 MLP），
+但\textbf{每个任务拥有自己的一套门控}：
+
+\begin{equation}
+\hat{y}_t = f_t\Big( \sum_{i=1}^{n} g_{t,i}(\bm{x}) \cdot h_i(\bm{x}) \Big),
+\qquad
+\bm{g}_t(\bm{x}) = \softmax\big( W_{g,t} \, \bm{x} \big),
+\label{eq:mmoe}
+\end{equation}
+
+其中 $h_i(\cdot)$ 是第 $i$ 个专家网络的输出，$W_{g,t} \in \R^{n \times d}$ 是任务 $t$ 的门控矩阵。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  inp/.style={draw=SlateGray, fill=RuleGray!40, rounded corners=2pt, minimum height=6.5mm,
+              minimum width=6.2cm, inner sep=3pt},
+  exp/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+              minimum width=1.55cm, inner sep=2pt},
+  gate/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=6.5mm,
+               minimum width=1.5cm, inner sep=2pt},
+  tower/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=6.5mm,
+                minimum width=1.6cm, inner sep=2pt}
+]
+% ---------------- left: MMoE ----------------
+\node[inp] (mmoe-in) at (0,0) {共享输入 $\bm{x}$};
+\foreach \i/\x in {1/-2.4, 2/-0.8, 3/0.8, 4/2.4}{
+  \node[exp] (me\i) at (\x,-1.35) {专家 \i};
+  \draw[-{Stealth}, SlateGray] (mmoe-in) -- (me\i);
+}
+\node[gate] (g1) at (-1.9,-2.7) {门控 1};
+\node[gate] (g2) at (1.9,-2.7) {门控 2};
+\draw[-{Stealth}, AmberDeep] (mmoe-in.south) ++(-1.9,0) -- (g1);
+\draw[-{Stealth}, AmberDeep] (mmoe-in.south) ++(1.9,0) -- (g2);
+\foreach \i in {1,2,3,4}{
+  \draw[-{Stealth}, RuleGray] (me\i) -- (g1);
+  \draw[-{Stealth}, RuleGray] (me\i) -- (g2);
+}
+\node[tower] (t1) at (-1.9,-4.1) {CTR 塔};
+\node[tower] (t2) at (1.9,-4.1) {CVR 塔};
+\draw[-{Stealth}, SlateGray] (g1) -- (t1);
+\draw[-{Stealth}, SlateGray] (g2) -- (t2);
+\node[font=\sffamily\bfseries\scriptsize, above=1mm of mmoe-in] {MMoE：专家共享，门控按任务独立};
+
+% ---------------- right: PLE ----------------
+\begin{scope}[xshift=9.1cm]
+\node[inp] (ple-in) at (0,0) {共享输入 $\bm{x}$};
+\node[exp, draw=CrimsonDeep, fill=white] (ce1) at (-2.5,-1.35) {CTR 专属};
+\node[exp, draw=CrimsonDeep, fill=white] (ce2) at (-1.2,-1.35) {CTR 专属};
+\node[exp] (se) at (0,-1.35) {共享专家};
+\node[exp, draw=CrimsonDeep, fill=white] (ce3) at (1.2,-1.35) {CVR 专属};
+\node[exp, draw=CrimsonDeep, fill=white] (ce4) at (2.5,-1.35) {CVR 专属};
+\foreach \n in {ce1,ce2,se,ce3,ce4}{\draw[-{Stealth}, SlateGray] (ple-in) -- (\n);}
+\node[gate] (pg1) at (-1.9,-2.7) {CTR 门控};
+\node[gate] (pg2) at (1.9,-2.7) {CVR 门控};
+\draw[-{Stealth}, AmberDeep] (ple-in.south) ++(-1.9,0) -- (pg1);
+\draw[-{Stealth}, AmberDeep] (ple-in.south) ++(1.9,0) -- (pg2);
+\draw[-{Stealth}, RuleGray] (ce1) -- (pg1);
+\draw[-{Stealth}, RuleGray] (ce2) -- (pg1);
+\draw[-{Stealth}, RuleGray] (se) -- (pg1);
+\draw[-{Stealth}, RuleGray] (se) -- (pg2);
+\draw[-{Stealth}, RuleGray] (ce3) -- (pg2);
+\draw[-{Stealth}, RuleGray] (ce4) -- (pg2);
+\node[tower] (pt1) at (-1.9,-4.1) {CTR 塔};
+\node[tower] (pt2) at (1.9,-4.1) {CVR 塔};
+\draw[-{Stealth}, SlateGray] (pg1) -- (pt1);
+\draw[-{Stealth}, SlateGray] (pg2) -- (pt2);
+\node[font=\sffamily\bfseries\scriptsize, above=1mm of ple-in] {PLE：专属专家 + 共享专家，门控只选本任务可见的专家};
+\end{scope}
+\end{tikzpicture}
+\caption{MMoE 与 PLE 的结构对比：PLE 通过「专属专家的梯度隔离」抑制跷跷板}
+\label{fig:mmoe-ple}
+\end{figure}
+
+MMoE 的机制解释是：门控实际上是\textbf{按样本、按任务}的软性专家选择。
+如果 CTR 与 CVR 需要不同的底层表示，两个门控可以学到不同的权重分布，
+从而让同样的专家对不同任务贡献不同。相比 Shared-Bottom 的「一刀切共享」，
+MMoE 提供了\textbf{表达上的柔性}。
+
+但 MMoE 有一个关键缺陷：所有专家对\textbf{所有任务都可见}。
+门控只是加权，不能完全阻断。当两个任务严重冲突时，
+梯度冲突仍然会通过共享专家传导——
+CVR 的梯度依然会修改 CTR 也在使用的那部分专家参数。
+
+\subsection{PLE：显式的任务隔离}
+
+腾讯的 \term{渐进式分层提取}{Progressive Layered Extraction, PLE} \cite{tang2020ple}
+针对的正是这一点。它的核心组件叫 \term{定制门控网络}{Customized Gate Control, CGC}：
+
+\begin{equation}
+\bm{g}^k(\bm{x}) = \softmax\Big( W_g^k \, \bm{x} \Big) \in \R^{m_k + m_s},
+\qquad
+\bm{y}^k(\bm{x}) = \sum_{i \in \mathcal{E}_k \cup \mathcal{S}} g_i^k(\bm{x}) \cdot h_i(\bm{x}) .
+\label{eq:cgc}
+\end{equation}
+
+这里的符号含义必须精确：任务 $k$ 有 $m_k$ 个\textbf{专属专家}
+（集合记为 $\mathcal{E}_k$）与 $m_s$ 个\textbf{共享专家}（集合记为 $\mathcal{S}$）。
+门控 $W_g^k$ 的维度只有 $m_k + m_s$，
+\textbf{只对本任务的专属专家与共享专家做 softmax}——
+其他任务的专属专家根本不在候选集合里。
+这在结构上实现了\textbf{梯度隔离}：
+
+\begin{equation}
+\frac{\partial \mathcal{L}_k}{\partial \bm{\theta}_{\text{expert } i}} = 0
+\quad \text{当 } i \notin \mathcal{E}_k \cup \mathcal{S},
+\qquad
+\frac{\partial \mathcal{L}_k}{\partial \bm{\theta}_{\mathcal{S}}} \ne 0 .
+\label{eq:ple-isolation}
+\end{equation}
+
+也就是说：\textbf{任务的专属专家只被自己的损失更新（纯隔离），共享专家被所有任务更新（软共享）}。
+冲突被限制在共享专家这一小部分容量里，其余容量由各任务独占。
+
+PLE 的第二层是「多级提取」：把上一级的输出再送入下一级专家，
+逐层把低层表示精炼为任务特定表示。
+这与 Shared-Bottom 的「一层共享、之后分叉」形成对比——
+共享程度是\textbf{逐层渐进降低}的，因此得名「渐进式」。
+
+\begin{keypoint}[MMoE 与 PLE 的一句话区别]
+\textbf{MMoE 是「所有专家对所有任务可见，用门控加权区分」；
+PLE 是「专属专家只听自己任务的梯度，共享专家才被所有任务共同更新」。
+前者是软性表达柔性，后者是显式梯度隔离。}
+在任务相关性高、样本量充足的场景，二者的差距通常不大；
+真正拉开差距的是\textbf{任务冲突剧烈 + 其中一个任务样本稀疏}的组合，
+此时 MMoE 的共享专家容易被大任务主导，PLE 的隔离更有效。
+代价上，PLE 需要更多专家（每任务 $m_k$ 个），
+在专家总数、显存与推理延迟上都要多付一份成本，
+且超参更多（$m_k$、$m_s$、层数），调参成本明显更高。
+\end{keypoint}
+
+\begin{table}[htbp]
+\centering
+\caption{多任务结构的对比：共享粒度决定冲突形态}
+\label{tab:mtl-structures}
+\small
+\begin{tabularx}{\dimexpr\textwidth-28pt\relax}{@{}L{1.8cm} L{2.2cm} L{1.95cm} Y@{}}
+\toprule
+\tabhead{结构} & \tabhead{共享粒度} & \tabhead{抗冲突能力} & \tabhead{代价与适用性} \\
+\midrule
+Shared-Bottom & 全共享 & 弱 & 参数最少、延迟最低；任务相关性低时跷跷板明显，适合任务高度同质的场景 \\
+\addlinespace
+MMoE & 专家共享 $+$ 任务门控 & 中 & 参数量随专家数线性增长；门控只能加权不能阻断，冲突剧烈时仍互相干扰 \\
+\addlinespace
+PLE & 专属专家 $+$ 共享专家 & 强 & 专家更多、延迟更高、超参更多；适合目标冲突明显且样本量足够的成熟系统 \\
+\addlinespace
+ESMM & 全共享 $+$ 概率链式约束 & 中（结构型） & 不解决梯度冲突，而是修正样本空间；CTCVR 由 pCTR 与 pCVR 相乘得到 \\
+\addlinespace
+SNR / 序列依赖 & 任务间加显式依赖 & 中 & 用 $\hat{p}_{\mathrm{CVR}}$ 作为 CTR 塔的输入特征；可缓解但引入级联误差 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{ESMM：从「模型结构」转到「样本空间」}
+
+前面所有方法都在模型结构上做文章，而阿里的 \term{全空间多任务模型}{Entire Space Multi-Task Model, ESMM}
+（公开文献中也常写作 ESSM）走的是一条完全不同的路线——
+它指出 CVR 建模的真正困难\textbf{不是模型结构，而是样本空间}。
+
+问题的准确表述是：
+\begin{enumerate}
+  \item \textbf{样本选择偏差}（Sample Selection Bias, SSB）：
+        CVR 模型的训练样本只有「点击过的样本」，而线上要对\textbf{所有曝光}做 CVR 预估。
+        点击样本是高转化倾向人群的有偏子集，模型在这个子集上训练，
+        却在全曝光空间上服务，分布不一致；
+  \item \textbf{数据稀疏}（Data Sparsity）：
+        点击样本量比曝光样本量小 1--2 个数量级，
+        而 CVR 的正样本（下单）又只占点击样本的百分之几，
+        结果 CVR 的正样本数量可能只有 CTR 正样本的千分之一量级，
+        使得 embedding 训练严重不足。
+\end{enumerate}
+
+ESMM 的解法是：\textbf{不在点击空间上建模 CVR，而是建模 pCTCVR}。
+利用条件概率的恒等式
+
+\begin{equation}
+\Prob(\text{转化} \mid \text{曝光})
+= \underbrace{\Prob(\text{点击} \mid \text{曝光})}_{\mathrm{pCTR}}
+\;\times\;
+\underbrace{\Prob(\text{转化} \mid \text{点击}, \text{曝光})}_{\mathrm{pCVR}} ,
+\label{eq:essm-chain}
+\end{equation}
+
+模型在\textbf{全曝光空间}上训练 pCTR 与 pCTCVR 两个头，
+而 pCVR 是二者的\textbf{隐式中间量}：
+
+\begin{equation}
+\mathcal{L}_{\mathrm{ESMM}} = \sum_{j \in \mathcal{D}_{\text{曝光}}}
+\ell\big(y_j^{\mathrm{CTR}}, \hat{p}^{\mathrm{CTR}}_j\big)
++ \sum_{j \in \mathcal{D}_{\text{曝光}}}
+\ell\big(y_j^{\mathrm{CTCVR}}, \; \hat{p}^{\mathrm{CTR}}_j \cdot \hat{p}^{\mathrm{CVR}}_j \big),
+\label{eq:essm-loss}
+\end{equation}
+
+关键细节是：\textbf{CTCVR 的标签对全曝光样本都有定义}（未点击的样本 CTCVR 必然为 0），
+因此第二个求和可以在全曝光样本上进行。这同时解决了两个问题：
+pCVR 的共享底层在全曝光空间上被训练（缓解稀疏），
+且服务时使用的 $\hat{p}^{\mathrm{CVR}}$ 是在与线上一致的分布上估计的（缓解选择偏差）。
+
+\begin{insight}[ESMM 的巧妙之处与它的边界]
+ESMM 最漂亮的地方是\textbf{不改模型结构，只改训练标签的定义}——
+共享底层、两个塔，与 Shared-Bottom 无异，收益却来自「把 pCVR 约束在概率链上」。
+用一个比喻：它不是让两个学生分开学，而是要求两个学生的分数\textbf{乘起来必须等于总分}，
+于是各自都必须学得准。
+
+但它的边界同样清晰：
+\begin{itemize}
+  \item 它假设 $\mathrm{pCTCVR} = \mathrm{pCTR} \times \mathrm{pCVR}$ 严格成立，
+        这要求「点击」与「转化」的事件定义互斥且完整；
+        若存在\textbf{延迟转化}（用户点击后第 3 天才下单），
+        训练时样本的 CTCVR 标签是 0（因为归因窗口没到），
+        模型会把「晚转化」学成「不转化」，系统性低估 pCVR；
+  \item 它不解决 CTR 与 CVR 之间的梯度冲突，只解决样本空间问题。
+        实践中 \textbf{ESMM 与 MMoE/PLE 是正交的，可以叠加}：
+        用 PLE 做底层隔离，用 ESMM 做样本空间修正。
+\end{itemize}
+延迟转化与归因窗口的完整处理见 \cref{ch:admodel}。
+\end{insight}
+
+\section{多目标融合}
+
+预出多个目标的概率之后，还要把它们合并成一个排序分数。这一步看似简单，
+却是线上收益差异最大的环节之一。
+
+\subsection{加权求和与乘性融合}
+
+最常用的是线性加权：
+
+\begin{equation}
+\mathrm{Score} = \sum_{t=1}^{T} w_t \cdot \hat{p}_t ,
+\qquad \text{或} \qquad
+\mathrm{Score} = \hat{p}_{\mathrm{CTR}} \cdot \big( 1 + w_{\mathrm{cart}} \hat{p}_{\mathrm{cart}} + w_{\mathrm{buy}} \hat{p}_{\mathrm{buy}} \big).
+\label{eq:fusion-linear}
+\end{equation}
+
+更符合业务逻辑的是\textbf{乘性/链式融合}：
+点击是后续一切行为的前提，因此用「点击概率 $\times$ 点击后的期望价值」来排序，
+可以自然避免「高点击低转化」的物品被推到首位。金额类目标还应带上价格：
+
+\begin{equation}
+\mathrm{Score} = \hat{p}_{\mathrm{CTR}} \cdot \Big( \hat{p}_{\mathrm{CVR}} \cdot \text{price}
++ \hat{p}_{\mathrm{cart}} \cdot \text{cartValue} \Big) - \lambda \cdot \text{cost} .
+\label{eq:fusion-mult}
+\end{equation}
+
+\begin{pitfall}[手工权重调参的三个具体问题]
+\begin{enumerate}
+  \item \textbf{量纲不可比}：CTR 的典型量级是 $10^{-2}$，
+        CVR 是 $10^{-3}$，观看时长是 $10^{2}$ 秒。
+        直接加权求和等于让量级大的目标独占排序——必须先做归一化或统一到「金额」量纲；
+  \item \textbf{权重与流量结构耦合}：$w_{\mathrm{buy}}$ 调大后，
+        高转化倾向的老用户被优先，新用户曝光下降，
+        次日留存下滑，而权重是按当天 GMV 调的，形成短视优化；
+  \item \textbf{只有一维旋钮}：一排权重构成的是一维参数化曲线，
+        只能沿一条线移动，无法表达「某些用户看点击、某些用户看转化」这类分段策略。
+        例如高频老用户其实不需要点击激励，低频新用户更需要探索——
+        用一组全局权重无法同时满足。
+\end{enumerate}
+\textbf{正确的做法}是把权重变成\textbf{用户/上下文的函数} $w_t(u, c)$（即「融合层本身也是一个模型」），
+并为每个目标设定约束（例如「转化率不低于基线」），转为约束优化问题。
+\end{pitfall}
+
+\subsection{约束优化与帕累托前沿}
+
+把多目标融合写成约束形式更贴近业务语言：
+
+\begin{equation}
+\max_{\pi} \; \E\big[ \mathrm{GMV}(\pi) \big]
+\quad \text{s.t.} \quad
+\E\big[ \mathrm{CTR}(\pi) \big] \ge \mathrm{CTR}_0, \quad
+\E\big[ \mathrm{Dwell}(\pi) \big] \ge D_0, \quad
+\mathrm{Latency}(\pi) \le L_0 .
+\label{eq:fusion-constrained}
+\end{equation}
+
+用拉格朗日乘子把约束吸收进目标，得到
+$\max \; \mathrm{GMV} + \sum_j \lambda_j (g_j - g_j^0)$，
+其中 $\lambda_j$ 就是「约束的影子价格」。
+这给出了一条比手调权重更有原则的路径：
+权重不是拍脑袋定的，而是\textbf{由约束的松紧度决定的}——
+当 CTR 距离下界很远时 $\lambda_{\mathrm{CTR}}$ 自动变小，反之变大。
+工程实现上常用「在线反馈控制」：监测各目标是否触线，用 PID 或简单的乘性调整在线更新 $\lambda_j$。
+
+\subsection{排序学习：直接优化列表}
+
+加权融合是 pointwise 的，它假设「每个候选独立打分，排序自然最优」。
+但排序指标（NDCG、GAUC）本身是\textbf{列表级}、\textbf{不可分解}的，
+pointwise 优化与列表指标之间存在目标错位。\term{排序学习}{Learning to Rank, LTR}
+提供了三条更贴近目标的路线（详见 \cref{ch:search}）：
+
+\begin{itemize}
+  \item \textbf{pointwise}：把每个候选当独立样本回归/分类（$\mathcal{L} = \sum \ell(y_i, s_i)$）。
+        实现最简单、可复用 CTR 全链路；缺点是忽略列表内相对关系；
+  \item \textbf{pairwise}：把样本组织成「A 应排在 B 前」的偏好对
+        （RankNet \cite{burges2005ranknet} 的交叉熵式损失、RankSVM \cite{joachims2006svmrank} 的 hinge 损失），
+        直接优化 AUC 类指标；代价是样本对数随列表长度平方增长，需要采样；
+  \item \textbf{listwise}：直接对列表分布建模（ListNet \cite{cao2007listnet} 用 softmax 把分数转成概率分布再算交叉熵），
+        理论最贴近 NDCG，但计算与实现复杂度最高。
+        工业界最常用的 LambdaMART \cite{wu2010lambdamart} 属于 pairwise 的一种，
+        但用 NDCG 的变化量 $|\Delta \mathrm{NDCG}|$ 作为 lambda 权重，
+        让「交换两个结果对指标影响大的样本对」获得更大梯度——
+        这是工程上性价比最高的一种「间接 listwise」。
+\end{itemize}
+
+\section{位置偏差与 PAL 消偏}
+
+\subsection{位置偏差的机制}
+
+\term{位置偏差}{Position Bias} 是推荐与广告系统中最顽固的偏差来源：
+同一个物品放在第 1 位比放在第 5 位的点击率可能高出数倍
+（位置效应在信息检索领域的经典研究可追溯到 \cite{varian2007position}）。
+如果直接用「按现有策略排序并记录曝光位」的日志训练，
+模型会学到「位次 1 是高点击信号」这样的虚假规律。
+
+问题可以被写成一个生成过程。用户的观察概率由\textbf{位置}决定，
+而点击概率是「被观察」与「被喜欢」的联合：
+
+\begin{equation}
+\Prob(\text{click} = 1 \mid u, i, k)
+= \underbrace{\Prob(\text{examined} = 1 \mid k)}_{\text{位置倾向 } \theta_k}
+\;\times\;
+\underbrace{\Prob(\text{click} = 1 \mid u, i, \text{examined})}_{\text{相关性 } \gamma_{u,i}} .
+\label{eq:position-pbm}
+\end{equation}
+
+这就是 \term{位置基础模型}{Position-Based Model, PBM}。
+朴素做法是把位置 $k$ 作为一个 embedding 特征喂给模型，
+希望模型自己分离出 $\theta_k$ 与 $\gamma_{u,i}$。但它行不通——
+\textbf{模型无法区分「因为位置高所以被点」和「因为物品好所以被点」}，
+两个效应在同一个 sigmoid 里被不可辨识地纠缠。
+更糟的是，线上服务时位置特征必须置零（因为候选是同时打分的，位次尚未确定），
+训练时学到的那部分「位置红利」在服务时变成纯粹的噪声。
+
+另外还有两种偏差常与位置偏差混淆：
+\term{展示偏差}{Exposure Bias}（用户只能点击已经展示出来的物品，
+所以「未曝光」不等于「不感兴趣」）与
+\term{选择偏差}{Selection Bias}（训练样本来自旧策略，与当前策略的分布不一致，
+可用 IPS/DR 等反事实方法修正 \cite{saito2020doubly}）。
+
+\subsection{PAL：位置感知学习及其推导}
+
+阿里的 \term{位置感知学习}{Position-Aware Learning, PAL} 的核心洞察是：
+\textbf{位置信息应该参与训练，但不应该以「加性特征」的方式参与}。
+它把打分函数分解为两个因子的乘积：
+
+\begin{equation}
+\hat{p}_{u,i,k} = \underbrace{\hat{p}^{\mathrm{rel}}_{u,i}}_{\text{与位置无关的相关性}}
+\;\times\;
+\underbrace{\hat{p}^{\mathrm{bias}}_{k}}_{\text{只与位置有关的位置倾向}} .
+\label{eq:pal-decomp}
+\end{equation}
+
+两个因子各自用独立的网络（通常共享底层特征表示）计算：
+
+\begin{align}
+\bm{z} &= \mathrm{Emb}\big(\bm{x}_{\text{user}}, \bm{x}_{\text{item}}, \bm{x}_{\text{ctx}}\big), \notag \\
+\hat{p}^{\mathrm{rel}}_{u,i} &= \sigmoid\big( \mathrm{MLP}_{\mathrm{rel}}(\bm{z}) \big), \qquad
+\hat{p}^{\mathrm{bias}}_{k} = \sigmoid\big( \mathrm{MLP}_{\mathrm{bias}}(\bm{e}_k) \big),
+\label{eq:pal-heads}
+\end{align}
+
+其中 $\mathrm{MLP}_{\mathrm{bias}}$ 的\textbf{输入只有位置 embedding} $\bm{e}_k$，
+不接触任何用户与物品特征。损失函数在\emph{乘积}上计算：
+
+\begin{equation}
+\mathcal{L}_{\mathrm{PAL}} = -\frac{1}{N}\sum_{j=1}^{N}
+\Big[ y_j \log\big( \hat{p}^{\mathrm{rel}}_{j} \cdot \hat{p}^{\mathrm{bias}}_{k_j} \big)
++ (1 - y_j)\log\big( 1 - \hat{p}^{\mathrm{rel}}_{j} \cdot \hat{p}^{\mathrm{bias}}_{k_j} \big) \Big]
++ \lambda \norm{\bm{\Theta}}_2^2 .
+\label{eq:pal-loss}
+\end{equation}
+
+为什么这个分解能同时学到位置与相关性？关键在\textbf{可辨识性}。
+在 PBM 假设（\cref{eq:position-pbm}）成立的条件下，
+真实生成过程就是「相关性 $\times$ 位置倾向」，
+而 PAL 的函数形式与生成过程\textbf{同构}——
+两个因子的乘积结构把「每个位置只有一组参数」这一强约束加进了模型，
+因此梯度有一个唯一的重构方向：只有让 $\hat{p}^{\mathrm{bias}}_k$ 去拟合各位置的平均点击率差异，
+才能解释数据中的位置效应。形式化地说，
+对于同一物品 $i$ 在位置 $k$ 与 $k'$ 上的曝光对数：
+
+\begin{equation}
+\log \frac{\hat{p}_{u,i,k}}{1 - \hat{p}_{u,i,k}}
+- \log \frac{\hat{p}_{u,i,k'}}{1 - \hat{p}_{u,i,k'}}
+= \underbrace{\Big[ \mathrm{logit}\,\hat{p}^{\mathrm{rel}}_{u,i} - \mathrm{logit}\,\hat{p}^{\mathrm{rel}}_{u,i} \Big]}_{=\,0}
++ \Big[ \mathrm{logit}\,\hat{p}^{\mathrm{bias}}_{k} - \mathrm{logit}\,\hat{p}^{\mathrm{bias}}_{k'} \Big] .
+\label{eq:pal-logit}
+\end{equation}
+
+也就是说：\textbf{同一物品在不同位置上的 logit 差异，被模型完全归因给位置因子}，
+相关性因子在相减中自动消掉。这正是我们要的——位置效应被显式、干净地隔离出来。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  f/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+            minimum width=2.5cm, inner sep=3pt},
+  h/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm,
+            minimum width=2.3cm, inner sep=3pt},
+  p/.style={draw=CrimsonDeep, fill=white, rounded corners=2pt, minimum height=7mm,
+            minimum width=2.3cm, inner sep=3pt}
+]
+\node[f, text width=3.4cm] (feat) {用户特征 $+$ 物品特征\\$+$ 上下文};
+\node[f, text width=2.2cm, right=10mm of feat] (emb) {共享底层\\Embedding};
+\node[h, above right=3mm and 10mm of emb] (rel) {相关性塔\\$\mathrm{MLP}_{\mathrm{rel}}$};
+\node[h, below right=3mm and 10mm of emb] (bias) {位置塔\\$\mathrm{MLP}_{\mathrm{bias}}$};
+\node[p, right=9mm of rel] (pr) {$\hat{p}^{\mathrm{rel}}_{u,i}$};
+\node[p, right=9mm of bias] (pb) {$\hat{p}^{\mathrm{bias}}_{k}$};
+\node[p, below=14mm of pb, text width=3.4cm, draw=AmberDeep] (prod)
+  {$\hat{p} = \hat{p}^{\mathrm{rel}} \times \hat{p}^{\mathrm{bias}}$\\（训练用，LogLoss）};
+\node[f, below=6mm of prod, text width=3.4cm, draw=VioletDeep] (serve)
+  {服务时置零：$\hat{p} = \hat{p}^{\mathrm{rel}}$};
+\draw[-{Stealth}, SlateGray] (feat) -- (emb);
+\draw[-{Stealth}, SlateGray] (emb) -- (rel);
+\draw[-{Stealth}, SlateGray] (emb) -- (bias);
+\node[font=\sffamily\tiny, left=1mm of bias, text width=1.5cm, align=right, color=SlateGray]
+  {仅输入位置 $\bm{e}_k$};
+\draw[-{Stealth}, SlateGray] (rel) -- (pr);
+\draw[-{Stealth}, SlateGray] (bias) -- (pb);
+\draw[-{Stealth}, AmberDeep] (pb) -- (prod);
+\draw[-{Stealth}, AmberDeep] (pr.east) -- ++(5mm,0) |- (prod.east);
+\draw[-{Stealth}, VioletDeep, dashed] (prod) -- (serve);
+\end{tikzpicture}
+\caption{PAL 的乘性分解：位置塔只吃位置特征，服务时整体置零}
+\label{fig:pal}
+\end{figure}
+
+\subsection{服务时置零：为什么必须，以及怎么验}
+
+PAL 的第二个关键点是\textbf{服务阶段把位置塔的输出置为常数}：
+
+\begin{equation}
+\mathrm{Score}_{\text{serve}}(u, i) = \hat{p}^{\mathrm{rel}}_{u,i}
+\quad \text{（等价于令 } \hat{p}^{\mathrm{bias}}_k \equiv 1 \text{ 或统一取同一常数）} .
+\label{eq:pal-serve}
+\end{equation}
+
+理由有三条，每条都是独立的：
+\begin{enumerate}
+  \item \textbf{位置未知}：精排是对同一个用户的整个候选集合\textbf{并行打分}，
+        此时每个候选的最终位次还没确定，位置特征在物理上不存在；
+  \item \textbf{位置不该影响相关性排序}：即使能预测位次，
+        把位置乘进排序分数也只是把「靠前会更被点击」这个事实重复计入，
+        会让已排在前面的物品进一步自我强化（富者愈富），加剧集中度；
+  \item \textbf{业务上位置由重排决定}：多样性、打散、定坑等策略在精排之后执行，
+        精排的职责是给出\textbf{与位置无关的效用估计}。
+\end{enumerate}
+
+\begin{toolbox}[PAL 上线的验证清单]
+\begin{enumerate}
+  \item \textbf{位置塔的输入审计}：用特征重要性或消融实验确认位置塔\textbf{只}用了位置特征；
+        一旦拼接了用户/物品特征，分解立刻失效，退化成普通的加性位置特征；
+  \item \textbf{位置倾向的单调性与量级}：导出 $\hat{p}^{\mathrm{bias}}_k$ 随 $k$ 的曲线，
+        检查是否符合「随位次递减、前几位差距最大、后段趋于平缓」的预期；
+        若曲线非单调，说明数据中的位置与物品质量强相关（当前策略太激进），
+        需要考虑引入随机探索位；
+  \item \textbf{置零前后的一致性}：离线用带位置的样本评估时，指标应基于 $\hat{p}^{\mathrm{rel}}$ 计算，
+        否则会高估；同时检查 $\hat{p}^{\mathrm{rel}}$ 的均值是否与真实 CTR 量级吻合（校准性）；
+  \item \textbf{探索流量}：保留 1\%--5\% 的随机打散流量作为无偏评估集，
+        既可用于验证 PAL，也可用于训练「无位置偏差」的对照模型；
+  \item \textbf{灰度对比}：A/B 中重点看\textbf{位置分布的熵}与\textbf{尾部物品曝光占比}，
+        而不只看 CTR——消偏的收益常常先体现在生态指标上。
+\end{enumerate}
+\end{toolbox}
+
+\begin{insight}[PAL 与「随机探索位」的关系]
+PAL 解决的是「已知位置偏差存在时如何建模」，
+而随机探索位解决的是「偏差本身有多强、能否被识别」。
+二者不可互相替代：
+没有探索流量时，位置与物品质量完全共线，
+位置塔学到的 $\theta_k$ 里仍会混入质量差异（高质物品恰好总在第 1 位），
+此时 PAL 的分解只是\emph{看起来}干净。
+因此工程上成熟的做法是\textbf{两者共用}：
+用随机探索位的数据校验位置曲线，
+用全量日志（含 PAL 结构）训练主模型。
+这也是「位置偏差 = 模型问题 + 数据采集问题」的双重属性。
+\end{insight}
+
+\section{pCTR 校准与一致性}
+
+\subsection{为什么需要校准}
+
+校准要回答的问题是：\textbf{模型说 $0.05$ 的那批样本，真实点击率是不是 $0.05$？}
+
+排序只需要单调性（保序），而很多下游环节需要\textbf{绝对数值}：
+
+\begin{itemize}
+  \item \textbf{广告出价}：$\mathrm{eCPM} = 1000 \times \mathrm{pCTR} \times \mathrm{bid}$，
+        pCTR 系统性高估 20\%，等价于所有广告主的实际成本上涨 20\%，
+        平台短期收入上涨但广告主预算提前耗尽、留存下降（见 \cref{ch:admodel}）；
+  \item \textbf{多目标融合}：$\hat{p}_{\mathrm{CTR}} \cdot \hat{p}_{\mathrm{CVR}} \cdot \text{price}$
+        只有在两个概率都校准的前提下才有金额意义；
+  \item \textbf{控成本与预算分配}：预算平滑、pacing、ROI 约束都依赖绝对量级；
+  \item \textbf{阈值决策}：某些策略需要「pCTR 低于某阈值就不展示」，阈值只能在校准后的尺度上定义。
+\end{itemize}
+
+\subsection{校准的定义与度量}
+
+完美的校准要求对所有 $p \in [0,1]$：
+
+\begin{equation}
+\Prob\big( y = 1 \mid \hat{p} = p \big) = p .
+\label{eq:calibration-def}
+\end{equation}
+
+实践中最常用的度量是 \term{期望校准误差}{Expected Calibration Error, ECE}：
+把预测值分到 $B$ 个桶里，比较每桶的平均预测与真实频率：
+
+\begin{equation}
+\mathrm{ECE} = \sum_{b=1}^{B} \frac{n_b}{N} \, \Big| \, \mathrm{acc}(b) - \mathrm{conf}(b) \, \Big| ,
+\qquad
+\mathrm{acc}(b) = \frac{1}{n_b}\sum_{j \in b} y_j, \quad
+\mathrm{conf}(b) = \frac{1}{n_b}\sum_{j \in b} \hat{p}_j .
+\label{eq:ece}
+\end{equation}
+
+\begin{insight}[样本量给定时，ECE 与 LogLoss 谁更可信]
+这个选择有一个常被忽略的统计事实：
+\textbf{ECE 是有偏且高方差的估计量}，而 LogLoss 是严格 Proper Scoring Rule（真概率是唯一最优解）。
+设每个桶 $b$ 有 $n_b$ 个样本，则桶内真实频率的估计误差约 $O(1/\sqrt{n_b})$；
+\textbf{把 $B$ 调大，$\mathrm{acc}(b)$ 的噪声会直接进入 ECE}，产生虚假的「校准变差」。
+因此：
+\begin{itemize}
+  \item 样本量充足（$N$ 在 $10^6$ 以上）时，用 $B \in [10, 50]$ 等频分桶，
+        同时报告\textbf{可靠性图}（reliability diagram）看形状，而不是只看一个标量；
+  \item 样本量有限或需要早停判据时，优先用 LogLoss / Brier Score，它们不需要分桶；
+  \item ECE 只反映「桶内平均偏差」，桶内可能一个方向高估、一个方向低估而互相抵消，
+        因此 ECE 小不代表校准好。
+\end{itemize}
+\end{insight}
+
+\subsection{校准方法：从 Platt 到保序回归}
+
+\textbf{（1）Platt Scaling / 温度缩放}：假设失准只是 logit 尺度问题，
+拟合一个标量（或向量）参数：
+
+\begin{equation}
+\hat{p}_{\text{cal}} = \sigmoid\big( a \cdot \mathrm{logit}(\hat{p}) + b \big)
+= \frac{1}{1 + \exp\big( -(a \cdot \mathrm{logit}(\hat{p}) + b) \big)} .
+\label{eq:platt}
+\end{equation}
+
+优点：参数只有两个，极少样本就能拟合，单调性天然保持（$a > 0$ 时），不会破坏排序。
+缺点：只能修正「整体过自信/欠自信」这一类失准；
+如果模型在低分段高估、高分段低估（S 形畸变），单个 $a$ 无法修正。
+
+\textbf{（2）保序回归（Isotonic Regression）}：在单调约束下拟合任意形状的映射：
+
+\begin{equation}
+\min_{f \text{ 单调不减}} \; \sum_{j=1}^{N} \big( y_j - f(\hat{p}_j) \big)^2 ,
+\qquad \hat{p}_{\text{cal}} = f(\hat{p}) .
+\label{eq:isotonic}
+\end{equation}
+
+保序回归可以用 PAV（Pool Adjacent Violators）算法在 $O(N \log N)$ 内求解。
+它比 Platt 灵活得多（能修正任意单调畸变），代价是\textbf{容易过拟合}——
+在样本稀疏的极端分段（例如 $\hat{p} > 0.9$ 或 $\hat{p} < 0.001$）容易拟合成阶梯函数，
+产生不连续的跳跃。工程上的常见做法是：
+\textbf{小样本用 Platt，大样本用保序回归 + 分段最小样本量约束 + 平滑}。
+
+\textbf{（3）分桶校准}：直接在离线样本上按预测值分桶，统计每桶的真实 CTR，
+服务时按桶查表。它最直观、最可控，也是很多团队的实际做法。
+要点有三：桶边界必须在\textbf{训练集上确定（保序分位点）}，
+在验证集上统计频率，避免过拟合；
+必须为每个分桶设置最小样本量，低于阈值则与相邻桶合并；
+必须\textbf{按天/按周滚动更新}，因为流量结构在变，
+一份几个月前拟合的校准表本身就是新的偏差源。
+
+\begin{table}[htbp]
+\centering
+\caption{三种校准方法的对照}
+\label{tab:calibration}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{2.1cm} L{2.0cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{参数量} & \tabhead{保序性} & \tabhead{适用与风险} \\
+\midrule
+Platt / 温度缩放 & 2（或 1） & 保证（$a>0$） & 样本少时首选；只能修正整体尺度偏差，对 S 形畸变无效 \\
+\addlinespace
+保序回归 & $O(N)$ 分段常数 & 保证 & 拟合能力最强；尾部小样本区必须设最小样本量与平滑，否则阶梯跳跃 \\
+\addlinespace
+分桶查表 & $B$ 个桶 & 不保证（桶间可能逆序） & 实现最简单可控；需滚动更新，桶边界要用训练集分位点定 \\
+\addlinespace
+贝叶斯平滑 / Beta 校准 & 2 每桶 & 近似 & 用先验收缩小样本桶，适合长尾分段的稳健估计 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{粗排与精排的一致性}
+
+链路一致性是「离线涨点、线上不涨」的另一大来源。粗排要在 10--30\,ms 内
+对上千候选打分，模型容量远小于精排；如果两者独立训练，
+粗排会把精排认为好的候选截掉——\textbf{精排的能力被粗排的上限封死}。
+三条主流解法：
+
+\begin{enumerate}
+  \item \textbf{蒸馏}：把精排对候选的打分当软标签，训练粗排模型。
+        损失通常取「软标签交叉熵 + 硬标签交叉熵」的加权和，
+        其中软标签部分用温度 $T$ 平滑：
+        $\mathcal{L} = \alpha \, \mathrm{CE}\big(\sigmoid(s_p/T), \sigmoid(s_s/T)\big)
+        + (1-\alpha) \, \mathrm{CE}(y, \sigmoid(s_s))$。
+        温度 $T$ 越大，软标签携带的\textbf{类间相对关系}信息越多；
+  \item \textbf{全链路 LTR}：不分别优化各层，而是把整条链路（粗排选出的集合 $\to$ 精排排序）
+        的最终列表指标作为优化目标。工程上常用近似方案：
+        先固定精排，让粗排以「最终 GAUC」为目标训练；再交替优化；
+  \item \textbf{特征与结构对齐}：粗排复用精排的 embedding 与部分特征（共享 embedding 表），
+        只在结构上做剪枝。这能极大降低「表示分布不一致」的概率，
+        但会让两个模型耦合，更新时必须同时验证（见 \cref{ch:receng}）。
+\end{enumerate}
+
+\begin{pitfall}[模型越大、线上越差的三种原因]
+\begin{enumerate}
+  \item \textbf{延迟超预算}：精排往往有严格的 p99 延迟上限（典型量级 50--100\,ms 整链路）。
+        模型参数翻倍可能让 p99 突破预算，触发降级或超时兜底，
+        而\textbf{降级流量上的损失远大于模型提升的收益}。
+        排查方法：分别统计「未降级流量」与「降级流量」的业务指标，
+        多数情况是降级流量把大盘拖平了；
+  \item \textbf{特征不一致}：线上缺少某个特征（或口径不同）时，
+        模型会退化成「用训练时的默认值打分」，其行为可能与训练分布完全不同。
+        典型场景是离线用 T+1 统计特征、线上用实时特征，两者的分布在小样本时段差异巨大。
+        排查方法：对每个特征建立离线/在线分布 diff 监控（PSI/KL），
+        阈值告警，上线前必须过一遍；
+  \item \textbf{对曝光分布过拟合}：更深的模型倾向于拟合当前策略产生的日志中的细节，
+        包括位置偏差与旧策略偏好。表现为离线 AUC 涨、线上持平或下滑。
+        排查方法是\textbf{用随机探索流量做离线评估}，
+        或做「只用探索流量训练的对照模型」比较。
+\end{enumerate}
+这三条的共同点是：它们\textbf{都不体现在离线指标里}，
+因此必须有独立的工程监控来兜住，而不是指望模型指标发现。
+\end{pitfall}
+
+\section{损失函数与训练技巧}
+
+\subsection{LogLoss、Focal Loss 与对比学习}
+
+\textbf{（1）交叉熵（\cref{eq:logloss}）}是基线。它的隐含假设是「所有样本同等重要」。
+当正负比达到 1:100 甚至更极端时，多数类的梯度会淹没少数类。
+
+\textbf{（2）Focal Loss} 通过一个调制因子压制「已经分对的简单样本」的权重：
+
+\begin{equation}
+\mathcal{L}_{\mathrm{focal}} = -\frac{1}{N}\sum_{j} \alpha_{y_j} \big( 1 - \hat{p}_{j,y_j} \big)^{\gamma}
+\log \hat{p}_{j,y_j} ,
+\qquad \gamma \ge 0 .
+\label{eq:focal}
+\end{equation}
+
+$\gamma = 0$ 退化为加权交叉熵；$\gamma \in [1, 2]$ 是常见取值。
+在 CTR 场景下，Focal Loss 的价值主要在\textbf{负样本极多}（如信息流中的低质曝光）
+或\textbf{正样本极稀}（如深度转化目标）时体现；
+但要注意它会\textbf{破坏校准}——调制因子让低分样本的梯度被压制，
+输出的概率不再是真实频率。因此用 Focal Loss 时，
+校准步几乎是必需的。
+
+\textbf{（3）对比学习}用于样本表示而非概率输出。
+在精排里它的价值是让「用户表示与其真实交互物品」在表示空间靠近：
+以 batch 内的其他物品为负样本（in-batch negatives），
+以点击/购买物品为正样本，优化 InfoNCE 式的目标：
+
+\begin{equation}
+\mathcal{L}_{\mathrm{CL}} = -\frac{1}{N}\sum_{j=1}^{N}
+\log \frac{\exp\big( \inner{\bm{u}_j}{\bm{i}_j} / \tau \big)}
+{\sum_{l=1}^{N} \exp\big( \inner{\bm{u}_j}{\bm{i}_l} / \tau \big)} ,
+\label{eq:infonce}
+\end{equation}
+
+其中 $\tau$ 是温度。它常作为\textbf{辅助损失}与主任务联合训练：
+主损失负责校准与排序，辅助损失负责让 embedding 空间更结构化，
+在冷启动与长尾物品上通常有明显收益。它与 ESMM 一样，属于「不改预测结构、只改训练信号」的思路。
+
+\subsection{多值特征、序列特征与实时特征}
+
+\begin{itemize}
+  \item \textbf{多值特征}（一个用户属于多个标签、一个商品属于多个类目）：
+        三种处理方式是平均池化（丢失组合信息）、
+        注意力池化（需要额外的注意力网络，收益通常最好）、
+        以及截断后定长拼接（最简单，但顺序敏感、有信息损失）。
+        选择依据是\textbf{值的数量的分布}：值数普遍在 2--5 个时拼接够用，
+        超过 10 个则必须池化；
+  \item \textbf{序列特征}：核心工程决策是\textbf{截断长度与去重策略}。
+        长度 50 与长度 200 的收益差通常在 0.1\%--0.5\% GAUC 量级（经验值，随场景差异极大），
+        但显存与延迟开销随长度线性增长。
+        必须做的三件事：同物品连续重复去重（防止一次会话中的反复浏览占满序列）、
+        类目级与物品级双路构造（类目序列更适合表达兴趣漂移）、
+        以及\textbf{时间衰减权重}（近期行为权重更高）。序列建模的完整展开见 \cref{ch:sequence}；
+  \item \textbf{实时特征}：用户侧实时行为（「最近 5 分钟点击过的类目」）在电商与内容场景中收益显著，
+        但带来三个工程问题：特征链路的端到端延迟（必须监控到秒级）、
+        训练样本的特征快照必须与推理时刻对齐（否则构成时间穿越）、
+        以及离线回填的可得性（历史时刻的实时特征通常没有留存，
+        只能用近线流式落库的方式从上线那天起积累）。
+\end{itemize}
+
+\subsection{样本加权与课程学习}
+
+样本权重 $\alpha_j$ 的引入是「不改模型、改变梯度分布」的第三种手段（前两种是改损失形状与改训练信号）：
+
+\begin{itemize}
+  \item \textbf{按价值加权}：把金额类目标的重要度直接写进权重，
+        例如下单样本权重是点击的 10 倍。等价于把二分类问题变成「价值回归」的近似。
+        风险是权重过大会让少数高价值样本主导 embedding；
+  \item \textbf{按新鲜度加权}：$\alpha_j = \rho^{\,t_{\text{now}} - t_j}$
+        （$\rho \in (0,1)$，按天衰减），缓解分布漂移。$\rho = 0.9$ 左右是常见起点；
+  \item \textbf{按置信度加权}：对延迟反馈样本降权——
+        转化归因窗口未到期的样本，其 $y=0$ 是「未知」而非「负」。
+        正确做法是把这类样本降权或直接排除，而不是当作负样本（见 \cref{ch:admodel}）；
+  \item \textbf{课程学习}：先用大流量、高确定性样本训练（头部热门物品），
+        再逐步引入长尾样本。反向的「难例挖掘（hard example mining）」
+        也可以在训练后期使用，把高损失样本重复采样。
+\end{itemize}
+
+下面这段代码把上述三种加权（价值、新鲜度、延迟反馈置信度）合成一个权重张量，
+再送进带权重的二元交叉熵。注意 \code{pos\_weight} 与逐样本的 \code{alpha}
+是两个不同层面的东西：前者处理全局正负不平衡，后者处理样本级的可信度与价值差异，
+两者混用时必须先在小流量上验证是否与校准表冲突。
+
+\begin{lstlisting}[style=growthnoline, language=PyTorch, caption={精排训练的样本加权（示范实现）}]
+def build_sample_weight(batch, now_ts, rho=0.9, w_buy=10.0, w_click=1.0):
+    # value weight: clicks vs purchases share one embedding space
+    alpha = torch.where(batch["is_buy"] > 0,
+                        torch.full_like(batch["label"], w_buy),
+                        torch.full_like(batch["label"], w_click))
+    # freshness decay: newer samples matter more (per day)
+    age_days = (now_ts - batch["event_ts"]) / 86400.0
+    alpha = alpha * torch.pow(rho, age_days)
+    # delayed feedback: an unfinished attribution window is unknown, not negative
+    alpha = alpha * batch["label_conf"]          # in [0, 1], 0 = drop the sample
+    return alpha
+
+def weighted_bce(logit, label, alpha, pos_weight=1.0):
+    raw = F.binary_cross_entropy_with_logits(
+        logit, label, reduction="none", pos_weight=torch.tensor(pos_weight))
+    return (raw * alpha).sum() / alpha.sum().clamp_min(1e-6)
+\end{lstlisting}
+
+\subsection{精排上线检查清单}
+
+\begin{toolbox}[精排上线 checklist（12 项）]
+\textbf{数据与样本}
+\begin{enumerate}
+  \item 样本时间范围与线上服务的策略版本是否一致？跨版本混样会引入策略偏差；
+  \item 特征快照时点是否严格早于标签时点？重点检查统计类特征（近 7 日 CTR 之类）的口径；
+  \item 延迟反馈样本是否已降权或排除？归因窗口是否与业务对齐？
+  \item 位置偏差是否被处理？有随机探索位数据吗？PAL 的位置塔输入是否干净？
+\end{enumerate}
+\textbf{模型与训练}
+\begin{enumerate}
+  \setcounter{enumi}{4}
+  \item GAUC 与 LogLoss 是否都达标（只看一个指标极易被误导）？
+  \item 校准是否做过（ECE / 可靠性图）？分桶校准表是否设了最小样本量？
+  \item 是否按分群做了指标拆解（新老用户、冷热物品、头部类目）？
+  \item 多任务权重是否固定？训练中是否监控了各任务塔的梯度和损失比例？
+\end{enumerate}
+\textbf{服务与工程}
+\begin{enumerate}
+  \setcounter{enumi}{8}
+  \item 特征离线/在线 diff 全部通过（PSI 低于阈值）？新增特征是否都有在线来源？
+  \item p99 延迟是否在预算内？批推理的 batch size 与超时兜底策略是否压测过？
+  \item Embedding 表显存是否符合预算？OOV 桶命中率是否低于阈值？
+  \item 灰度与回滚方案是否就绪（模型热更新的双缓冲、回滚时间目标）？
+\end{enumerate}
+\end{toolbox}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 精排是\textbf{带位置折损的期望收益最大化}，
+        模型估的是效用 $v$ 的期望而非「喜不喜欢」；把 $v$ 定义清楚比加深网络更重要。
+  \item 交叉熵的梯度等于预估误差（\cref{eq:logloss-grad}），
+        这决定了样本权重、负采样与校准必须成体系地设计。
+  \item 表达能力主线：LR（人工交叉）$\to$ GBDT+LR（树做离散交叉）
+        $\to$ FM（低秩二阶，$O(kd)$）$\to$ FFM（域感知）$\to$
+        DeepFM / DCN / xDeepFM（显式高阶）；共享 Embedding 是 DeepFM 被长期沿用的关键。
+  \item 个性化表达主线：平均池化 $\to$ DIN 的候选相关注意力
+        $\to$ DIEN 的兴趣演化（辅助损失 + AUGRU）$\to$ DSIN 的会话划分 $\to$ BST 的 Transformer 化。
+  \item 多任务主线：Shared-Bottom 的梯度冲突导致跷跷板；
+        MMoE 用\textbf{软性门控}做表达柔性，PLE 用\textbf{专属专家}做显式梯度隔离；
+        ESMM 换了一条路——修正\textbf{样本空间}而不是模型结构，且与 PLE 正交可叠加。
+  \item 多目标融合的四条路线：加权求和、乘性链式、约束优化（拉格朗日影子价格）、
+        LTR（pointwise / pairwise / listwise）；手工权重只有一维旋钮，本质上不可扩展。
+  \item 位置偏差的正确处理是\textbf{乘性分解 + 服务置零}（PAL）：
+        位置塔只吃位置特征，训练时乘进分数、服务时置零；
+        第 \cref{eq:pal-logit} 式说明同一物品跨位置的 logit 差异被完整归因给位置因子。
+  \item 校准（Platt / 保序回归 / 分桶）解决「排序不需要绝对值、但出价与融合需要」的矛盾；
+        ECE 是高方差估计量，样本有限时优先看 LogLoss。
+  \item 模型变大而线上变差，几乎总是三个原因之一：
+        \textbf{延迟超预算触发降级、特征离线在线不一致、对曝光分布过拟合}。
+        这三条都不体现在离线指标里，必须靠工程监控兜住。
+  \item 精排的收益是\textbf{边际递减}的：结构创新带来的 GAUC 提升常常在千分位，
+        而特征一致性、校准与链路对齐带来的收益往往在百分位。
+        这也是 \cref{ch:receng} 反复强调「效果 = 模型能力 $\times$ 工程一致性」的原因。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item DIN 相比 DeepFM 的改进是什么？Activation Unit 为什么不能用在召回阶段？
+  \item MMoE 与 PLE 的区别是什么？PLE 如何从结构上保证任务隔离，代价是什么？
+  \item ESMM 为什么能解决样本选择偏差？它与 MMoE/PLE 是替代关系还是互补关系？
+  \item 位置偏差如何处理？请写出 PAL 的分解形式，并解释为什么位置塔的输入必须只有位置特征。
+  \item pCTR 预估偏高 20\% 会发生什么？你会怎么发现并修正？
+  \item FM 的二阶项如何从 $O(kd^2)$ 降到 $O(kd)$？请给出推导。
+  \item 多目标融合有哪些做法？为什么手工调权重长期不可维护？
+  \item 离线 AUC/GAUC 都涨了但线上不涨，你的排查顺序是什么？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+本章把「已曝光候选如何排序」讲清楚了，但所有模型都隐含一个假设：
+\textbf{候选集合是静态的、独立的}。
+真实的推荐场景里，用户的行为是一条连续的序列，
+今天的行为受昨天影响，下一个点击受本次会话前几次浏览影响；
+更激进的方向甚至不再「排序候选」，而是\textbf{直接生成用户的下一步行为}。
+下一章（\cref{ch:sequence}）将沿着这条线展开：
+从 GRU4Rec 的会话建模到 SASRec/BERT4Rec 的自注意力序列模型，
+再到 SIM/ETA/TWIN 的长序列建模，最后到 TIGER 与 HSTU 代表的生成式推荐。

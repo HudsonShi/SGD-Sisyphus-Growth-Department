@@ -1,0 +1,144 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%  《增长技术笔记》
+%%  推荐算法 · 搜索引擎 · 计算广告 · NLP · SEO · GEO · 广告投流买量 · 跨境电商供应链
+%%
+%%  编译： make        （等价于 latexmk -xelatex main.tex）
+%%  依赖： TeX Live 2023+ / xelatex + biber + ctexbook
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\documentclass[UTF8, fontset=macnew, 11pt, oneside, openany]{ctexbook}
+
+\usepackage{notesstyle}
+
+%------------------------------------------------------------------------------
+% 文档信息
+%------------------------------------------------------------------------------
+\newcommand{\BookTitle}{增长技术笔记}
+\newcommand{\BookSubtitle}{推荐算法 · 搜索引擎 · 计算广告 · NLP · SEO · GEO\\
+广告投流买量 · 跨境电商与供应链}
+\newcommand{\BookVersion}{v1.0}
+\newcommand{\BookDate}{\today}
+
+\begin{document}
+
+%==============================================================================
+% 封面
+%==============================================================================
+\begin{titlepage}
+\centering
+\vspace*{2.2cm}
+
+{\sffamily\bfseries\fontsize{34}{42}\selectfont\color{NavyDeep} \BookTitle \par}
+
+\vspace{0.8cm}
+{\color{NavyMid}\rule{0.72\textwidth}{1.2pt}\par}
+\vspace{0.8cm}
+
+{\sffamily\fontsize{15}{24}\selectfont\color{SlateGray} \BookSubtitle \par}
+
+\vspace{1.4cm}
+
+\begin{tikzpicture}[scale=1.0, every node/.style={font=\sffamily\small}]
+  \node[draw=NavyMid, fill=BoxBG, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (a) at (0,0) {推荐算法\\Recommender};
+  \node[draw=TealDeep, fill=BoxBGAlt, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (b) at (3.4,0) {搜索引擎\\Search};
+  \node[draw=AmberDeep, fill=white, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (c) at (6.8,0) {计算广告\\AdTech};
+  \node[draw=VioletDeep, fill=white, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (d) at (10.2,0) {自然语言处理\\NLP};
+  \node[draw=NavyMid, fill=BoxBG, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (e) at (0,-1.9) {SEO / GEO\\自然流量};
+  \node[draw=CrimsonDeep, fill=white, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (f) at (3.4,-1.9) {广告投流\\Paid Traffic};
+  \node[draw=TealDeep, fill=BoxBGAlt, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (g) at (6.8,-1.9) {跨境电商\\Cross-border};
+  \node[draw=AmberDeep, fill=white, rounded corners=3pt, inner sep=7pt, text width=2.7cm, align=center] (h) at (10.2,-1.9) {供应链\\Supply Chain};
+  \draw[-{Stealth[length=4pt]}, NavyMid, thick] (a) -- (b);
+  \draw[-{Stealth[length=4pt]}, NavyMid, thick] (b) -- (c);
+  \draw[-{Stealth[length=4pt]}, NavyMid, thick] (c) -- (d);
+  \draw[-{Stealth[length=4pt]}, CrimsonDeep, thick] (e) -- (f);
+  \draw[-{Stealth[length=4pt]}, CrimsonDeep, thick] (f) -- (g);
+  \draw[-{Stealth[length=4pt]}, CrimsonDeep, thick] (g) -- (h);
+  \draw[-{Stealth[length=4pt]}, SlateGray, thick, dashed] (b) -- (f);
+  \draw[-{Stealth[length=4pt]}, SlateGray, thick, dashed] (c) -- (g);
+  \draw[-{Stealth[length=4pt]}, SlateGray, thick, dashed] (d) -- (e);
+\end{tikzpicture}
+
+\vfill
+
+{\sffamily\large\color{SlateGray} 个人知识库 · 学习路线 · 工程手册 \par}
+\vspace{0.5cm}
+{\sffamily\small\color{SlateGray} \BookVersion \quad \BookDate \par}
+\vspace{1.2cm}
+\end{titlepage}
+
+%==============================================================================
+% 前置部分
+%==============================================================================
+\frontmatter
+\pagestyle{plain}
+
+\input{frontmatter/preface}
+\input{frontmatter/howto}
+
+\cleardoublepage
+\pdfbookmark[0]{目录}{toc}
+\tableofcontents
+
+\cleardoublepage
+\pdfbookmark[0]{图表索引}{lof}
+\listoffigures
+\listoftables
+
+%==============================================================================
+% 正文
+%==============================================================================
+\mainmatter
+\pagestyle{fancy}
+
+\part{基础：从流量到增长的全景}
+\input{chapters/ch01-overview}
+\input{chapters/ch02-math-foundations}
+
+\part{推荐算法}
+\input{chapters/ch03-recsys-recall}
+\input{chapters/ch04-recsys-ranking}
+\input{chapters/ch05-recsys-sequence-generative}
+\input{chapters/ch06-recsys-engineering}
+
+\part{搜索引擎与自然语言处理}
+\input{chapters/ch07-search-engine}
+\input{chapters/ch08-neural-retrieval-rag}
+\input{chapters/ch09-nlp-pretraining}
+\input{chapters/ch10-nlp-applications}
+
+\part{计算广告}
+\input{chapters/ch11-computational-advertising}
+\input{chapters/ch12-ad-modeling-bidding}
+
+\part{流量获取：SEO、GEO 与付费投放}
+\input{chapters/ch13-seo}
+\input{chapters/ch14-geo-aeo}
+\input{chapters/ch15-google-youtube-ads}
+\input{chapters/ch16-meta-tiktok-ads}
+\input{chapters/ch17-cro-email-affiliate}
+
+\part{跨境电商与供应链}
+\input{chapters/ch18-cross-border-ecommerce}
+\input{chapters/ch19-platforms-temu-shein-tiktok}
+\input{chapters/ch20-supply-chain-selection}
+\input{chapters/ch21-growth-loop-analytics}
+
+%==============================================================================
+% 附录
+%==============================================================================
+\appendix
+\part{附录}
+\input{appendix/appA-glossary}
+\input{appendix/appB-formulas}
+\input{appendix/appC-toolstack}
+\input{appendix/appD-interview}
+\input{appendix/appE-papers}
+
+%==============================================================================
+% 参考文献（gbt7714 + bibtex）
+%==============================================================================
+\cleardoublepage
+\phantomsection
+\addcontentsline{toc}{chapter}{参考文献}
+\bibliography{references}
+
+\end{document}

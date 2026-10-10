@@ -1,0 +1,118 @@
+\chapter*{如何使用本仓库}
+\addcontentsline{toc}{chapter}{如何使用本仓库}
+\markboth{如何使用本仓库}{如何使用本仓库}
+
+\section*{仓库结构}
+
+\begin{lstlisting}[style=growthnoline, language=bash, caption={仓库目录结构}]
+SGD/
+ |-- main.tex                  # 主文件：装配全部章节
+ |-- notesstyle.sty            # 统一样式：版式、提示框、代码、公式环境
+ |-- references.bib            # 参考文献库（bibtex + gbt7714 国标格式）
+ |-- Makefile                  # make / make check / make clean
+ |-- tools/check.py            # 仓库自检脚本（禁忌字符、引用、配对、字数统计）
+ |-- README.md                 # 快速上手
+ |-- frontmatter/              # 前言、使用说明
+ |-- chapters/                 # 正文 21 章
+ |-- appendix/                 # 附录 A-E
+ |-- code/                     # 可运行的示例脚本
+ `-- build/                    # 编译产物（PDF 输出目录）
+\end{lstlisting}
+
+\section*{编译方式}
+
+\subsection*{方式一：Makefile（推荐）}
+
+\begin{lstlisting}[style=growthnoline, language=bash]
+make            # 完整编译：xelatex -> bibtex -> xelatex -> xelatex
+make quick      # 只跑一遍 xelatex（快速看排版）
+make watch      # 保存即自动重编译
+make check      # 仓库自检：禁忌字符、引用 key、环境配对、字数统计
+make clean      # 清理中间文件
+make cleanall   # 连 PDF 一起清理
+\end{lstlisting}
+
+\subsection*{方式二：latexmk 手动}
+
+\begin{lstlisting}[style=growthnoline, language=bash]
+latexmk -xelatex -interaction=nonstopmode main.tex
+\end{lstlisting}
+
+\subsection*{方式三：Overleaf}
+
+上传整个目录，把编译器切换为 \textbf{XeLaTeX}，并在项目设置里确认主文档为 \code{main.tex}。
+若中文字体缺失，把 \code{main.tex} 中的 \code{fontset=macnew} 改为 \code{fontset=fandol}
+（Overleaf 自带 Fandol 字体）。
+
+\section*{三条学习路线}
+
+\begin{table}[htbp]
+\centering
+\caption{按目标选择阅读顺序}
+\label{tab:routes}
+\small
+\begin{tabularx}{\textwidth}{L{2.6cm} L{5.2cm} Y}
+\toprule
+\tabhead{路线} & \tabhead{章节组合} & \tabhead{适用人群与产出} \\
+\midrule
+算法工程师 &
+\cref{ch:math} $\to$ \cref{ch:recall} $\to$ \cref{ch:ranking} $\to$ \cref{ch:sequence} $\to$ \cref{ch:receng}
+$\to$ \cref{ch:search} $\to$ \cref{ch:rag} $\to$ \cref{ch:admodel} &
+能独立完成「召回—粗排—精排—重排」链路设计与迭代，能讲清 CTR/CVR 建模与多目标融合的取舍。 \\
+\addlinespace
+增长操盘手 &
+\cref{ch:overview} $\to$ \cref{ch:seo} $\to$ \cref{ch:geo} $\to$ \cref{ch:google} $\to$ \cref{ch:meta}
+$\to$ \cref{ch:cro} $\to$ \cref{ch:growth} &
+能设计自然流量 + 付费流量的组合打法，读懂后台指标，搭出从投放到回收的归因与实验闭环。 \\
+\addlinespace
+跨境卖家/供应链 &
+\cref{ch:cbec} $\to$ \cref{ch:platform} $\to$ \cref{ch:supply} $\to$ \cref{ch:meta}
+$\to$ \cref{ch:growth} &
+能完成平台选择、选品验证、备货与履约方案设计，理解平台全托管/半托管的真实成本结构。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section*{全书地图}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=6mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  layer/.style={draw=#1, fill=white, rounded corners=2pt, minimum height=9mm, inner sep=4pt, text width=2.5cm},
+  stage/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=9mm, inner sep=4pt, text width=2.9cm}
+]
+% 需求层
+\node[stage] (demand) {需求产生\\搜索 / 推荐 / 广告位};
+% 匹配层
+\node[stage, below=8mm of demand] (match) {匹配与排序\\召回 · 粗排 · 精排 · 重排};
+% 供给层
+\node[stage, below=8mm of match] (supply) {供给与创意\\商品 · 内容 · 素材 · 落地页};
+% 履约层
+\node[stage, below=8mm of supply] (fulfill) {交易与履约\\支付 · 物流 · 关税 · 售后};
+% 数据层
+\node[stage, below=8mm of fulfill, fill=BoxBGAlt] (data) {数据与实验\\埋点 · 归因 · A/B · 因果};
+
+\draw[-{Stealth}, thick, NavyMid] (demand) -- (match);
+\draw[-{Stealth}, thick, NavyMid] (match) -- (supply);
+\draw[-{Stealth}, thick, NavyDeep] (supply) -- (fulfill);
+\draw[-{Stealth}, thick, TealDeep] (data.east) .. controls +(14mm,0) and +(14mm,0) .. (match.east);
+\draw[-{Stealth}, thick, TealDeep] (data.west) .. controls +(-14mm,0) and +(-14mm,0) .. (match.west);
+\node[right=16mm of demand, text width=3.1cm, draw=RuleGray, dashed, rounded corners=2pt, inner sep=4pt]
+  (book) {本仓库覆盖：\\ \cref{ch:overview}--\cref{ch:growth}};
+\draw[-{Stealth}, dashed, SlateGray] (book.west) -- (demand.east);
+\end{tikzpicture}
+\caption{「需求—匹配—供给—履约—数据」五层链路，本仓库的组织逻辑}
+\label{fig:bookmap}
+\end{figure}
+
+\section*{写作与贡献约定}
+
+\begin{itemize}
+  \item 每章以 \code{chapters/chNN-*.tex} 为独立文件，只写正文，不写导言区；
+  \item 提示框统一使用 \code{keypoint / insight / casebox / pitfall / toolbox / interview / formulacard} 环境；
+  \item 引用统一走 \code{references.bib}，新增文献请补 key 后再引用；
+  \item 代码块内\textbf{只使用 ASCII 字符}（中文注释请写在正文），避免 CJK 在 \code{listings} 中渲染异常；
+  \item 表格宽度优先用 \code{tabularx} + \code{Y} 列，避免溢出版心。
+\end{itemize}

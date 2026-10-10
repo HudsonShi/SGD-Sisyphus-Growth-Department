@@ -1,0 +1,1442 @@
+\chapter{NLP 与预训练语言模型}
+\label{ch:nlp}
+
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 一段文本如何变成向量？从 one-hot 到 ELMo 的每一步，究竟解决了上一代的什么缺陷？
+  \item Transformer 到底比 RNN 好在哪？自注意力的复杂度 $O(n^2 d)$ 是怎么来的，为什么工程上还能接受？
+  \item GPT（自回归）、BERT（自编码）、T5（编码-解码）三条路线，分别适合什么任务，代价是什么？
+  \item 训练一个语言模型要花多少钱？Scaling Laws 与 Chinchilla 给出了怎样的「最优配比」？
+  \item LoRA/QLoRA 为什么能用不到 1\% 的参数达到接近全参微调的效果？显存到底省在哪里？
+  \item RLHF、DPO、GRPO 分别在优化什么目标？什么是「对齐税」？
+  \item 推理为什么比训练更烧钱？KV Cache、GQA、FlashAttention、PagedAttention 各解决哪一段瓶颈？
+  \item 评测分数可信吗？基准污染与 LLM-as-judge 偏差会怎样误导技术决策？
+\end{enumerate}
+\end{insight}
+
+\section{NLP 的任务图景与指标体系}
+
+\subsection{从符号到语义：NLP 的基本困难}
+
+自然语言处理（Natural Language Processing, NLP）要解决的核心矛盾，是\textbf{离散符号系统与连续数值计算之间的鸿沟}。
+计算机只能做加法和乘法，而语言的最小单位是词、字、子词这些离散符号。
+把「苹果」映射到某个整数 ID 是容易的，但整数 ID 的大小没有语义：ID 为 100 的词并不「比」ID 为 99 的词更接近 ID 为 101 的词。
+因此 NLP 的全部技术演进，可以浓缩成一句话：\kw{如何把离散符号映射到有几何结构的连续空间，并且让这个空间承载语义与上下文}。
+
+这个映射一旦做好，下游任务就退化成可微优化问题：分类是取向量后加一个线性层，匹配是算两个向量的相似度，
+生成是逐位置做 softmax。本章讲的是这个映射的构造史，以及围绕它长出来的预训练、微调、对齐与推理工程。
+
+\subsection{NLP 的四类任务}
+
+按输入输出的形态，NLP 任务可以归为四类，这个分类在后面选模型时非常有用：
+
+\begin{itemize}
+  \item \textbf{分类（classification）}：输入一段文本，输出一个标签。如情感分析、意图识别、垃圾内容识别。
+        典型损失是交叉熵，典型指标是准确率与 F1。
+  \item \textbf{序列标注（sequence labeling）}：输入序列，输出等长的标签序列。如命名实体识别、
+        分词、词性标注。标签之间存在转移约束（BIO 规则），所以 CRF 层长期是标配 \cite{lafferty2001crf}。
+  \item \textbf{匹配与排序（matching and ranking）}：输入两段文本，输出相关性分数。如搜索相关性、
+        问答匹配、文本蕴含。指标是准确率、MRR、NDCG。这部分与 \cref{ch:rag} 的向量检索紧密衔接。
+  \item \textbf{生成（generation）}：输入一段文本，输出另一段长度不定的文本。如摘要、翻译、改写、
+        对话。指标是 BLEU/ROUGE 这类 n-gram 重叠指标，以及近年的模型打分指标。
+\end{itemize}
+
+\begin{keypoint}[一个反复出现的判断法则]
+\textbf{任务越接近「判别」，越应该用编码器（BERT 类）；任务越接近「生成」，越应该用解码器（GPT 类）。}
+判别任务只需要一次前向、看到完整上下文，编码器的双向注意力是纯收益；
+生成任务必须保持因果性（不能看到未来的词），自回归解码器的掩码注意力反而是必要的约束而非损失。
+\end{keypoint}
+
+\subsection{语言模型的指标体系}
+
+语言模型（Language Model, LM）最本质的指标是\term{困惑度}{Perplexity, PPL}，
+它衡量模型对真实文本的「惊讶程度」。给定长度为 $N$ 的文本 $w_{1:N}$：
+
+\begin{equation}
+\text{PPL}(w_{1:N}) = \exp\!\left( -\frac{1}{N} \sum_{i=1}^{N} \log p_\theta(w_i \mid w_{<i}) \right)
+= \exp(\text{CE}) ,
+\label{eq:ppl}
+\end{equation}
+
+其中 CE 是平均交叉熵（单位 nats）。PPL 的直觉解释是「模型在每个位置平均在多少个候选词之间犹豫」：
+PPL 等于 10 意味着模型的不确定性大致相当于在 10 个等概率词中选一个。
+需要注意三个口径问题：
+
+\begin{itemize}
+  \item \textbf{分词器不同，PPL 不可比}。同一个模型换一套 BPE 词表，PPL 会显著变化；
+        PPL 通常报「每 token」而非「每词/每字」，跨模型比较必须先统一分母。
+  \item \textbf{领域不同，PPL 差异巨大}。中文通用新闻语料上 PPL 可以做到个位数，
+        而垂直领域（医疗、法律、代码）的开源模型 PPL 往往高出数倍，这不代表模型「变笨」了，
+        只代表分布更难。
+  \item \textbf{PPL 与下游任务只有弱相关}。工程上更可靠的判断方式是直接在目标任务上做小样本评测，
+        PPL 只用来监控训练是否正常收敛。
+\end{itemize}
+
+除了 PPL，工程上还会看\term{每 token 平均损失}{loss per token}（训练曲线）、
+\term{压缩率}{bits per byte}（跨分词器可比的信息论口径），
+以及\term{单位成本的性能}{performance per dollar}（每美元推理预算换来的任务精度）。
+最后这个指标在业务里往往比绝对精度更重要，本章 \cref{sec:nlp-cost} 会给出估算公式。
+
+\section{文本表示的演进：从 one-hot 到 ELMo}
+\label{sec:nlp-representation}
+
+\subsection{one-hot 与词袋模型}
+
+最朴素的表示是\term{独热编码}{one-hot encoding}：假设词表大小 $|V| = 50000$，
+「苹果」是第 1234 个词，那么它的向量就是第 1234 维为 1、其余为 0 的 50000 维稀疏向量。用公式写：
+
+\begin{equation}
+\text{one-hot}(w_k)_j = \begin{cases} 1, & j = k, \\ 0, & j \ne k, \end{cases}
+\qquad
+\cos(\text{one-hot}(w_i), \text{one-hot}(w_j)) = \begin{cases} 1, & i = j, \\ 0, & i \ne j. \end{cases}
+\label{eq:onehot}
+\end{equation}
+
+也就是说，任意两个不同词的相似度恒为 0，向量空间里没有任何语义结构。
+文本层面则衍生出\term{词袋模型}{Bag of Words, BoW} 与 TF-IDF 加权 \cite{salton1975vsm}，
+在 \cref{ch:search} 的 BM25 里仍然是最强基线。它的问题同样是：只统计词频，不理解同义与语序。
+
+\subsection{分布假设与 Word2Vec}
+
+\term{分布假设}{distributional hypothesis} 是表示学习的理论基石：
+「一个词的意义由它经常出现的上下文决定」（Firth, 1957）。
+如果在大量语料中，「苹果」和「橘子」的上下文（左邻右舍的词）高度相似，
+那么它们就应该被映射到相邻的向量位置。
+
+Mikolov 等人在 2013 年提出的 \term{Word2Vec}{Word2Vec} 把这一思想做成了可大规模训练的两个模型
+\cite{mikolov2013word2vec}：
+
+\begin{itemize}
+  \item \textbf{CBOW（Continuous Bag-of-Words）}：用上下文词预测中心词。
+        $$\max_\theta \; p_\theta(w_t \mid w_{t-k}, \dots, w_{t-1}, w_{t+1}, \dots, w_{t+k}).$$
+        上下文向量取平均后送入输出层，训练快，对高频词更友好。
+  \item \textbf{Skip-gram}：反过来用中心词预测上下文中的每个词，
+        $$\max_\theta \; \sum_{-k \le j \le k,\, j \ne 0} \log p_\theta(w_{t+j} \mid w_t).$$
+        训练慢一些，但低频词与小语料上的表示质量明显更好，是更常用的选择。
+\end{itemize}
+
+以 Skip-gram 为例，若直接用 softmax 定义条件概率：
+
+\begin{equation}
+p_\theta(w_o \mid w_c) = \frac{\exp(\bm{u}_{o}\T \bm{v}_{c})}{\sum_{w \in V} \exp(\bm{u}_{w}\T \bm{v}_{c})},
+\label{eq:softmax-full}
+\end{equation}
+
+其中 $\bm{v}_c$ 是中心词向量（输入矩阵 $W_{\text{in}} \in \R^{|V| \times d}$ 的第 $c$ 行），
+$\bm{u}_o$ 是上下文词向量（输出矩阵 $W_{\text{out}}$ 的第 $o$ 行）。
+问题立刻出现：分母要对整个词表求和，每个样本的计算量是 $O(|V| d)$，
+当 $|V| = 10^6$、$d = 300$ 时单步梯度就要算三亿次乘加，完全不可行。于是有两类近似方案。
+
+\paragraph{方案一：负采样（Negative Sampling）。}
+把多分类问题改造成二分类问题：真实出现的「中心词-上下文词」对是正样本，
+随机抽取的 $K$ 个「中心词-随机词」对是负样本。损失为
+
+\begin{equation}
+\mathcal{L}_{\text{SGNS}} = -\log \sigmoid(\bm{u}_{o}\T \bm{v}_{c})
+- \sum_{k=1}^{K} \E_{w_k \sim P_n(w)} \Big[ \log \sigmoid(-\bm{u}_{k}\T \bm{v}_{c}) \Big],
+\label{eq:word2vec-neg}
+\end{equation}
+
+其中负样本分布 $P_n(w) \propto U(w)^{3/4}$，$U(w)$ 是词的一元频率。
+指数 $3/4$ 是一个经验上的「折中」：用原始频率会让停用词（的、是、在）垄断负样本，
+用均匀分布又会让罕见词被抽太多、学不到有意义的区分边界。
+单样本计算量从 $O(|V| d)$ 降到 $O(K d)$，$K$ 通常取 $5 \sim 20$（小语料取 $5 \sim 15$，大语料取 $2 \sim 5$）。
+
+\paragraph{方案二：层次 softmax（Hierarchical Softmax）。}
+把输出层组织成一棵 Huffman 二叉树，每个词是叶子节点，每个内部节点是一个二分类器。
+预测一个词只需沿着根到叶的路径做 $O(\log |V|)$ 次二分类判断，
+把 $O(|V|)$ 降到 $O(\log |V|)$。Huffman 树让高频词路径更短，进一步省算力。
+代价是树结构耦合了词频先验，且不能像负采样那样天然并行采样。
+
+\begin{insight}[负采样为什么能学到「好」的向量]
+负采样并没有显式优化「相似词靠近」这个目标，它优化的是「真实共现对与随机对的可分性」。
+但数学上可以证明，在最优解处，两个词向量的内积近似等于它们\textbf{点互信息}（PMI）的某个单调变换。
+也就是说，负采样是一种廉价的隐式矩阵分解：把「词-上下文共现矩阵」$\bm{M}$（元素为 PMI）
+近似分解为 $\bm{M} \approx W_{\text{in}} W_{\text{out}}\T$。
+这解释了两件事：为什么 $d$ 不需要太大（$100 \sim 300$ 足够，因为 PMI 矩阵有效秩并不高），
+以及为什么 Word2Vec 能呈现「国王 - 男人 + 女人 $\approx$ 女王」这种线性类比结构。
+\end{insight}
+
+\subsection{GloVe：把共现统计显式做成目标函数}
+
+GloVe（Global Vectors, 2014）的思路是「不做随机窗口采样，而是直接对全局共现计数做加权最小二乘」\cite{pennington2014glove}：
+
+\begin{equation}
+J = \sum_{i,j=1}^{|V|} f(X_{ij}) \, \Big( \bm{w}_i\T \tilde{\bm{w}}_j + b_i + \tilde{b}_j - \log X_{ij} \Big)^2 ,
+\label{eq:glove}
+\end{equation}
+
+其中 $X_{ij}$ 是词 $i$ 与上下文 $j$ 的共现次数，$f$ 是权重函数，用来压制高频对、保留低频对的信息：
+
+$$f(x) = \begin{cases} (x / x_{\max})^{\alpha}, & x < x_{\max}, \\ 1, & x \ge x_{\max}, \end{cases}
+\qquad \alpha = 0.75,\; x_{\max} = 100 .$$
+
+GloVe 与 Word2Vec 的实测效果在同一量级，差异更多来自语料、预处理与超参，而不是目标函数本身。
+它的工程优势是：共现矩阵可以先离线统计并复用，训练过程可被任意切分并行，适合超大规模语料的一次性构建。
+
+\subsection{FastText：用子词解决形态与未登录词}
+
+Word2Vec 与 GloVe 都有两个致命伤：一是把词当作不可分原子，
+「跑」与「跑步」「跑者」共享不了任何统计强度；二是遇到未登录词（OOV）只能返回全零向量。
+
+FastText（2017）把词表示为\textbf{字符 n-gram 的向量之和} \cite{bojanowski2017fasttext}。
+以 \code{where} 为例，取 $n = 3 \sim 6$，先做边界填充得到 \code{<where>}，
+再切出 \code{<wh}、\code{whe}、\code{her}、\code{ere}、\code{re>} 以及整词 \code{<where>}，
+词的向量就是这些片段向量的平均或求和：
+
+\begin{equation}
+\bm{v}_{w} = \frac{1}{|\mathcal{G}(w)|} \sum_{g \in \mathcal{G}(w)} \bm{z}_g ,
+\label{eq:fasttext}
+\end{equation}
+
+训练目标仍是负采样形式的二分类（并支持层次 softmax），但它额外承担了文本分类任务：
+把整句的词向量与 n-gram 向量平均后接一层线性分类器，在情感分析、意图识别这类任务上，
+其精度常常只比 BERT 低几个点，而推理速度可以快两个数量级以上。
+对中文而言，字符 n-gram 天然覆盖了大部分构词规律，这也是 FastText 在中文场景至今仍常驻生产的原因之一。
+
+\subsection{ELMo：第一次让「同一个词」有多个向量}
+
+上述所有方法产出的都是\term{静态词向量}{static word embedding}：
+「苹果」无论出现在「吃苹果」还是「苹果发布会」中，向量完全一样。
+一词多义（polysemy）与上下文相关语义（contextual semantics）无法表达。
+
+ELMo（2018）用双向 LSTM 语言模型解决这个问题 \cite{peters2018elmo}：
+先在大量语料上训练一个前向 LM 与一个后向 LM，然后把每一层（包括输入层）的隐状态
+做加权求和，得到该位置的上下文相关表示：
+
+\begin{equation}
+\text{ELMo}_k = \gamma \sum_{j=0}^{L} s_j \, \bm{h}_{k,j} ,
+\label{eq:elmo}
+\end{equation}
+
+其中 $L$ 是层数（ELMo 用 2 层 BiLSTM），$s_j$ 是可学习的 softmax 归一化权重
+（说明不同任务需要不同层的语法/语义信息），$\gamma$ 是全局缩放。
+把 $\text{ELMo}_k$ 拼接到原有词向量后再送入下游模型，在多个任务上带来 1 到 4 个点的提升。
+
+\begin{table}[htbp]
+\centering
+\caption{文本表示方法的演进与对比}
+\label{tab:repr-evolution}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{2.0cm} L{1.6cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{表示粒度} & \tabhead{上下文相关} & \tabhead{关键机制与局限} \\
+\midrule
+one-hot / BoW & 词 & 否 & 维度等于词表、任意两词正交；只能做线性分类与词频统计 \\
+\addlinespace
+Word2Vec & 词 & 否 & 负采样或层次 softmax 把 $O(|V|d)$ 降到 $O(Kd)$ 或 $O(d\log|V|)$；OOV 无解 \\
+\addlinespace
+GloVe & 词 & 否 & 显式分解全局共现矩阵的加权最小二乘；语料统计可复用、易并行 \\
+\addlinespace
+FastText & 子词 & 否 & 字符 n-gram 求和，天然处理形态变化与 OOV；仍是静态向量 \\
+\addlinespace
+ELMo & 子词 + 层 & 是（浅） & BiLSTM 双向语言模型 + 层加权；受 LSTM 串行特性限制，难以做大 \\
+\addlinespace
+Transformer 预训练 & 子词 & 是（深） & 自注意力全并行、可堆到几十层；本章其余部分的主角 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[静态词向量在生产里的三个坑]
+\begin{enumerate}
+  \item \textbf{把词向量当知识库用}。词向量的类比能力常被夸大。
+        实测中「国王 - 男人 + 女人」能命中「女王」，但大量类比（尤其是中文、专有名词、
+        多义词）会给出看似合理却错误的答案，不能用来做事实查询。
+  \item \textbf{跨语料混用}。不同语料、不同分词器训练出的词向量不在同一坐标系，
+        直接拼接或相加没有意义；要融合只能通过映射矩阵对齐或重新联合训练。
+  \item \textbf{忽略频率分层评估}。词向量的整体相似度指标（如 Spearman 相关）会被高频词主导，
+        低频词与领域词的实际质量需要用分层子集单独评估，否则上线后才发现领域词全是噪声。
+\end{enumerate}
+\end{pitfall}
+
+\section{Transformer：架构、复杂度与位置信息}
+\label{sec:nlp-transformer}
+
+\subsection{为什么需要自注意力}
+
+RNN/LSTM 有三个结构性缺陷：
+\textbf{（1）串行依赖}：第 $t$ 步必须等第 $t-1$ 步算完，无法利用 GPU 的大规模并行；
+\textbf{（2）长程依赖衰减}：信息要穿过 $t$ 个时间步，梯度与信号都会衰减（尽管 LSTM 的门控缓解了这一点）；
+\textbf{（3）路径长度线性增长}：任意两个位置之间的交互路径长度是 $O(n)$。
+
+自注意力（self-attention）把这三个问题一次性解决：任意两位置之间的路径长度是 $O(1)$，
+整层计算可以写成矩阵乘法并完全并行。代价是计算与显存随序列长度\textbf{平方增长}，
+以及在朴素实现下注意力矩阵的显存占用。
+
+\subsection{缩放点积注意力}
+
+给定输入矩阵 $\bm{X} \in \R^{n \times d}$（$n$ 为序列长度，$d$ 为模型维度），
+用三个可学习投影得到查询、键、值：
+
+$$\bm{Q} = \bm{X}\bm{W}_Q,\quad \bm{K} = \bm{X}\bm{W}_K,\quad \bm{V} = \bm{X}\bm{W}_V,
+\qquad \bm{W}_Q, \bm{W}_K, \bm{W}_V \in \R^{d \times d_k} .$$
+
+\term{缩放点积注意力}{scaled dot-product attention} 的定义是 \cite{vaswani2017attention}：
+
+\begin{equation}
+\boxed{\; \text{Attention}(\bm{Q}, \bm{K}, \bm{V}) = \softmax\!\left( \frac{\bm{Q}\bm{K}\T}{\sqrt{d_k}} + \bm{M} \right) \bm{V} \;}
+\label{eq:self-attention}
+\end{equation}
+
+其中 $\bm{M}$ 是掩码矩阵（因果掩码时，未来位置填 $-\infty$；填充掩码时，padding 位置填 $-\infty$），
+$\sqrt{d_k}$ 是缩放因子。缩放的必要性是数值稳定性：
+若 $\bm{q}, \bm{k}$ 各维独立、均值 0、方差 1，则 $\bm{q}\T\bm{k}$ 的方差为 $d_k$。
+$d_k$ 越大，内积的绝对值越大，softmax 越容易进入饱和区，
+梯度趋近于 0（即所谓的 softmax 梯度消失）。除以 $\sqrt{d_k}$ 把方差拉回 1。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  box/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+              inner sep=4pt, text width=3.3cm, align=center, font=\sffamily\scriptsize},
+  wide/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+               inner sep=4pt, text width=7.4cm, align=center, font=\sffamily\scriptsize},
+  op/.style={draw=TealDeep, fill=BoxBGAlt, circle, inner sep=1pt, font=\sffamily\scriptsize},
+  lbl/.style={font=\sffamily\tiny, SlateGray}
+]
+\node[wide] (inp) {输入子词序列 $\bm{X} \in \R^{n \times d}$（embedding + 位置编码）};
+\node[wide, above=6mm of inp] (ln1) {LayerNorm（Pre-LN 放在子层输入侧）};
+\node[wide, above=6mm of ln1] (mha) {多头自注意力：$h$ 个头并行，$\bm{Q}\bm{K}\T/\sqrt{d_k}$};
+\node[op, right=2mm of mha] (drop1) {D};
+\node[wide, above=6mm of mha] (add1) {残差相加 $\bm{X} + \text{MHA}(\bm{X})$};
+\node[wide, above=6mm of add1] (ln2) {LayerNorm};
+\node[wide, above=6mm of ln2] (ffn) {前馈网络 $\max(0, \bm{X}\bm{W}_1)\bm{W}_2$（$d_{ff} \approx 4d$）};
+\node[op, right=2mm of ffn] (drop2) {D};
+\node[wide, above=6mm of ffn] (add2) {残差相加 $\to$ 输出（可堆叠 $N$ 层）};
+\draw[-{Stealth}, thick, SlateGray] (inp) -- (ln1);
+\draw[-{Stealth}, thick, SlateGray] (ln1) -- (mha);
+\draw[-{Stealth}, thick, SlateGray] (mha) -- (add1);
+\draw[-{Stealth}, thick, SlateGray] (add1) -- (ln2);
+\draw[-{Stealth}, thick, SlateGray] (ln2) -- (ffn);
+\draw[-{Stealth}, thick, SlateGray] (ffn) -- (add2);
+\draw[-{Stealth}, thick, AmberDeep, dashed] (mha) -- (drop1);
+\draw[-{Stealth}, thick, AmberDeep, dashed] (ffn) -- (drop2);
+\draw[-{Stealth}, thick, CrimsonDeep, dashed] (inp.west) -- ++(-0.9,0) |- (add1.west)
+  node[midway, left=1pt, font=\sffamily\tiny, CrimsonDeep, text width=1.3cm, align=center] {残差};
+\end{tikzpicture}
+\caption{Transformer 编码器单层结构（Pre-LN 变体，D 表示 Dropout）}
+\label{fig:transformer-block}
+\end{figure}
+
+\subsection{多头注意力}
+
+单个注意力头只能学到一种「关联模式」。多头注意力用 $h$ 组独立的投影，
+在不同子空间里并行提取不同关系（有的头盯语法依存，有的头盯指代，有的头盯位置邻近），
+再拼接并投影回 $d$ 维：
+
+\begin{equation}
+\text{MultiHead}(\bm{Q}, \bm{K}, \bm{V}) = \concat(\text{head}_1, \dots, \text{head}_h)\,\bm{W}_O,
+\qquad \text{head}_i = \text{Attention}(\bm{Q}\bm{W}_Q^{(i)}, \bm{K}\bm{W}_K^{(i)}, \bm{V}\bm{W}_V^{(i)}) ,
+\label{eq:multihead}
+\end{equation}
+
+其中 $\bm{W}_Q^{(i)}, \bm{W}_K^{(i)}, \bm{W}_V^{(i)} \in \R^{d \times d_k}$，且通常取 $d_k = d_v = d / h$，
+使得总参数量与单头全维注意力相当（例如 $d = 768$、$h = 12$、$d_k = 64$）。
+注意总计算量也几乎不变，多头不是「更贵的注意力」，而是「同样预算下的多种视角」。
+
+\subsection{复杂度分析：为什么长上下文这么贵}
+
+设序列长度为 $n$、模型维度为 $d$、层数为 $L$，单层各模块的复杂度为：
+
+\begin{table}[htbp]
+\centering
+\caption{Transformer 单层各模块的计算与显存复杂度（$n$：序列长度，$d$：模型维度）}
+\label{tab:transformer-complexity}
+\small
+\begin{tabularx}{\textwidth}{L{3.5cm} L{3.0cm} L{2.6cm} Y}
+\toprule
+\tabhead{模块} & \tabhead{计算复杂度} & \tabhead{激活显存} & \tabhead{说明} \\
+\midrule
+QKV 投影 & $O(n d^2)$ & $O(nd)$ & 与 $n$ 线性相关，是短序列下的主导项 \\
+\addlinespace
+注意力打分 $\bm{Q}\bm{K}\T$ & $O(n^2 d)$ & $O(n^2)$ & 长序列下的瓶颈；朴素实现要物化 $n \times n$ 矩阵 \\
+\addlinespace
+注意力加权 $\bm{P}\bm{V}$ & $O(n^2 d)$ & $O(nd)$ & 同上 \\
+\addlinespace
+输出投影 & $O(n d^2)$ & $O(nd)$ & 与 QKV 同量级 \\
+\addlinespace
+前馈网络 & $O(n d^2 \cdot r)$ & $O(n d r)$ & 中间层通常 $r = 4$；参数量占全层约 2/3 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+由此得到两个关键结论：
+
+\begin{enumerate}
+  \item \textbf{总计算量}约为 $O(n d^2 + n^2 d)$ 每层。当 $n \ll d$ 时（如 $n = 512$、$d = 4096$），
+        线性项主导，注意力几乎免费；当 $n \gg d$ 时（如 $n = 128\text{K}$、$d = 8192$，此时 $n^2 d$ 已远超 $nd^2$），
+        平方项成为绝对瓶颈。这解释了长上下文的成本曲线为什么不是线性的。
+  \item \textbf{朴素注意力的激活显存}是 $O(n^2)$ 每头。$n = 32\text{K}$、$h = 32$、
+        半精度（2 字节）时，单层单头就是 $32768^2 \times 2 \approx 2.1$ GB，
+        乘以头数与层数完全不可承受。这正是 FlashAttention 要解决的问题：不物化矩阵。
+\end{enumerate}
+
+\subsection{位置编码：正弦、可学习、RoPE、ALiBi}
+
+自注意力对输入是\term{置换等变}{permutation equivariant}的：
+打乱词序，输出只是跟着打乱，模型本身察觉不到顺序。
+因此必须显式注入位置信息。
+
+\paragraph{正弦位置编码（Sinusoidal）。}
+原始 Transformer 的做法是用不同频率的正余弦函数直接构造编码，不引入参数：
+
+\begin{equation}
+\text{PE}(p, 2i) = \sin\!\left( \frac{p}{10000^{2i/d}} \right), \qquad
+\text{PE}(p, 2i+1) = \cos\!\left( \frac{p}{10000^{2i/d}} \right),
+\label{eq:sinusoidal}
+\end{equation}
+
+其中 $p$ 是位置索引，$i$ 是维度索引。选择这种形式的原因有二：
+一是任意位置 $p + k$ 的编码都可以表示为位置 $p$ 编码的\textbf{线性变换}，
+意味着「相对位移」可以被固定的线性映射表达；
+二是不同维度对应从 $2\pi$ 到 $10000 \cdot 2\pi$ 的几何级数波长，形成类似二进制计数的多尺度表示。
+
+\paragraph{可学习位置编码（Learned Absolute）。}
+BERT/GPT-2 直接把位置嵌入当作可训练参数 $\bm{P} \in \R^{n_{\max} \times d}$。
+好处是灵活，坏处是\textbf{硬上限}：训练时 $n_{\max} = 512$，
+推理时就无法处理 513 个 token（除非做插值或外推适配，通常伴随明显掉点）。
+
+\paragraph{旋转位置编码（RoPE）。}
+RoPE 不去「加」位置向量，而是对 $\bm{Q}$、$\bm{K}$ 的每两维做一次与位置相关的\textbf{旋转}。
+对第 $i$ 对维度，设 $\theta_i = 10000^{-2i/d}$，位置 $p$ 处的旋转角为 $p\theta_i$：
+
+\begin{equation}
+\begin{aligned}
+\begin{pmatrix} q'_{2i} \\ q'_{2i+1} \end{pmatrix}
+&= \begin{pmatrix} \cos(p\theta_i) & -\sin(p\theta_i) \\ \sin(p\theta_i) & \cos(p\theta_i) \end{pmatrix}
+\begin{pmatrix} q_{2i} \\ q_{2i+1} \end{pmatrix}, \\
+\langle \text{RoPE}(\bm{q}, p),\, \text{RoPE}(\bm{k}, p') \rangle
+&= g(\bm{q}, \bm{k}, p - p') .
+\end{aligned}
+\label{eq:rope}
+\end{equation}
+
+第二行的性质是关键：旋转后的内积只依赖\textbf{相对位置} $p - p'$ 与原始向量本身。
+这意味着 RoPE 天然编码相对位置，且可以配合\term{位置插值}{position interpolation}
+或 NTK-aware 缩放，把训练时 4K 的上下文外推到 32K 以上而只需少量续训。
+这也是今天几乎所有主流开源大模型都采用 RoPE 的原因。
+
+\paragraph{ALiBi（Attention with Linear Biases）。}
+ALiBi 完全不改 $\bm{Q}$、$\bm{K}$，而是在注意力打分上按距离加一个线性惩罚：
+
+\begin{equation}
+\text{score}_{ij} = \frac{\bm{q}_i\T\bm{k}_j}{\sqrt{d_k}} - m_h \cdot (i - j), \qquad i \ge j ,
+\label{eq:alibi}
+\end{equation}
+
+其中 $m_h$ 是每个头固定的斜率（例如 $h$ 个头用 $2^{-8/h}, 2^{-16/h}, \dots$ 这样的几何级数）。
+越远的 token 被扣分越多，模型自然偏好近邻。
+优点是\textbf{零参数、外推能力强}（训练 1K 可直接推 2K 以上），代价是它无法表达「远距离但强相关」的依赖，
+且缺少 RoPE 那种成熟的插值生态。
+
+\begin{table}[htbp]
+\centering
+\caption{位置编码方案对比}
+\label{tab:pos-encoding}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{1.5cm} L{1.7cm} L{1.9cm} Y}
+\toprule
+\tabhead{方案} & \tabhead{是否带参} & \tabhead{相对/绝对} & \tabhead{长度外推} & \tabhead{典型使用者与备注} \\
+\midrule
+正弦编码 & 否 & 绝对（隐含相对） & 理论可外推 & 原始 Transformer；实测外推并不好，已被取代 \\
+\addlinespace
+可学习绝对 & 是（$n_{\max} d$） & 绝对 & 无，硬上限 & BERT、GPT-2；超过训练长度需插值并续训 \\
+\addlinespace
+RoPE & 否 & 相对 & 好（配插值） & LLaMA 系、Qwen 系；主流默认，外推靠 NTK/线性插值 \\
+\addlinespace
+ALiBi & 否 & 相对（线性偏置） & 很好 & 部分长文本模型；实现最简，但表达力受限 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{残差与 LayerNorm：Pre-LN 与 Post-LN}
+
+残差连接保证梯度可以从深层直接回传到浅层，是「能堆到几十层」的前提。
+归一化的位置则决定训练的稳定性与是否要 warmup。
+
+\paragraph{Post-LN（原始 Transformer）}：$\bm{x}_{l+1} = \text{LN}\big(\bm{x}_l + F_l(\bm{x}_l)\big)$。
+归一化在残差相加之后。问题是：残差主干上的数值会随深度累积放大，
+深层梯度范数偏大，训练必须配\textbf{学习率 warmup}（通常是前 1\% 到 5\% 步线性升温），
+否则容易发散。它的好处是在小模型上最终精度往往略好。
+
+\paragraph{Pre-LN（现代主流）}：$\bm{x}_{l+1} = \bm{x}_l + F_l\big(\text{LN}(\bm{x}_l)\big)$。
+归一化在子层输入之前，残差路径是一条\textbf{无归一化的恒等通路}，
+梯度可以直接流过所有层。结果是训练极其稳定，去掉 warmup 也能收敛，
+代价是同等深度下表达能力略弱（实践中通过增加深度或使用 RMSNorm + 更小初始化补偿）。
+现代大模型几乎全部采用 Pre-LN 或其变体 RMSNorm（去掉均值中心化，只做缩放，省一次归约与若干乘法）。
+
+\paragraph{为什么层归一化不用批归一化？}
+NLP 的序列长度可变、batch 内 padding 比例差异大，在 batch 维度上统计均值方差会引入
+padding 噪声；而 LayerNorm 对每个样本独立归一化，天然不受长度与 batch 大小影响。
+这也是 LayerNorm 成为 NLP 默认选择的核心原因。
+
+\begin{insight}[Transformer 的成功，一半来自架构，一半来自「可扩展」]
+自注意力本身只是把「任意两位置交互」做成了可微的加权平均，谈不上多深刻。
+它真正不可替代的地方是：\textbf{它的计算形态是稠密矩阵乘法}，
+因此可以无缝吃到 GPU/TPU 的算力红利、可以写成超大 kernel、可以被蒸馏/量化/切分。
+RNN 的串行性使它无法随硬件规模线性获益——当算力增长 1000 倍时，
+Transformer 的墙钟时间可能缩短 100 倍，而 RNN 只能缩短很小一部分。
+\textbf{一个架构能否胜出，往往取决于它对硬件的「友好度」，而非它对数据的拟合能力。}
+\end{insight}
+
+\begin{lstlisting}[style=growth, language=PyTorch, caption={多头自注意力的核心实现（含因果掩码）}]
+import math, torch, torch.nn as nn, torch.nn.functional as F
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model=768, n_head=12, dropout=0.1):
+        super().__init__()
+        assert d_model % n_head == 0
+        self.d_model, self.n_head = d_model, n_head
+        self.d_k = d_model // n_head
+        # one fused projection is faster than three separate ones
+        self.qkv = nn.Linear(d_model, 3 * d_model, bias=False)
+        self.proj = nn.Linear(d_model, d_model, bias=False)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x, causal=True):
+        B, T, C = x.shape
+        q, k, v = self.qkv(x).chunk(3, dim=-1)
+        # (B, T, C) -> (B, n_head, T, d_k)
+        q, k, v = (t.view(B, T, self.n_head, self.d_k).transpose(1, 2)
+                   for t in (q, k, v))
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.d_k)   # (B, h, T, T)
+        if causal:
+            mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), 1)
+            att = att.masked_fill(mask, float("-inf"))
+        att = self.drop(F.softmax(att, dim=-1))
+        out = (att @ v).transpose(1, 2).reshape(B, T, C)         # merge heads
+        return self.proj(out)
+
+# Pre-LN block: normalise the input of each sub-layer, keep a clean residual path
+class PreLNBlock(nn.Module):
+    def __init__(self, d_model=768, n_head=12, d_ff=None):
+        super().__init__()
+        d_ff = d_ff or 4 * d_model
+        self.ln1, self.ln2 = nn.LayerNorm(d_model), nn.LayerNorm(d_model)
+        self.attn = MultiHeadSelfAttention(d_model, n_head)
+        self.mlp = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(),
+                                 nn.Linear(d_ff, d_model))
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
+        return x
+\end{lstlisting}
+
+\subsection{RNN 与 Transformer 的对照}
+
+\begin{table}[htbp]
+\centering
+\caption{RNN/LSTM 与 Transformer 的结构性对照}
+\label{tab:rnn-vs-transformer}
+\small
+\begin{tabularx}{\textwidth}{L{3.0cm} L{3.6cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{RNN / LSTM} & \tabhead{Transformer} \\
+\midrule
+并行性 & 位置间串行，batch 内可并行 & 位置间完全并行，训练吞吐可拉到硬件上限 \\
+\addlinespace
+任意两位置路径长度 & $O(n)$，信息逐步传递 & $O(1)$，一步直达 \\
+\addlinespace
+单层复杂度 & $O(n d^2)$ & $O(n d^2 + n^2 d)$ \\
+\addlinespace
+长序列行为 & 计算线性增长，但梯度衰减、难以捕获远距离依赖 & 计算平方增长，但远距离依赖与近邻同等直接 \\
+\addlinespace
+推理形态 & 每次只算一步，天然适合流式 & 需要 KV Cache 才能避免重复计算；长上下文显存压力大 \\
+\addlinespace
+位置信息 & 由递推结构天然携带 & 必须显式注入（RoPE/ALiBi 等） \\
+\addlinespace
+工程友好度 & 自定义 kernel 少、难以高效并行 & 稠密矩阵乘法，FlashAttention/张量并行生态成熟 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{casebox}[案例：一个中文垂域模型的训练与部署成本拆解（示范量级）]
+以下数字用于演示\textbf{估算方法}，是公开可复现的公开协议（如开源基座 + 公开价格）下的示范量级，
+不代表任何特定公司的真实账单。假设场景：为某中文垂类业务（例如家居品类客服）微调一个 7B 模型。
+
+\textbf{数据侧}：无标注领域文本约 20 GB（约 60 亿汉字级），经去重、过滤、脱敏后保留约 50\%，
+用开源 tokenizer 编码约 30 亿 token。若只做 LoRA 微调，实际需要的高质量指令数据 2 万到 10 万条即可。
+
+\textbf{训练侧}：以 LoRA 在 3 亿 token 上做 2 个 epoch 为例，训练计算量
+约 $6 \times 7 \times 10^9 \times 3 \times 10^8 \times 2 \approx 2.5 \times 10^{19}$ FLOPs（按 \cref{eq:train-flops} 估算）。
+单张 A100 在 BF16 + FlashAttention 下实测有效算力按峰值的 40\% 计约 120 TFLOPS，
+则约需 $2.5 \times 10^{19} / 1.2 \times 10^{14} \approx 2.1 \times 10^5$ 秒，即单卡约 58 小时；
+用 8 卡张量并行 + 数据并行约 7 到 9 小时。按公有云 A100 现价（约每小时数美元量级，以官方最新报价为准），
+一次微调成本在\textbf{几十到一两百美元}量级。
+
+\textbf{推理侧}：日请求 20 万次，平均输入 800 token、输出 300 token，
+则日耗 $\approx 0.2 \times 10^6 \times (800 + 300) = 2.2 \times 10^8$ token。
+自建单张 A100 在 7B 模型 + vLLM + 连续批处理下吞吐可达每秒数千 token，
+足以覆盖峰值；若走 API，按每百万 token 数美元的公开价格，日成本在\textbf{数百到上千美元}量级。
+结论：\textbf{微调的成本是一次性的，推理成本是每日复现的}，
+所以对垂域模型，路由（简单请求给 FastText/小模型，复杂请求给大模型）与缓存带来的收益，
+远大于把训练学得更精细。
+\end{casebox}
+
+\section{预训练范式：自回归、自编码与编码-解码}
+\label{sec:nlp-paradigm}
+
+\subsection{三条技术路线}
+
+\begin{itemize}
+  \item \textbf{自回归（Autoregressive, AR）}：GPT 系列 \cite{radford2019gpt2,brown2020gpt3}。
+        用标准的从左到右语言模型目标 $p(w_t \mid w_{<t})$，因果掩码注意力。
+        训练目标与推理行为\textbf{完全一致}，天然支持生成、上下文学习与流式输出；
+        缺点是单向，看不到右侧上下文，做判别任务时不如双向模型。
+  \item \textbf{自编码（Autoencoding, AE）}：BERT 系列 \cite{devlin2019bert,liu2019roberta}。
+        随机遮盖一部分 token 再还原（MLM），双向注意力。
+        表示质量高，在分类/标注/匹配任务上极强；
+        缺点是训练与推理存在\term{预训练-微调不一致}{pre-train/fine-tune mismatch}
+        （训练时输入含 \code{[MASK]}，微调时没有），且不能直接做生成。
+  \item \textbf{编码-解码（Encoder-Decoder）}：T5 / BART 系列 \cite{raffel2020t5}。
+        编码器双向读入、解码器自回归输出，通过交叉注意力连接。
+        天然适配「序列到序列」任务（翻译、摘要、改写），可以统一成 text-to-text 格式；
+        缺点是参数量与计算量都比同规模的单栈模型贵，且不能像 GPT 那样做纯 decoder-only 的高效推理。
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{三种预训练范式对比}
+\label{tab:paradigm-compare}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{1.9cm} L{1.9cm} L{1.9cm} Y}
+\toprule
+\tabhead{范式} & \tabhead{代表模型} & \tabhead{注意力} & \tabhead{预训练目标} & \tabhead{擅长与代价} \\
+\midrule
+自回归 & GPT-3、LLaMA、Qwen & 因果（单向） & 下一 token 预测 & 生成/对话/ICL 最强；判别任务略弱，不能双向看上下文 \\
+\addlinespace
+自编码 & BERT、RoBERTa、DeBERTa & 双向 & MLM（15\% 遮盖） & 分类/标注/匹配强、推理快；不能直接生成，有训练-推理不一致 \\
+\addlinespace
+编码-解码 & T5、BART、mT5 & 编码双向 + 解码因果 & Span Corruption / 去噪 & 翻译摘要等 seq2seq 友好、易统一；参数与延迟更高 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{预训练任务细节}
+
+\paragraph{MLM（Masked Language Modeling）。}
+BERT 随机选 15\% 的 token 位置，其中 80\% 替换为 \code{[MASK]}、
+10\% 替换为随机词、10\% 保持不变，然后要求模型还原原词。
+损失只在被选中的位置上计算：
+
+\begin{equation}
+\mathcal{L}_{\text{MLM}} = - \sum_{i \in \mathcal{M}} \log p_\theta\big(w_i \mid \tilde{\bm{w}}\big),
+\label{eq:mlm}
+\end{equation}
+
+其中 $\mathcal{M}$ 是被遮盖位置集合，$\tilde{\bm{w}}$ 是加噪后的序列。
+三个比例的用意：\code{[MASK]} 让任务可学，随机词迫使模型不能只依赖「见到 mask 就查上下文」的捷径，
+保持不变则缓解训练与微调的输入分布差异。但 15\% 的遮盖率也意味着
+\textbf{每个 batch 只有 15\% 的 token 提供梯度信号}，样本效率低，训练需要更多步数。
+
+\paragraph{NSP 与它的失败。}
+BERT 最初的第二个任务是 NSP（Next Sentence Prediction）：判断两个句子是否连续。
+后续研究（RoBERTa、ALBERT 等）发现 NSP 任务过于简单，模型可以靠「话题相似度」作弊，
+去掉 NSP 反而提升下游效果，于是现代编码器基本不再使用 NSP，
+而改用更长片段连续采样（RoBERTa 的 FULL-SENTENCES）、
+动态遮盖（每个 epoch 重新采样 mask）与更大的 batch。
+
+\paragraph{Span Corruption（T5）。}
+T5 把连续片段替换成哨兵符号，让解码器重建被抹掉的片段，
+输出长度通常只有输入的 15\%，比 BERT 的整序列重建更省算力：
+
+$$\text{输入：Thank you \textless{}X\textgreater{} me to your party \textless{}Y\textgreater{} week.}
+\qquad \text{目标：\textless{}X\textgreater{} for inviting \textless{}Y\textgreater{} last \textless{}Z\textgreater{}} .$$
+
+\paragraph{ELECTRA 的替换检测（Replaced Token Detection）。}
+ELECTRA 把「生成 + 判别」拆成两个角色：一个小的生成器负责在遮盖位置填入看似合理的词，
+一个判别器（主模型）对序列中\textbf{每一个} token 判断「是否被替换过」。
+因此损失覆盖全部 token 而不是 15\%，样本效率显著高于 MLM，
+在同等算力下通常能达到更强效果，训练成本可降到同效果 BERT 的几分之一。
+
+\begin{formulacard}[各预训练目标的信息密度对比]
+设遮盖率为 $p$，序列长度为 $n$：
+\begin{itemize}
+  \item MLM：每步只有 $pn$ 个位置贡献损失（$p = 0.15$），信息密度约 15\%；
+  \item Span Corruption：目标长度约 $0.15n$，信息密度相近但解码更短；
+  \item ELECTRA 判别：$n$ 个位置全部贡献损失，信息密度约 100\%，是 MLM 的 6 倍以上；
+  \item 自回归 LM：$n$ 个位置全部贡献损失，但每个位置只能利用左侧上下文。
+\end{itemize}
+这也解释了为什么「同等算力下 ELECTRA 更省、自回归模型样本效率最高」，
+但自回归仍然胜出，因为它的目标与生成推理完全一致，且更利于规模化。
+\end{formulacard}
+
+\section{数据规模、Scaling Laws 与训练成本}
+\label{sec:nlp-scaling}
+
+\subsection{数据：质量与配比往往比规模更重要}
+
+预训练数据管线的标准动作可以概括为六步，每一步都有具体的判据与代价：
+
+\begin{enumerate}
+  \item \textbf{抽取与语言识别}。从网页、书籍、代码、论文中抽取正文；
+        用轻量分类器做语言过滤，非目标语言直接丢弃。
+  \item \textbf{质量过滤}。基于启发式规则（标点密度、平均句长、重复行占比、
+        停用词比例）与分类器打分（如「是否像维基百科」）双重筛选。
+        经验上过滤掉 50\% 到 90\% 的原始网页文本，模型效果反而更好。
+  \item \textbf{去重}。文档级用 MinHash/SimHash 做近似去重，行级再去一次。
+        重复文本会导致模型逐字记忆、评测虚高、训练浪费。公开研究普遍报告
+        网页语料中近似重复比例可达 30\% 以上。
+  \item \textbf{脱敏与合规}。清除个人身份信息（PII）、移除明显侵权与违规内容，
+        并留存数据来源与许可记录；跨境业务还需考虑数据出境与本地化要求（以各地最新法规为准）。
+  \item \textbf{配比（mixture）}。不同来源按权重混合。经验规律是代码与数学数据能显著提升推理能力，
+        但其数量远小于网页数据，需要\textbf{上调采样权重}（epoch 重复训练）；
+        重复超过约 4 个 epoch 后收益迅速衰减，这是配比设计中最容易被忽视的约束。
+  \item \textbf{Curriculum / 退火}。训练后期（如最后 10\% 步）切换到更高质量、
+        更贴近下游分布的数据，通常能带来可观的下游提升，成本却接近零。
+\end{enumerate}
+
+\begin{pitfall}[数据工程的三个反直觉发现]
+\begin{enumerate}
+  \item \textbf{「更多数据」经常不如「更干净的数据」}。同算力下，
+        经过强过滤的小规模高质量语料常常打败未过滤的大规模语料；
+        网页里的模板文本、SEO 垃圾、机器翻译回译内容会持续毒化模型。
+  \item \textbf{去重不是可选项}。不去重的直接后果是模型对训练文本的逐字复现率显著上升，
+        在大模型上表现为「背诵」训练集片段，既带来版权与合规风险，也会让评测分数失真。
+  \item \textbf{配比是超参，不是常数}。同一份数据，把代码/数学比例从 1\% 提到 10\%，
+        推理类基准可能提升两位数百分比，但通用写作能力可能下降。
+        配比必须结合目标评测集来调，不能照搬他人的「黄金比例」。
+\end{enumerate}
+\end{pitfall}
+
+\subsection{Scaling Laws：损失是算力的幂律函数}
+
+Kaplan 等人（2020）发现，在很大范围内，语言模型的交叉熵损失与参数量 $N$、
+数据量 $D$、计算量 $C$ 之间存在平滑的幂律关系 \cite{kaplan2020scaling}。
+简化写法：
+
+\begin{equation}
+L(N, D) \approx \left( \frac{N_c}{N} \right)^{\alpha} + \left( \frac{D_c}{D} \right)^{\beta} + L_\infty ,
+\qquad \alpha \approx 0.076,\; \beta \approx 0.095,\; L_\infty \gtrsim 1.69 ,
+\label{eq:scaling-law}
+\end{equation}
+
+其中 $L_\infty$ 是不可约损失（数据的固有熵），$\alpha, \beta$ 为经验指数。
+指数很小（远小于 1）意味着收益递减：损失每下降固定幅度，算力大致需要翻倍。
+所谓\term{计算最优}{compute-optimal}训练，就是在给定算力预算 $C \approx 6ND$ 下最小化 $L(N,D)$。
+
+\begin{insight}[Chinchilla 修正了一个被广泛误用的结论]
+Kaplan 的结论被当时的工业界解读为「优先堆参数、数据可以少」，
+于是出现了 GPT-3（175B 参数、约 3000 亿 token）这类「参数远大于数据」的配置。
+Chinchilla（2022）重新做了严格的算力对齐实验，得到的结论是：
+\textbf{在给定算力下，参数量与训练 token 数应当大致同比例增长}，
+最优比例约为 $D \approx 20N$，即每个参数配 20 个 token \cite{hoffmann2022chinchilla}。
+据此，70B 参数模型对应约 1.4 万亿 token；而 GPT-3 的 3000 亿 token
+对 175B 参数来说远远不够——按 Chinchilla 口径，同样的算力应该训练一个更小的模型、喂更多数据。
+
+后续实践又把这个结论往前推了一步：由于\textbf{推理成本远大于训练成本}
+（模型上线后要服务千万次请求，而训练只做一次），
+工业界普遍采用「\textbf{过训练}（over-training）」策略：
+用远超 $20N$ 的 token 数训练相对小的模型（例如 7B 参数配 2 到 15 万亿 token），
+牺牲一些「每 FLOP 的损失」，换取更低的部署成本。这本质是把训练算力换成推理算力，
+在总拥有成本（TCO）视角下几乎总是划算的。
+\end{insight}
+
+\subsection{训练成本估算}
+
+预训练的总计算量有一个被广泛使用的经验公式：前向计算量约为 $2ND$
+（$N$ 个参数各做一次乘加，读入与写回），反向约为前向的两倍，因此总计算量
+
+\begin{equation}
+C_{\text{train}} \approx 6 \, N \, D \quad (\text{FLOPs}), \qquad
+T_{\text{wall}} \approx \frac{C_{\text{train}}}{\eta \cdot N_{\text{gpu}} \cdot P_{\text{peak}}} ,
+\label{eq:train-flops}
+\end{equation}
+
+其中 $D$ 为训练 token 数，$\eta$ 是硬件利用率（\term{MFU}{Model FLOPs Utilization}，
+大模型预训练实测通常在 35\% 到 55\% 之间），$P_{\text{peak}}$ 是单卡峰值算力
+（A100 BF16 约 312 TFLOPS，H100 BF16 约 990 TFLOPS，均为含稀疏的标称值）。
+
+代入一个示范量级：$N = 7 \times 10^9$、$D = 2 \times 10^{12}$（7B 过训练到 2T token），
+则 $C \approx 6 \times 7\times10^9 \times 2\times10^{12} = 8.4 \times 10^{22}$ FLOPs。
+若用 512 张 H100、$\eta = 0.4$，则
+$T \approx 8.4\times10^{22} / (0.4 \times 512 \times 9.9\times10^{14}) \approx 4.1 \times 10^5$ 秒，
+约 4.8 天。这个量级与公开报道的 7B 级模型训练时长基本一致。
+
+\begin{table}[htbp]
+\centering
+\caption{训练成本估算的参数速查（示范量级，实际以官方报价与实测为准）}
+\label{tab:train-cost}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{2.3cm} L{2.2cm} Y}
+\toprule
+\tabhead{项目} & \tabhead{典型取值} & \tabhead{单位} & \tabhead{说明} \\
+\midrule
+训练计算量 & $6ND$ & FLOPs & 前向 $2ND$，反向约 $4ND$ \\
+\addlinespace
+硬件利用率 & 0.35 到 0.55 & 无量纲 & 受通信、气泡、重算策略影响 \\
+\addlinespace
+A100 BF16 峰值 & 约 312 & TFLOPS & 标称峰值，实测有效算力约为其 40\% 到 50\% \\
+\addlinespace
+H100 BF16 峰值 & 约 990 & TFLOPS & 标称峰值，需配合 FP8/Transformer Engine 才能接近 \\
+\addlinespace
+集群成本 & 每小时数美元/卡 & USD & 公有云按需价，长租与竞价可显著降低，以官方最新报价为准 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[预训练/继续预训练的成本与风险检查清单]
+\begin{enumerate}
+  \item \textbf{先算 $6ND$，再决定要不要做}。继续预训练（domain-adaptive pretraining）
+        的开销常常被低估：即使用 1\% 的 token 量，若基座是 70B，成本仍然可观。
+  \item \textbf{优先考虑 LoRA 继续预训练}。在领域语料上只训练低秩适配器，
+        显存与成本可降一个数量级，且不易破坏基座通用能力（见 \cref{sec:nlp-peft}）。
+  \item \textbf{务必做小规模消融}：用 1\% 数据训练 3 个不同配比的小模型，
+        比较目标评测集，再决定全量配方。这一小步通常能省下数周算力。
+  \item \textbf{监控训练稳定性三件套}：梯度范数、loss spike 频率、激活最大值。
+        大模型训练中 loss spike 是常态，需要 checkpoint 回滚 + 跳过数据分片 + 降低学习率。
+  \item \textbf{预留显存给优化器状态}。Adam 训练时每个参数需要
+        参数 + 梯度 + 一阶矩 + 二阶矩，混合精度下合计约 16 字节/参数；
+        70B 模型仅优化器状态就超过 1 TB，必须用 ZeRO/FSDP 分片或 8-bit Adam。
+\end{enumerate}
+\end{toolbox}
+
+\section{微调与参数高效适配}
+\label{sec:nlp-peft}
+
+\subsection{全参数微调与它的账}
+
+全参数微调（Full Fine-tuning, FFT）在目标数据上更新全部 $N$ 个参数。
+它的显存开销可以精确写出来。混合精度 Adam 训练时，每参数需要：
+
+\begin{itemize}
+  \item BF16 权重 2 字节 + BF16 梯度 2 字节；
+  \item FP32 主权重副本 4 字节 + FP32 一阶矩 4 字节 + FP32 二阶矩 4 字节；
+  \item 合计约 \textbf{16 字节/参数}（若用 FP32 主权重与 Adam 的经典实现）。
+\end{itemize}
+
+因此 7B 模型仅权重与优化器状态就约 $7\times10^9 \times 16 = 112$ GB，
+再加上激活值与注意力中间张量（与 batch、序列长度成正比），
+单卡 80 GB 完全放不下，必须依赖 ZeRO-3/FSDP 分片。
+对比之下，LoRA 只保存少量适配器参数与对应优化器状态，
+7B 模型在 batch 较小、序列长度 2K 以内时，单张 24 GB 消费级卡即可完成微调。
+
+\subsection{LoRA：低秩假设}
+
+LoRA（Low-Rank Adaptation, 2021）的核心假设是：
+\emph{微调带来的权重更新矩阵 $\Delta \bm{W}$ 是低秩的} \cite{hu2021lora}。
+于是不直接学习 $\Delta \bm{W} \in \R^{d \times k}$，
+而是把它分解为两个小矩阵的乘积：
+
+\begin{equation}
+\bm{W}' = \bm{W}_0 + \Delta \bm{W} = \bm{W}_0 + \frac{\alpha}{r} \, \bm{B}\bm{A},
+\qquad \bm{A} \in \R^{r \times k},\; \bm{B} \in \R^{d \times r},\; r \ll \min(d, k),
+\label{eq:lora}
+\end{equation}
+
+其中 $\bm{W}_0$ 冻结且不接收梯度，$\bm{A}$ 用高斯分布随机初始化、
+$\bm{B}$ 初始化为\textbf{全零}（保证训练开始时 $\Delta \bm{W} = 0$，模型行为与基座完全一致，
+避免训练初期被随机扰动破坏），$\alpha$ 是缩放系数（常用 $\alpha = r$ 或 $\alpha = 2r$）。
+可训练参数量从 $dk$ 降到 $r(d + k)$，当 $r = 8$、$d = k = 4096$ 时，
+压缩比约 $4096^2 / (8 \times 8192) = 256$ 倍。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  box/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=9mm,
+              inner sep=4pt, text width=1.9cm, align=center, font=\sffamily\scriptsize},
+  freeze/.style={draw=SlateGray, fill=CodeBG, rounded corners=2pt, minimum height=9mm,
+                 inner sep=4pt, text width=2.1cm, align=center, font=\sffamily\scriptsize},
+  hot/.style={draw=CrimsonDeep, fill=white, rounded corners=2pt, minimum height=9mm,
+              inner sep=4pt, text width=1.5cm, align=center, font=\sffamily\scriptsize},
+  sum/.style={draw=TealDeep, fill=BoxBGAlt, circle, inner sep=1.5pt, font=\sffamily\small}
+]
+\node[box] (x) {输入 $\bm{x}$};
+\node[freeze, above=8mm of x] (w) {预训练权重 $\bm{W}_0$\\（冻结）};
+\node[hot, right=14mm of w] (A) {$\bm{A}$\\$r \times k$};
+\node[hot, right=of A] (B) {$\bm{B}$\\$d \times r$};
+\node[box, above=8mm of w] (h) {输出 $\bm{h}$};
+\node[sum, right=6mm of A] (plus) {$+$};
+\draw[-{Stealth}, thick, SlateGray] (x) -- (w);
+\draw[-{Stealth}, thick, SlateGray] (w) -- (h);
+\draw[-{Stealth}, thick, SlateGray] (x.east) -- ++(0.6,0) |- (A.south);
+\draw[-{Stealth}, thick, CrimsonDeep] (A) -- node[above, font=\sffamily\tiny, CrimsonDeep] {$r$ 维瓶颈} (B);
+\draw[-{Stealth}, thick, CrimsonDeep] (B.north) -- ++(0,0.5) -| (h.east);
+\draw[-{Stealth}, thick, TealDeep, dashed] (A) -- (plus);
+\node[right=1mm of plus, font=\sffamily\tiny, SlateGray, text width=2.2cm] {仅 $\bm{A},\bm{B}$ 参与反向传播};
+\end{tikzpicture}
+\caption{LoRA 结构示意：冻结主干，只训练低秩旁路}
+\label{fig:lora}
+\end{figure}
+
+\begin{formulacard}[LoRA 的工程超参速记]
+\begin{itemize}
+  \item \textbf{rank $r$}：4 到 64 是常用区间。分类/抽取任务 $r = 4 \sim 8$ 通常够；
+        复杂指令跟随或风格迁移需要 $r = 16 \sim 64$。再加大边际收益很小。
+  \item \textbf{alpha}：常见做法 $\alpha = r$ 或 $\alpha = 2r$。真正影响优化的是比例 $\alpha / r$，
+        换 $r$ 时同步调 $\alpha$ 可减少重调学习率的工作量。
+  \item \textbf{target modules}：只挂 \code{q\_proj,v\_proj} 是最省的做法；
+        挂上 \code{k\_proj,o\_proj} 与全部 FFN 线性层（\code{gate,up,down\_proj}）
+        通常带来 1 到 3 个点提升，代价是参数量增加数倍。经验上 FFN 层比注意力层的贡献更大。
+  \item \textbf{学习率}：比全参微调大 1 到 2 个数量级，$1\times10^{-4}$ 到 $3\times10^{-4}$ 是常见起点；
+        全参微调一般用 $1\times10^{-5}$ 到 $2\times10^{-5}$。
+  \item \textbf{不加权重衰减到适配器上}通常更稳；\code{dropout} 取 0.05 到 0.1。
+\end{itemize}
+\end{formulacard}
+
+\subsection{QLoRA 与其他 PEFT 方法}
+
+QLoRA 在 LoRA 之上叠加三层优化：
+（1）把冻结的基座权重量化到 \textbf{4-bit NF4}（一种对正态分布信息最优的量化数据类型）；
+（2）用\term{双重量化}{double quantization} 对量化常数再做一次量化，每参数再省约 0.4 bit；
+（3）用\term{分页优化器}{paged optimizer} 把优化器状态在显存不足时换出到主机内存，避免 OOM。
+结果是在单张 48 GB 卡上微调 65B 模型成为可能，代价是训练速度下降（约 20\% 到 40\%），
+以及少量精度损失（多数任务在 1 个点以内）。
+
+\begin{table}[htbp]
+\centering
+\caption{参数高效微调（PEFT）方法对比}
+\label{tab:peft-compare}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{2.1cm} L{1.7cm} L{1.8cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{注入位置} & \tabhead{可训练参数} & \tabhead{推理额外开销} & \tabhead{适用与限制} \\
+\midrule
+Full FT & 全部权重 & 100\% & 无 & 效果上限最高；显存与成本最高，易灾难性遗忘 \\
+\addlinespace
+LoRA & 注意力/FFN 线性层旁路 & 约 0.1\% 到 1\% & 无（可合并进 $\bm{W}_0$） & 通用首选；多任务可用不同适配器热插拔 \\
+\addlinespace
+QLoRA & 同 LoRA，基座 4-bit & 同 LoRA & 无（合并后可反量化） & 单卡微调大模型；训练慢 20\% 到 40\%，精度略降 \\
+\addlinespace
+Prefix Tuning & 每层 KV 前加可学习前缀 & 约 0.1\% & 有（占 KV Cache） & 生成任务友好；占用序列长度，长上下文受限 \\
+\addlinespace
+P-Tuning v2 & 每层输入加 prompt 向量 & 约 0.1\% 到 3\% & 有 & 小模型上比 v1 稳；对超参敏感 \\
+\addlinespace
+Adapter & 层间插入瓶颈 MLP & 约 1\% 到 5\% & 有（多一层前向） & 结构清晰、模块化；增加推理延迟 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[微调不等于知识注入]
+\textbf{现象}：企业把产品手册、政策文档放进训练集做全参微调，
+期望模型「学会」这些知识；上线后发现模型能模仿文档的\textbf{语气}，
+却答不对具体条款、价格、参数，甚至自信地编造。
+
+\textbf{根因}：微调主要改变的是\emph{行为模式与输出风格}（格式、口吻、任务映射），
+对事实性知识的写入效率极低。经验规律是：一个新事实需要在数据中反复出现几十到上百次，
+且不能被其他样本的梯度覆盖，才可能被稳定记住。
+样本量小（几千条）时，模型更可能学到「这类问题的答案长什么样」，而不是「答案是什么」。
+
+\textbf{正确做法}：事实性知识交给\textbf{检索增强（RAG）}或结构化查询，
+微调只负责「怎么问、怎么答、怎么引用」。诊断方法是：
+先在训练集上做闭卷问答（看是否记住），再在改写过的同义问法上测试（看是否泛化）。
+闭卷对、改写错，说明模型在背诵；两者都错，说明是知识没写入，应改走 RAG 路线
+（见 \cref{ch:rag}）。
+\end{pitfall}
+
+\section{对齐：从 SFT 到 RLHF、DPO 与 GRPO}
+\label{sec:nlp-alignment}
+
+\subsection{三阶段流程}
+
+一个现代对话模型的训练通常分三步：
+
+\begin{enumerate}
+  \item \textbf{预训练（Pre-training）}：在数万亿 token 上学习语言与世界知识，
+        得到基座模型（base model）。它的行为是「续写」，不是「回答问题」。
+  \item \textbf{监督微调 / 指令微调（SFT）}：在数万到数百万条「指令-回答」对上做监督学习，
+        教模型「把指令当作任务而不是当作待续写的文本」。
+  \item \textbf{偏好对齐}：用人类（或 AI）偏好数据进一步优化，
+        让输出更有用、更诚实、更安全。主流方法有 RLHF（RM + PPO）、DPO 及其变体。
+\end{enumerate}
+
+SFT 的目标就是标准的 token 级交叉熵，只是损失只算在回答部分（prompt 部分通常做 mask）：
+
+\begin{equation}
+\mathcal{L}_{\text{SFT}}(\theta) = - \E_{(x, y) \sim \mathcal{D}} \left[ \sum_{t=1}^{|y|} \log \pi_\theta(y_t \mid x, y_{<t}) \right].
+\label{eq:sft}
+\end{equation}
+
+SFT 的本质是\term{行为克隆}{behavior cloning}：
+它只告诉模型「正确答案是什么」，不告诉模型「另一个答案差在哪里」。
+数据量达到约 1 万到 10 万条高质量样本后，边际收益迅速下降；
+真正决定上限的是\textbf{数据质量与多样性}，而不是数量。
+
+\subsection{RLHF：奖励模型 + PPO}
+
+RLHF 分两步 \cite{ouyang2022instructgpt}。
+
+\paragraph{第一步：训练奖励模型（Reward Model, RM）。}
+收集同一 prompt 下的成对回答 $(y_w, y_l)$（$w$ 表示更受偏好），
+让 RM 学会给回答打分。用 Bradley-Terry 模型把「打分差」映射成偏好概率：
+
+\begin{equation}
+\mathcal{L}_{\text{RM}}(\phi) = - \E_{(x, y_w, y_l)} \Big[ \log \sigmoid\big( r_\phi(x, y_w) - r_\phi(x, y_l) \big) \Big].
+\label{eq:rm-loss}
+\end{equation}
+
+RM 通常由 SFT 模型去掉输出头、换成一个标量头得到，规模可比策略模型小一到两个数量级。
+
+\paragraph{第二步：用 PPO 优化策略。}
+把语言生成看作一个序列决策问题，token 是动作、生成的完整回答是轨迹。
+奖励由 RM 分数与一个「不要偏离 SFT 模型太远」的 KL 惩罚共同构成：
+
+\begin{equation}
+\max_{\pi_\theta} \; \E_{x \sim \mathcal{D},\, y \sim \pi_\theta(\cdot \mid x)}
+\left[ r_\phi(x, y) - \beta \, \KL\big( \pi_\theta(\cdot \mid x) \,\|\, \pi_{\text{ref}}(\cdot \mid x) \big) \right],
+\label{eq:ppo-objective}
+\end{equation}
+
+其中 $\pi_{\text{ref}}$ 是冻结的 SFT 参考模型，$\beta$ 控制 KL 约束强度。
+PPO 用\term{裁剪代理目标}{clipped surrogate objective} 限制每次更新的步长：
+
+\begin{equation}
+\mathcal{L}_{\text{PPO}}(\theta) = - \E_t \Big[ \min\big( \rho_t \hat{A}_t,\;
+\text{clip}(\rho_t, 1-\epsilon, 1+\epsilon) \hat{A}_t \big) \Big],
+\qquad \rho_t = \frac{\pi_\theta(a_t \mid s_t)}{\pi_{\theta_{\text{old}}}(a_t \mid s_t)} ,
+\label{eq:ppo-clip}
+\end{equation}
+
+其中 $\hat{A}_t$ 是优势估计（实践中常用 GAE），$\epsilon$ 常取 0.2。
+PPO 的工程复杂度很高：需要同时驻留策略模型、参考模型、奖励模型、价值模型（四个模型），
+训练不稳定、超参敏感、复现困难，这也催生了 DPO。
+
+\subsection{DPO：把 RL 问题化为分类问题}
+
+DPO（Direct Preference Optimization）的关键数学观察是：
+在 KL 约束下，式 \eqref{eq:ppo-objective} 的\textbf{最优策略有闭式解}：
+
+$$\pi^*(y \mid x) = \frac{1}{Z(x)} \pi_{\text{ref}}(y \mid x) \exp\!\left( \frac{1}{\beta} r(x, y) \right).$$
+
+把这个关系反解出 $r(x,y)$，代入偏好损失 \eqref{eq:rm-loss}，
+归一化常数 $Z(x)$ 在成对相减时被消掉，于是得到完全不需要奖励模型的直接优化目标：
+
+\begin{equation}
+\mathcal{L}_{\text{DPO}}(\theta) = - \E_{(x, y_w, y_l)}
+\left[ \log \sigmoid\!\left( \beta \log \frac{\pi_\theta(y_w \mid x)}{\pi_{\text{ref}}(y_w \mid x)}
+- \beta \log \frac{\pi_\theta(y_l \mid x)}{\pi_{\text{ref}}(y_l \mid x)} \right) \right].
+\label{eq:dpo}
+\end{equation}
+
+直觉解释：DPO 要求模型相对参考模型\textbf{提高「好答案」的对数概率、压低「坏答案」的对数概率}，
+而 $\beta$ 控制允许偏离参考模型的程度。工程上它只需要策略模型和参考模型两个模型、
+一次前向即可计算损失，训练稳定性和可复现性远好于 PPO。
+
+\begin{table}[htbp]
+\centering
+\caption{偏好对齐方法对比}
+\label{tab:alignment-compare}
+\small
+\begin{tabularx}{\textwidth}{L{1.7cm} L{2.3cm} L{1.8cm} L{1.7cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{需要什么模型} & \tabhead{数据形态} & \tabhead{训练稳定性} & \tabhead{备注} \\
+\midrule
+SFT & 1（策略） & 指令-回答对 & 高 & 行为克隆，不利用负例；数据质量决定上限 \\
+\addlinespace
+RLHF/PPO & 4（策略/参考/RM/价值） & 成对偏好 + prompt & 中低 & 上限高、可控性强；工程复杂、易 reward hacking \\
+\addlinespace
+DPO & 2（策略/参考） & 成对偏好 & 高 & 无需 RM；对数据分布敏感，离线偏好易过拟合 \\
+\addlinespace
+GRPO & 2 到 3（策略/参考，去掉价值模型） & 同一 prompt 的多条采样 + 规则或模型奖励 & 中 & 组内相对优势替代价值网络，省显存；适合可验证奖励任务 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{对齐税与奖励黑客}
+
+\begin{keypoint}[对齐不是免费的]
+\textbf{对齐税（alignment tax）}指对齐训练在提升有用性/安全性的同时，
+可能损害基座模型的通用能力，典型表现有三类：
+\begin{enumerate}
+  \item \textbf{多样性下降}：模型输出趋于模板化、开头句式高度雷同。
+        KL 惩罚过强（$\beta$ 过大）或偏好数据风格单一都会加剧。
+  \item \textbf{推理能力回退}：数学与代码基准在 RLHF 后可能出现几个点的下降，
+        因为偏好数据更偏爱「表达清晰」而非「推导正确」；这类任务更适合用可验证奖励（规则判分）做 RL。
+  \item \textbf{谄媚（sycophancy）}：模型学会迎合用户的预设答案而非坚持事实，
+        这是偏好数据来自「人类打分」的必然副作用——人类偏好与真实正确之间存在系统性偏差。
+\end{enumerate}
+缓解手段：SFT 与偏好数据混合通用语料（replay）、降低 KL 系数或 $\beta$、
+用多个 RM 集成并对分数做长度/风格去偏、在正式训练前做小规模偏好数据审计。
+\end{keypoint}
+
+\begin{pitfall}[奖励黑客：RM 一旦被优化，就不再代表偏好]
+PPO 持续优化 RM 分数时，策略会找到 RM 的\textbf{漏洞}而不真正提升质量：
+变长（啰嗦）、反复强调礼貌用语、加入看似权威的伪引用、堆砌项目符号。
+根本原因是 RM 是偏好数据上的有限样本拟合，在分布外区域不可靠。
+
+诊断方法：把 PPO 训练过程中的「RM 分数曲线」和「独立人工/AI 评测的胜率曲线」画在一起。
+若前者持续上升而后者在某个点后转平或下降，说明已经进入黑客区间，
+应停止训练、回滚到转折点附近的 checkpoint，并补充「长度惩罚」「格式惩罚」或更换更鲁棒的 RM。
+\end{pitfall}
+
+\section{推理与部署}
+\label{sec:nlp-inference}
+
+\subsection{KV Cache：自回归解码的必需缓存}
+
+自回归解码时，第 $t$ 步的注意力需要所有历史位置的 $\bm{K}$、$\bm{V}$。
+若不缓存，每步都要重算全部历史，总计算量是 $O(n^3)$ 级别；
+缓存后每步只需计算当前 token 的 $\bm{K}$、$\bm{V}$ 并与缓存拼接，复杂度降为 $O(n)$ 每步、
+整个解码过程 $O(n^2)$。KV Cache 的显存占用可以精确估算：
+
+\begin{equation}
+\text{Mem}_{\text{KV}} = 2 \, L \, n \, h_{\text{kv}} \, d_{\text{head}} \, b \, B \; \text{bytes},
+\qquad d_{\text{head}} = d_{\text{model}} / h ,
+\label{eq:kv-cache}
+\end{equation}
+
+其中 $L$ 为层数，$n$ 为序列长度，$h_{\text{kv}}$ 为 KV 头数，
+$b$ 为每元素字节数（FP16 为 2），$B$ 为并发批大小，系数 2 来自 $\bm{K}$ 与 $\bm{V}$ 两份。
+代入 LLaMA-2 13B 的典型配置（$L = 40$、$d_{\text{model}} = 5120$、$h = 40$、$d_{\text{head}} = 128$、
+$b = 2$、$h_{\text{kv}} = h$）：序列长度 4096、单请求单次会话时
+$2 \times 40 \times 4096 \times 40 \times 128 \times 2 \approx 3.4$ GB。
+若有 64 路并发，KV Cache 就要 200 GB 以上，
+远超 13B 模型本身约 26 GB 的 FP16 权重——\textbf{长上下文高并发场景下，KV Cache 才是显存的主战场}。
+
+\subsection{MQA / GQA：缩小 KV 头数}
+
+既然 KV Cache 与 $h_{\text{kv}}$ 成正比，最直接的优化就是让多个查询头\textbf{共享}一组 KV：
+
+\begin{itemize}
+  \item \textbf{MHA}：每个查询头有独立的 KV 头，$h_{\text{kv}} = h$（质量最好、缓存最大）。
+  \item \textbf{MQA（Multi-Query Attention）}：所有查询头共享 1 组 KV，$h_{\text{kv}} = 1$，
+        KV Cache 直接缩小 $h$ 倍（如 40 倍）。代价是质量有可见下降，训练早期尤其不稳定。
+  \item \textbf{GQA（Grouped-Query Attention）}：折中方案，把 $h$ 个查询头分成 $g$ 组，
+        每组共享一组 KV（例如 $h = 32$、$g = 8$，即每 4 个查询头共享 1 组 KV）。
+        KV Cache 缩小到 $1/4$，质量损失通常在 1 个点以内，因此成为当今主流大模型的默认选择。
+\end{itemize}
+
+\begin{insight}[KV Cache 与推理成本的耦合关系]
+KV Cache 的显存占用决定了\textbf{单卡能同时挂多少个请求}，而并发数直接决定吞吐与单位 token 成本。
+所以 MQA/GQA 与 PagedAttention 不是「省显存的技巧」，
+而是\textbf{直接降低成本曲线}的基础设施：把每请求的 KV 占用降 4 倍，
+单卡并发就能提 4 倍，单位 token 成本随之下降数倍。
+在评估任何推理优化方案时，最该看的指标是\emph{每 GPU 每秒产出多少 token}，
+而不是单请求的延迟（后者可以通过牺牲批量来刷好看）。
+\end{insight}
+
+\subsection{FlashAttention：不物化注意力矩阵}
+
+朴素注意力要显式写出 $n \times n$ 的注意力矩阵，显存 $O(n^2)$，
+而且要把这个大矩阵在 HBM（高带宽显存）与 SRAM（片上缓存）之间来回搬运
+（所谓 memory-bound，算力利用率极低）。
+
+FlashAttention 用\term{分块}{tiling} + \term{在线 softmax}{online softmax} 解决：
+把 $\bm{Q}$ 切成若干块，逐块读入 SRAM，对每个 $\bm{K}$、$\bm{V}$ 块计算局部注意力，
+并用递推公式维护「当前最大值 $m$」与「归一化因子 $\ell$」，
+把已归约的结果按指数修正后累加，从而\textbf{永不写出完整的 $n \times n$ 矩阵}。
+结果：显存从 $O(n^2)$ 降到 $O(n)$，同时因为减少了 HBM 读写，实际速度提升 2 到 4 倍。
+代价是实现复杂度高（需要手写 CUDA kernel 或依赖成熟库），且反向传播需要重算部分中间量
+（用计算换显存，这在长序列下依然是净收益）。
+
+\subsection{量化：GPTQ 与 AWQ}
+
+权重量化把 FP16 的 2 字节压到 INT8（1 字节）或 INT4（0.5 字节），
+模型体积与显存带宽需求按比例下降，而解码阶段通常是\textbf{显存带宽瓶颈}，
+所以量化对吞吐的提升往往比计算优化更直接。
+
+\paragraph{GPTQ}：基于逐层重构误差最小化的训练后量化。
+对每一层，在少量校准数据上求权重的最优量化近似，
+用 Hessian 的近似（$\bm{H} = 2\bm{X}\bm{X}\T$）做逐列误差补偿：
+量化某一列后，把该列的误差按 $\bm{H}^{-1}$ 分摊到尚未量化的列上。
+因此 INT4 下困惑度劣化可以控制在很小范围。
+
+\paragraph{AWQ（Activation-aware Weight Quantization）}：
+观察到激活值的分布存在少数「显著通道」，这些通道对应的权重对精度影响极大。
+AWQ 不对权重做复杂重构，而是按\textbf{激活幅度}给权重通道乘一个缩放系数，
+把量化难度从显著通道转移出去，从而以极低计算成本获得更好的 INT4 精度，
+且对校准数据的依赖更弱、更容易工程化。
+
+\begin{table}[htbp]
+\centering
+\caption{推理优化手段与收益对比（收益为公开报告的典型量级，实际随配置变化）}
+\label{tab:inference-opt}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{2.0cm} L{1.7cm} Y}
+\toprule
+\tabhead{手段} & \tabhead{优化对象} & \tabhead{典型收益} & \tabhead{代价与适用条件} \\
+\midrule
+KV Cache & 解码计算量 & 从 $O(n^3)$ 到 $O(n^2)$ & 显存随并发与长度线性增长；长上下文务必配合 PagedAttention \\
+\addlinespace
+MQA / GQA & KV Cache 显存 & 显存降 4 到 40 倍 & 质量略有损失；训练期就需确定，事后改要续训 \\
+\addlinespace
+FlashAttention & 注意力显存与带宽 & 速度 2 到 4 倍，显存 $O(n)$ & 需支持的 GPU 与 kernel 库；长序列收益最大 \\
+\addlinespace
+INT8 / INT4 量化 & 权重体积与带宽 & 吞吐 1.5 到 3 倍，显存降 2 到 4 倍 & GPTQ/AWQ 为训练后量化，长尾任务可能掉点 \\
+\addlinespace
+PagedAttention & KV Cache 碎片 & 显存浪费从 60\% 到 80\% 降到 4\% 以内 & 需要改造注意力 kernel；是 vLLM 高吞吐的核心 \\
+\addlinespace
+投机解码 & 解码串行串数 & 提速 1.5 到 3 倍（无损） & 需要草稿模型或自投机结构；batch 大时收益下降 \\
+\addlinespace
+连续批处理 & GPU 利用率 & 吞吐提升数倍 & 需要调度器与分页 KV；实现复杂，是推理引擎的核心竞争力 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{PagedAttention 与连续批处理}
+
+\paragraph{PagedAttention} 借鉴操作系统虚拟内存的分页思想：
+把 KV Cache 切成固定大小的\term{块}{block}（例如每块存 16 个 token 的 KV），
+用一张块表把逻辑连续的序列映射到物理上不连续的显存块。
+好处有三：一是显存浪费接近零（传统实现要为最长序列预留连续空间，浪费率可达 60\% 到 80\%）；
+二是多个请求可以\textbf{共享}前缀块（系统提示词只需存一份），
+对「同一个 system prompt + 不同用户问题」的场景节省巨大；
+三是可以按需分配与回收，支持变长序列的高效混合。
+
+\paragraph{连续批处理（continuous batching）} 解决的是静态批处理的两个浪费：
+\textbf{（1）padding 浪费}：同一批内长度不一，短序列被补齐到最长，算力浪费；
+\textbf{（2）等待浪费}：整批必须等最慢的序列生成完（或达到 max\_tokens），
+期间已完成序列占着位置不出结果。
+连续批处理在每个解码步结束后就把完成的序列移出、把排队的新请求插入，
+从而让 GPU 始终保持满载。工业实践表明它是吞吐提升幅度最大的单项优化之一。
+与之配套的技术还有 chunked prefill（把长 prompt 的预填充切片，与解码请求交错执行，
+避免长 prompt 造成的延迟尖峰）与 prefix caching（前缀 KV 复用）。
+
+\subsection{投机解码}
+
+自回归解码的每一步都是「1 个 token 一次前向」，而这个前向的算力利用率极低——
+瓶颈是显存带宽而不是计算。投机解码利用这一事实：让一个很小的\term{草稿模型}{draft model}
+一次前向就连续猜出 $k$ 个 token（$k$ 常取 4 到 8），
+再用大模型对这 $k$ 个 token 做\textbf{一次并行前向}验证，接受其中与自身分布一致的前缀，
+遇到第一个不一致处丢弃并采样一个修正 token。因为验证是并行的一步，
+只要平均接受的 token 数大于 1，就能获得加速；且该过程在数学上保证输出分布与原始模型一致
+（\textbf{无损加速}，不是近似）。代价是需要额外模型或额外结构（如自投机、Medusa 多头草稿），
+且在大 batch 场景下 GPU 已被计算打满，收益会明显缩小。
+
+\begin{lstlisting}[style=growth, language=Python, caption={KV Cache 显存与吞吐的快速估算}]
+def kv_cache_bytes(n_layers, n_kv_heads, head_dim, seq_len, batch, dtype_bytes=2):
+    """KV cache size in bytes for a decoder-only model."""
+    return 2 * n_layers * seq_len * n_kv_heads * head_dim * dtype_bytes * batch
+
+def tokens_per_second(model_params_b, memory_bw_gbps, bytes_per_param=2.0):
+    """Rough decode ceiling: memory bandwidth bound, weights must be read once per step."""
+    weight_bytes = model_params_b * 1e9 * bytes_per_param
+    return memory_bw_gbps * 1e9 / weight_bytes
+
+# LLaMA-2 13B, 8K context, 8 concurrent requests, FP16
+mem = kv_cache_bytes(40, 40, 128, 8192, 8) / 2**30
+print("KV cache: %.1f GiB" % mem)                      # ~13.6 GiB with full MHA
+mem_gqa = kv_cache_bytes(40, 8, 128, 8192, 8) / 2**30   # GQA with 8 KV heads
+print("KV cache with GQA: %.1f GiB" % mem_gqa)         # 4x smaller
+# On an 80GB card with ~2TB/s bandwidth, 13B FP16 weights read per step
+print("decode ceiling: %.0f tok/s" % tokens_per_second(13, 2000))
+\end{lstlisting}
+
+\section{评测：指标、基准与它们如何骗人}
+\label{sec:nlp-eval}
+
+\subsection{传统基准：GLUE 与 SuperGLUE}
+
+GLUE（2018）把 9 个句子级任务打包成统一评测集（含 MNLI 推理、QQP 相似、
+SST-2 情感、CoLA 语法可接受性、STS-B 相似度回归等），
+用各任务指标的平均值作为总榜分数。SuperGLUE 在此基础上增加难度
+（如多句推理、常识推理、指代消解）。
+它们在 BERT 时代推动了编码器模型的快速迭代，但今天已经\textbf{饱和}：
+头部模型均已超过人类基线，分数差异更多来自随机种子与集成技巧，区分度很低。
+
+\subsection{生成指标：BLEU、ROUGE、BERTScore}
+
+\paragraph{BLEU} 统计生成文本与参考文本的 n-gram 精确率（precision），
+并对过短输出施加长度惩罚：
+
+\begin{equation}
+\text{BLEU} = \text{BP} \cdot \exp\!\left( \sum_{n=1}^{N} w_n \log p_n \right),
+\qquad \text{BP} = \begin{cases} 1, & c > r, \\ e^{1 - r/c}, & c \le r, \end{cases}
+\label{eq:bleu}
+\end{equation}
+
+其中 $p_n$ 是 n-gram 精确率，$w_n$ 通常取 $1/N$（$N = 4$），
+$c$ 是生成长度、$r$ 是参考长度。BLEU 高不代表译文好：
+它只看词汇重叠，对同义替换、语序变化极其敏感，
+一个语法正确但用词不同的高质量译文可能得到低分。
+
+\paragraph{ROUGE} 反过来统计召回率（recall），
+\metric{ROUGE-N} 看参考中的 n-gram 有多少被生成覆盖，
+\metric{ROUGE-L} 用最长公共子序列衡量结构相似度。
+它适合摘要任务（关注「是否覆盖了要点」），
+但对「流畅但句式改写的摘要」同样会低估。
+
+\paragraph{BERTScore} 用预训练编码器把生成与参考都编码成上下文向量，
+在向量层面做贪心匹配后计算精确率/召回率/F1。
+它能捕捉同义表达与语义等价，与人工判断的相关性明显高于 BLEU/ROUGE，
+但引入了新的风险：\textbf{它继承编码器自身的偏见}，
+对与评测编码器训练分布相近的文本更友好，且分数不可跨编码器版本比较。
+
+\begin{table}[htbp]
+\centering
+\caption{常用评测基准与指标速查}
+\label{tab:benchmarks}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{1.9cm} L{1.7cm} Y}
+\toprule
+\tabhead{基准/指标} & \tabhead{测什么} & \tabhead{主要指标} & \tabhead{已知问题} \\
+\midrule
+GLUE / SuperGLUE & 句子级理解（分类、推理、相似度） & 各任务指标平均 & 已饱和、区分度低、部分任务存在标注噪声 \\
+\addlinespace
+BLEU & 机器翻译的词汇重叠 & n-gram 精确率 + 长度惩罚 & 对同义与语序不敏感，与人工判断相关性弱 \\
+\addlinespace
+ROUGE & 摘要的要点覆盖 & n-gram / LCS 召回率 & 偏好抽取式输出，忽略流畅度与事实性 \\
+\addlinespace
+BERTScore & 语义等价 & 向量贪心匹配的 F1 & 继承编码器偏见；跨版本不可比 \\
+\addlinespace
+MMLU & 57 学科的多选题知识 & 准确率 & 训练数据污染严重；对提示格式敏感 \\
+\addlinespace
+GSM8K & 小学数学应用题推理 & 精确匹配准确率 & 对答案抽取规则敏感；易被模板化解法刷分 \\
+\addlinespace
+HumanEval & 代码生成正确性 & pass@k & 题目量小（164 题）；与真实工程能力差距大 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{大模型评测：MMLU、GSM8K 与评测协议}
+
+大模型评测普遍采用\term{少样本提示}{few-shot prompting}（如 5-shot）
+而不是微调，因此\textbf{提示模板、选项顺序、答案抽取规则}都会显著影响结果，
+不同论文的分数常常不可直接比较。三个实操要点：
+
+\begin{enumerate}
+  \item \textbf{固定并公开 prompt 模板}。同一模型换模板可能差 2 到 5 个点，
+        所以自建评测必须把模板、shot 数、解码参数（temperature、top\_p、max\_tokens）
+        一起纳入版本管理与回归测试。
+  \item \textbf{多次采样报告方差}。生成类任务（GSM8K、代码）本身有随机性，
+        单次运行的分数波动可达数个百分点，必须报告均值与置信区间，
+        否则「提升 1 个点」很可能只是噪声。
+  \item \textbf{区分知识题与推理题}。MMLU 主要测知识回忆，GSM8K 测多步推理，
+        两者对「继续预训练」「SFT」「RL 可验证奖励」的响应完全不同，
+        不能用一个总分概括模型能力。
+\end{enumerate}
+
+\subsection{评测集污染与 LLM-as-judge 偏差}
+
+\paragraph{评测集污染（contamination）} 指评测数据出现在训练语料中，
+导致分数虚高。污染途径有三类：网页爬取时把基准数据集页面（GitHub 仓库、
+论文附录、试卷网站）一起抓走；基准题目被改写成教材或问答社区内容；
+评测集本身是按公开协议生成，容易被后续语料包含。
+检测手段包括：n-gram 重叠检测（在训练语料中搜索题目片段）、
+\term{困惑度异常检测}{perplexity anomaly}（模型对污染文本的 PPL 异常低）、
+以及\term{扰动测试}{perturbation test}（把题目中的数字或选项顺序换掉，
+若分数大幅下降，说明模型靠记忆而非推理）。缓解手段是去污染（denylist 过滤）、
+使用 \emph{私有保留集}（held-out private set）、以及动态生成的评测集。
+
+\paragraph{LLM-as-judge 偏差} 指用大模型给回答打分时引入的系统性偏差，常见四种：
+
+\begin{itemize}
+  \item \textbf{位置偏差（position bias）}：在成对比较中偏向第一个或第二个呈现的答案。
+        解法是双向交换位置各评一次，取一致结果，不一致的样本人工复核。
+  \item \textbf{长度偏差（verbosity bias）}：偏好更长的回答。
+        解法是长度分层报告、或在 prompt 中显式要求忽略长度。
+  \item \textbf{自偏好偏差（self-preference bias）}：模型偏爱与自己风格相似的输出。
+        解法是避免用「与策略模型同源」的模型当裁判。
+  \item \textbf{格式偏差}：偏好结构清晰、条目化的输出，即使内容空洞。
+        解法是评分前剥离格式，或对同一内容做多种格式渲染后取平均。
+\end{itemize}
+
+\begin{casebox}[案例：企业知识库问答上线前的评测翻车复盘（示范）]
+某内部知识库问答系统在自建评测集上达到 92\% 准确率，上线后客服反馈「答不对具体条款」。
+复盘发现三个问题，都不是模型能力问题，而是\textbf{评测设计问题}：
+
+（1）\textbf{评测集与训练集同源}。评测问题是从训练用的 FAQ 里改写的，
+模型只需匹配措辞即可答对；而真实用户提问的口语化程度、错别字率、隐含指代完全不同。
+整改方式：从真实会话日志中采样 300 条问题，由业务方独立标注答案，
+作为\textbf{私有保留集}，且规定该集合不进入任何训练/调参流程。
+
+（2）\textbf{只测了「有答案」的情况}。评测集里 100\% 的问题在知识库中有答案，
+而线上约 25\% 的问题知识库根本没覆盖，模型在这些情况下全部编造内容。
+整改方式：加入 20\% 到 30\% 的「无答案」样本，把「正确拒答」也计入指标。
+
+（3）\textbf{用同一个大模型当裁判且只评一次}。裁判偏爱长回答，
+系统为了拿高分不断加长输出，实际有用信息比例下降。
+整改方式：位置双向评测 + 长度归一化 + 关键条款字段做规则校验（精确匹配）。
+\end{casebox}
+
+\section{推理成本公式与工程取舍}
+\label{sec:nlp-cost}
+
+\subsection{单位经济模型}
+
+把推理成本写成可计算的公式，是判断「该自建还是该调 API」的基础。
+对一次调用，令输入 token 数 $n_{\text{in}}$、输出 token 数 $n_{\text{out}}$、
+输入单价 $p_{\text{in}}$、输出单价 $p_{\text{out}}$（每百万 token 计），日请求量 $Q$：
+
+\begin{equation}
+\text{Cost}_{\text{day}} = \frac{Q}{10^6}
+\Big( n_{\text{in}} \cdot p_{\text{in}} + n_{\text{out}} \cdot p_{\text{out}} \Big)
+\times \underbrace{(1 + \delta)}_{\text{重试/失败放大}} ,
+\label{eq:cost-formula}
+\end{equation}
+
+其中 $\delta$ 是重试、超时、格式错误导致的额外调用比例（工程上常取 0.05 到 0.2，
+结构化输出与工具调用场景更高）。输出 token 的单价通常是输入的 2 到 4 倍，
+因为输出必须串行解码，而输入可以并行预填充——
+这直接导致两条优化路线：\textbf{压短输出}（约束输出格式、限制 max\_tokens、
+用「先结论后细节」的结构化模板）与\textbf{复用输入}（前缀缓存、系统提示词压缩、检索结果去冗）。
+
+\begin{toolbox}[成本优化的优先级清单（按投入产出比排序）]
+\begin{enumerate}
+  \item \textbf{模型路由}：把简单请求（意图分类、FAQ 命中、格式转换）交给小模型或规则，
+        只把复杂请求送给大模型。经验上 50\% 到 80\% 的流量可以被路由，
+        总成本下降幅度远大于任何单点优化。
+  \item \textbf{缓存}：精确缓存（相同 prompt 直接命中）与语义缓存（相似问题复用答案）
+        叠加，可再省 10\% 到 40\%。注意设置 TTL 与失效条件，避免返回过期信息。
+  \item \textbf{前缀与 KV 复用}：固定 system prompt 的长前缀命中率高，
+        在 PagedAttention 前缀共享下几乎是免费的吞吐提升。
+  \item \textbf{输出长度治理}：给模型明确的长度上限与格式约束，
+        输出 token 减半等价于成本减半（对大多数 API 计费模型近似成立）。
+  \item \textbf{批处理与非实时通道}：离线任务（批量打标、内容生成）走批处理接口，
+        单价通常有折扣；实时对话才用低延迟通道。
+  \item \textbf{量化与自建}：当请求量足够大（单卡长期打满）时，
+        自建 + INT4 量化的单位成本可能低于 API；但要把运维、扩容、故障处理的人力成本计入 TCO。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{延迟的分解与拆分}
+
+端到端延迟（首 token 延迟 TTFT + 每 token 延迟 TPOT 乘以输出长度）
+是用户体验的直接决定项。它的构成是：
+
+$$\text{Latency} \approx \underbrace{t_{\text{queue}}}_{\text{排队/批调度}} +
+\underbrace{t_{\text{prefill}}(n_{\text{in}})}_{\text{并行算输入}} +
+\underbrace{n_{\text{out}} \cdot t_{\text{decode}}}_{\text{串行算输出}} + \underbrace{t_{\text{net}}}_{\text{网络与网关}} .$$
+
+由此得到几条工程结论：输入长会导致 TTFT 高（预填充计算量大），
+输出长会导致总时长高（每 token 串行）；流式输出不降低总时长但显著改善\emph{主观}等待体验；
+chunked prefill 可以把长 prompt 的预填充与短请求的解码交错，降低排队尖峰；
+而路由小模型之所以有效，本质上是在「牺牲少量质量」换取 prefill 与 decode 两项的同时下降。
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 文本表示的主线是「离散符号 $\to$ 连续语义空间 $\to$ 上下文相关表示」：
+        Word2Vec 用负采样/层次 softmax 降复杂度，GloVe 显式分解共现矩阵，
+        FastText 用子词解决 OOV，ELMo 首次让同一词在不同上下文中得到不同向量。
+  \item Transformer 的核心是缩放点积注意力与多头机制，
+        单层复杂度 $O(nd^2 + n^2d)$：短序列受线性项支配，长序列受平方项支配。
+        RoPE/ALiBi 用相对位置解决了外推问题。
+  \item 三条预训练路线各有取舍：自回归利于生成与规模化，
+        自编码利于判别任务，编码-解码利于序列到序列；
+        ELECTRA 的替换检测把监督信号密度从 15\% 提到 100\%。
+  \item Chinchilla 的结论是「参数量与 token 数同比例增长，约 $D \approx 20N$」；
+        但因为推理成本远大于训练成本，工业界普遍选择过训练；
+        训练算力用 $C \approx 6ND$ 估算，配 MFU 折算墙钟时间。
+  \item PEFT 的核心是低秩假设（LoRA）与基座量化（QLoRA），
+        显存收益来自「不保存全量优化器状态」而不是「减少前向计算」。
+  \item 对齐三部曲是 SFT、偏好建模、策略优化；DPO 把 KL 约束下的 RL 问题化为分类问题，
+        去掉奖励模型；对齐税与奖励黑客是必须监控的副作用。
+  \item 推理优化的关键词是 KV Cache、GQA、FlashAttention、PagedAttention、
+        量化、投机解码与连续批处理，其中「每 GPU 每秒 token 数」是最该看的指标。
+  \item 评测必须防污染、要私有保留集、要报告方差；
+        LLM-as-judge 有位置/长度/自偏好/格式四类偏差，需双向评测与规则校验兜底。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item 自注意力的时间和空间复杂度各是多少？为什么除以 $\sqrt{d_k}$？多头注意力为什么不增加总计算量？
+  \item BERT 和 GPT 的区别是什么？各自的预训练目标、注意力掩码和适用任务有何不同？
+  \item Word2Vec 的负采样为什么能把 $O(|V|)$ 降到 $O(K)$？负样本分布为什么要用 $0.75$ 次幂？
+  \item LoRA 为什么有效？$\bm{A}$ 和 $\bm{B}$ 的初始化有什么讲究？rank 与 alpha 怎么选？
+  \item RLHF 的 PPO 和 DPO 在目标函数上有什么区别？DPO 为什么可以不需要奖励模型？
+  \item KV Cache 的显存怎么估算？MQA 和 GQA 分别省在哪里、代价是什么？
+  \item 推理成本和延迟由哪些项构成？如果你要在一个月内把线上 LLM 成本降一半，会按什么顺序做？
+  \item 如何判断一个模型在 MMLU 上的高分是真实能力还是评测集污染？你会怎么设计验证实验？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+下一章我们把本章的模型能力落到具体业务上（\cref{ch:nlpapp}）：
+文本分类与信息抽取、文本匹配与句向量、摘要/翻译/文案生成、
+多模态图文理解，以及 Prompt 工程、函数调用与 Agent、
+LLM 应用的成本-延迟-质量三角调优与安全合规。
+本章解决「模型是怎么造出来的」，下一章解决「模型怎么变成能上线的产品」。

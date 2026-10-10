@@ -1,0 +1,1215 @@
+\chapter{论文与学习资源清单}
+\label{app:papers}
+
+\begin{insight}[本附录要解决的问题]
+\begin{enumerate}
+  \item 论文清单网上一搜一大把，但\textbf{哪一篇该精读、哪一篇读摘要就够、哪一篇要先补数学}，没有人替你排序。
+  \item 「三遍阅读法」被反复引用，可具体到一篇 CTR 论文，第一遍到底该花几分钟、看哪几页、写什么？
+  \item 同一个技术主题下，模型迭代的\textbf{因果链条}是什么？为什么有了 FM 还要 FFM，有了 FFM 还要 DeepFM？
+  \item 公开数据集那么多，哪一个能真正练到「线上一半的工程量」，哪一个只是玩具？
+  \item 论文读完之后怎么沉淀？为什么说「读十篇不如复现一篇、复现一篇不如写一篇」？
+  \item 一个从零起步的工程师，八周、六个月、十八个月分别应该到达什么状态，用什么产出物验收？
+\end{enumerate}
+\end{insight}
+
+很多读者把「读论文」理解成收藏夹扩容：PDF 存了三百篇，真正推过一遍公式的不超过五篇。
+这份附录想做的恰恰相反——它是一份\textbf{带排序、带取舍、带验收标准}的阅读计划。
+本章的每一条清单都不是「你应该知道它存在」，而是「读完它你会获得哪一个具体能力、它有哪些坑、它属于哪个难度层级」。
+
+\section{怎么读论文}
+
+\subsection{三遍阅读法：把「读完」拆成三次不同目的的扫描}
+
+三遍阅读法（three-pass approach）最早由 S. Keshav 在 2007 年的短文 \emph{How to Read a Paper} 中系统化。
+它的价值不在于「快」，而在于\textbf{每一遍有明确的退出条件}：如果第一遍就判定这篇论文不值得读，就立刻止损，
+而不是靠意志力硬读到第五页公式才发现和自己无关。
+
+\begin{table}[htbp]
+\centering
+\caption{三遍阅读法的目的、动作与退出条件}
+\label{tab:three-pass}
+\small
+\begin{tabularx}{\textwidth}{L{1.5cm} L{1.4cm} L{3.0cm} Y}
+\toprule
+\tabhead{遍次} & \tabhead{时长} & \tabhead{读什么} & \tabhead{产出与退出条件} \\
+\midrule
+第一遍 &
+5--10 分钟 &
+标题、摘要、引言首段、所有图表标题、结论 &
+回答五个问题：属于哪个问题类别？建立在什么已有工作上？核心假设是什么？贡献点是什么？写得清楚吗？
+\textbf{五个问题答不出三个，直接放弃，不进入第二遍。} \\
+\midrule
+第二遍 &
+40--60 分钟 &
+正文全篇（跳过证明细节）、所有图表与实验设置、相关工作 &
+能用一段话向同事复述「它解决什么问题、用什么办法、在什么数据上赢了谁、赢多少」。
+在空白处标注：哪些部分我读不懂、这依赖哪篇前置论文。
+\textbf{读不懂的点超过三处且互相独立，说明前置知识不足，先补前置。} \\
+\midrule
+第三遍 &
+2--6 小时（可拆多次） &
+重推全部关键公式、复现核心实验或至少复现指标口径、读伪代码 &
+达到「能自己重新推导」的水平：能默写核心损失函数、能说出每个超参的作用与量级、
+能指出作者在什么条件下会失效。\textbf{这一遍的产出物是一页推导笔记加一份复现记录。} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[第一遍的五个必答问题（打印出来贴在显示器旁）]
+对任何一篇论文，先只回答下面五问，不许翻公式：
+\begin{enumerate}
+  \item \textbf{类别}：这是一篇建模论文、系统论文、数据集论文，还是综述？类别决定了你该看公式还是看架构图。
+  \item \textbf{背景}：它声称前人的哪个方法不够用？如果作者说不出「前人哪里不行」，这篇多半是灌水。
+  \item \textbf{正确性假设}：结论建立在什么假设上？最常见的是「样本随机缺失」「曝光无偏」「特征分布稳定」。
+  \item \textbf{贡献}：如果只保留一个贡献，是哪个？工业论文常常是「工程技巧 + 大规模验证」，而不是新公式。
+  \item \textbf{清晰度}：如果连摘要都写得含糊，正文几乎不可能清楚，直接跳过。
+\end{enumerate}
+五问中能答出四问以上，才值得投入第二遍的 40 分钟。
+\end{toolbox}
+
+\subsection{如何做笔记：一页纸、三栏、可复用}
+
+笔记的目标不是「记录论文」，而是\textbf{让未来的自己能在三十秒内决定要不要重读它}。
+推荐用「一页纸 + 三栏结构」：
+
+\begin{itemize}
+  \item \textbf{左栏（问题与假设）}：它解决什么业务问题？输入输出是什么？成立的前提假设有哪些？
+        这一栏写业务语言，不写公式。
+  \item \textbf{中栏（方法骨架）}：核心公式一到三个（手推一遍，不要复制）、模型结构三到五个模块、
+        关键超参与量级、训练数据规模与正负样本比。
+  \item \textbf{右栏（验证与怀疑）}：数据集、基线、提升幅度、消融实验说明了什么，
+        以及\textbf{我认为它在什么场景下会失效}。最后一句话是整页笔记里最值钱的：没有怀疑的笔记等于抄写。
+\end{itemize}
+
+\begin{keypoint}[好笔记的四条硬标准]
+\begin{itemize}
+  \item \textbf{可复现}：三个月后照着这一页能把核心实验跑起来，不需要重新翻 PDF。
+  \item \textbf{可比较}：所有笔记的同一位置放同一类信息（如统一在第 5 行写「数据集与基线」），这样才能横向对比。
+  \item \textbf{有否定}：每篇至少写一条「我不认同的地方」或「它没回答的问题」。
+  \item \textbf{有链接}：写明前置论文是哪一篇、后续被谁改进（如 FM 的前置是 MF，后续是 FFM 与 DeepFM），
+        逐步把孤立笔记织成一张方法演进图。
+\end{itemize}
+\end{keypoint}
+
+\subsection{如何判断一篇论文值不值得深读}
+
+\textbf{第一层看外部信号}（五分钟就能判断）：
+
+\begin{enumerate}
+  \item \textbf{引用量与引用曲线}：被引高不代表方法好，但被引曲线的形状有信息量——
+        一条持续上升的曲线通常意味着方法仍在被改进，一个陡升后迅速走平意味着它被更好的方法取代了。
+  \item \textbf{是否有工业落地证据}：工业界大规模 A/B 结果、开源实现被广泛使用的说明，
+        比离线提升一个百分点更有参考价值。
+  \item \textbf{复现难度}：有公开代码、公开数据、明确超参的论文，深读性价比高出一档；
+        只给结构图不给细节的论文，通常读第三遍也复现不出来。
+\end{enumerate}
+
+\textbf{第二层看内容质量}（第二遍阅读时判断）：
+
+\begin{itemize}
+  \item \textbf{基线是否公平}：有没有把最强的对手调参调好？只和「去年的自己」比较的论文价值有限。
+  \item \textbf{消融是否完整}：每个模块单独去掉后指标掉多少？如果作者回避了关键模块的消融，往往说明它贡献不大。
+  \item \textbf{结论是否超出实验覆盖范围}：在小数据集上验证的结论，不能推广到十亿级候选集的场景，
+        尤其当方法复杂度与候选集规模相关时。
+  \item \textbf{是否包含失败案例}：愿意写「我们在什么情况下试了但没work」的论文，可信度显著更高。
+\end{itemize}
+
+\begin{pitfall}[把论文结论直接搬到线上：三个最常见的翻车点]
+\begin{enumerate}
+  \item \textbf{数据分布不同}：论文在 MovieLens 这类评分数据上验证的稀疏性假设，
+        与工业界隐式反馈日志的 MNAR 特性完全不同，离线赢线上输是常态。
+  \item \textbf{复杂度没算进去}：论文只报离线指标，不报推理延迟与内存。
+        一个提升 0.3\% \metric{AUC} 但延迟翻倍的结构，在毫秒级预算下是不可用的。
+  \item \textbf{评估口径不同}：论文用随机留一构造测试集，线上是时间切分且严格去重。
+        口径一变，「提升」可能直接消失。改口径之后重跑基线，是复现论文时最该做的第一件事。
+\end{enumerate}
+\end{pitfall}
+
+\subsection{四个筛选维度：一次定优先级}
+
+把「值不值得读」量化成四个维度，各打分后决定投入哪一遍：
+
+\begin{table}[htbp]
+\centering
+\caption{论文优先级四维打分表（每维 1--3 分，总分决定投入）}
+\label{tab:paper-score}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{4.2cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{问题} & \tabhead{打分与行动} \\
+\midrule
+相关性 & 它与我当前负责的系统模块是否直接相关？ &
+1 分＝只是背景知识，只读摘要；2 分＝方法可借鉴，读第二遍；3 分＝可直接落地，读第三遍并复现。 \\
+\midrule
+基础性 & 它是这条技术线的「根节点」还是「叶子」？ &
+1 分＝叶子，2 分＝中间层，3 分＝根节点。根节点即使相关性只有 2 分也值得深读，因为它被反复复用。 \\
+\midrule
+可复现性 & 有代码、有公开数据、超参齐全吗？ &
+1 分＝只有结构图，2 分＝部分细节，3 分＝仓库可跑。3 分的论文优先深读，1 分的只读结论。 \\
+\midrule
+时效性 & 它的结论现在是否仍然成立？ &
+1 分＝已被后续工作取代，2 分＝部分成立，3 分＝仍是 SOTA 或仍是工业标准做法。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{论文清单}
+
+下面按七个主题列出必读清单。每条统一包含六项信息：
+\textbf{标题（中文译名 + 英文原题）}、\textbf{作者与年份}、\textbf{引用}、
+\textbf{核心贡献（一句话）}、\textbf{为什么值得读}、\textbf{难度（入门 / 进阶 / 硬核）}。
+「硬核」不等于「重要」——它只表示\textbf{读它之前需要先补齐前置数学}，跳过前置去读会浪费一整周。
+如果某篇重要工作在本仓库的参考文献库中没有条目，则只用正文文字给出标题与年份，不给出引用标记。
+
+\subsection{推荐系统（28 篇）}
+
+\subsubsection{协同过滤与矩阵分解：地基}
+
+\begin{itemize}
+  \item \textbf{矩阵分解技术（Matrix Factorization Techniques for Recommender Systems）}，
+        Koren, Bell, Volinsky，2009，\cite{koren2009mf}。
+        核心贡献：把用户-物品评分矩阵分解成低维隐向量，并系统性总结偏置项、
+        时间动态、隐式反馈与置信度加权四类实用扩展。
+        为什么值得读：这是所有后续嵌入式推荐的公因子，读它才能理解「为什么嵌入维度是 32 而不是 512」。
+        难度：入门。
+  \item \textbf{基于物品的协同过滤（Item-Based Collaborative Filtering Recommendation Algorithms）}，
+        Sarwar 等，2001，\cite{sarwar2001itemcf}。
+        核心贡献：把相似度计算从用户维换到物品维，用物品-物品相似度矩阵支撑在线推荐。
+        为什么值得读：这是工业界 i2i 召回的理论原型，也是「离线算好相似度、线上只做查表」这一工程范式的起点。
+        难度：入门。
+  \item \textbf{亚马逊的物品到物品协同过滤（Amazon.com Recommendations: Item-to-Item Collaborative Filtering）}，
+        Linden, Smith, York，2003，\cite{linden2003amazon}。
+        核心贡献：公开描述了在千万级用户、百万级商品下把 i2i 做到实时响应的完整工程方案。
+        为什么值得读：它是极少数同时讲清算法、数据规模与在线服务的经典，适合作为「召回系统工程」的第一篇。
+        难度：入门。
+  \item \textbf{隐式反馈的贝叶斯个性化排序（BPR: Bayesian Personalized Ranking from Implicit Feedback）}，
+        Rendle 等，2009，\cite{rendle2009bpr}。
+        核心贡献：把隐式反馈建模成「用户偏好 $i$ 胜过 $j$」的成对排序问题，给出 AUC 优化的平滑代理损失。
+        为什么值得读：它解释了为什么隐式反馈不该用回归损失，是所有 pairwise 损失（含后续排序模型）的源头。
+        难度：进阶——需要对后验概率与成对采样有耐心。
+  \item \textbf{神经协同过滤（Neural Collaborative Filtering）}，
+        He 等，2017，\cite{he2017ncf}。
+        核心贡献：用多层感知机替代内积来学习用户-物品交互函数，并指出现有隐向量内积的表达能力上界。
+        为什么值得读：它给出了「内积为什么不够」的严格论证，这个论证在双塔召回设计中至今有效。
+        难度：进阶。
+  \item \textbf{推荐系统手册（Recommender Systems Handbook）}，
+        Ricci, Rokach, Shapira 编，2015，\cite{ricci2015recsys}。
+        核心贡献：系统性覆盖评测方法、冷启动、上下文感知、可解释性与鲁棒性等教科书少讲的主题。
+        为什么值得读：当你想为某个设计决策找先例和术语时，它是查表用的权威参考书，不必从第一页读到最后。
+        难度：入门为主，评测与鲁棒性章节为进阶。
+  \item \textbf{推荐系统综述：现状与可能的扩展（Toward the Next Generation of Recommender Systems: A Survey）}，
+        Adomavicius, Tuzhilin，2005，\cite{adomavicius2005survey}。
+        核心贡献：把推荐方法归纳为基于内容、协同过滤与混合三大类，并列出当时尚未解决的问题清单。
+        为什么值得读：读旧综述的价值在于对照——它列出的「未来方向」哪些被实现了、哪些至今仍是难点。
+        难度：入门。
+\end{itemize}
+
+\subsubsection{因子分解机族：从 FM 到 DCN V2}
+
+\begin{itemize}
+  \item \textbf{因子分解机（Factorization Machines）}，
+        Rendle，2010，\cite{rendle2010fm}。
+        核心贡献：用隐向量内积统一建模二阶特征交叉，把稀疏场景下的参数量从 $O(n^2)$ 降到 $O(nk)$。
+        为什么值得读：它解释了「为什么二阶交叉必须共享隐向量」——不共享时每个交叉组合都缺样本。
+        难度：进阶——公式短，但线性复杂度推导要动手算一遍。
+  \item \textbf{域感知因子分解机（Field-aware Factorization Machines for CTR Prediction）}，
+        Juan, Zhuang, Chin, Lin，2016，\cite{juan2017ffm}。
+        核心贡献：让每个特征在不同「域」下拥有不同隐向量，显著提升 Criteo 与 Avazu 上的 CTR 预测。
+        为什么值得读：它演示了模型容量与数据规模如何匹配，也提醒你 FFM 的参数内存代价是 FM 的域数量倍。
+        难度：进阶。
+  \item \textbf{DeepFM（DeepFM: A Factorization-Machine Based Neural Network for CTR Prediction）}，
+        Guo 等，2017，\cite{guo2017deepfm}。
+        核心贡献：让 FM 部分与深度部分共享同一份嵌入输入，端到端同时学习低阶与高阶交互，无需人工特征工程。
+        为什么值得读：共享嵌入是后续几乎所有 CTR 模型的标准做法，也是理解「嵌入层是模型公共底座」的关键。
+        难度：进阶。
+  \item \textbf{DCN V2（DCN V2: Improved Deep \& Cross Network and Practical Lessons for Web-scale Learning to Rank Systems）}，
+        Wang 等，2021，\cite{wang2021dcn}。
+        核心贡献：改进交叉网络的表达形式与训练稳定性，并给出大规模排序系统中特征与训练策略的实务经验。
+        为什么值得读：工业界大规模排序论文里少见的高信息密度作品，尤其值得读它关于数值稳定性与特征处理的章节。
+        难度：进阶。
+  \item \textbf{Wide \& Deep 学习（Wide \& Deep Learning for Recommender Systems）}，
+        Cheng 等，2016，\cite{cheng2016widendeep}。
+        核心贡献：把线性模型的记忆能力与深度网络的泛化能力在同一个模型里联合训练，服务于应用商店推荐。
+        为什么值得读：它给出了「记忆与泛化」这一对永恒矛盾的经典解，也是理解近十年召回与排序架构分裂的起点。
+        难度：入门。
+  \item \textbf{DLRM（Deep Learning Recommendation Model for Personalization and Recommendation Systems）}，
+        Naumov 等，2019，\cite{naumov2019dlrm}。
+        核心贡献：把稀疏嵌入查表与稠密 MLP 分层，给出适合大规模并行训练与推理的推荐模型参考实现。
+        为什么值得读：它是理解「推荐模型为什么是内存带宽瓶颈而非算力瓶颈」的最佳入门材料。
+        难度：进阶。
+\end{itemize}
+
+\subsubsection{用户行为序列建模：注意力与兴趣演化}
+
+\begin{itemize}
+  \item \textbf{深度兴趣网络（Deep Interest Network for Click-Through Rate Prediction）}，
+        Zhou 等，2018，\cite{zhou2018din}。
+        核心贡献：用注意力机制对用户历史行为按候选物品加权，替代固定长度的行为池化。
+        为什么值得读：它把「用户兴趣是相对于候选物品定义的」这一直觉做成可训练结构，是序列建模的分水岭。
+        难度：进阶。
+  \item \textbf{深度兴趣演化网络（Deep Interest Evolution Network for Click-Through Rate Prediction）}，
+        Zhou 等，2019，\cite{zhou2019dien}。
+        核心贡献：用带辅助损失的 GRU 序列结构建模兴趣随时间演化，并用注意力做兴趣抽取。
+        为什么值得读：适合理解「行为序列不等于兴趣序列」，以及辅助监督信号在序列建模中的作用。
+        难度：进阶。
+  \item \textbf{深度会话兴趣网络（Deep Session Interest Network for Click-Through Rate Prediction）}，
+        Feng 等，2019，\cite{pi2020dsin}。
+        核心贡献：先按会话切分行为序列，再用自注意力与会话间交互提取层次化兴趣。
+        为什么值得读：会话切分本身就是极强的先验，这篇论文是「如何把业务先验注入模型」的好例子。
+        难度：进阶。
+  \item \textbf{自注意力序列推荐（Self-Attentive Sequential Recommendation）}，
+        Kang, McAuley，2018，\cite{kang2018sasrec}。
+        核心贡献：用因果掩码的自注意力做下一物品预测，在稀疏与稠密数据上同时优于 RNN 与马尔可夫方法。
+        为什么值得读：序列推荐的主流基线，也是理解「因果掩码为什么必须存在」的最直观材料。
+        难度：进阶。
+  \item \textbf{BERT4Rec（BERT4Rec: Sequential Recommendation with Bidirectional Encoder Representations from Transformer）}，
+        Sun 等，2019，\cite{sun2019bert4rec}。
+        核心贡献：把行为序列的预测目标改为掩码填空，从而利用双向上下文。
+        为什么值得读：它引出一个关键取舍——双向上下文提升离线指标，但需要「人为挖洞」的样本构造，
+        这与线上从左到右的推理方式不一致，是训练-推理不一致问题的典型案例。
+        难度：进阶。
+  \item \textbf{GRU4Rec（Session-based Recommendations with Recurrent Neural Networks）}，
+        Hidasi 等，2016，\cite{hidasi2016gru4rec}。
+        核心贡献：首次把循环网络与排序损失用于会话内推荐，并处理会话短、样本少的问题。
+        为什么值得读：作为序列推荐的起点来读，反向理解 SASRec 为什么要抛弃循环结构。
+        难度：进阶。
+  \item \textbf{HSTU（Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations）}，
+        Zhai 等，2024，\cite{zhai2024hstu}。
+        核心贡献：提出面向推荐的长序列层次化序列转换结构，并把推荐任务重新表述为生成任务。
+        为什么值得读：当下「生成式推荐」路线最重要的工业论文之一，能看清推荐与语言模型在架构上的趋同与分野。
+        难度：硬核——需要先掌握标准 Transformer 与长序列注意力的工程约束。
+\end{itemize}
+
+\subsubsection{多任务、图与生成式召回}
+
+\begin{itemize}
+  \item \textbf{MMoE（Modeling Task Relationships in Multi-task Learning with Multi-gate Mixture-of-Experts）}，
+        Ma 等，2018，\cite{ma2018mmoe}。
+        核心贡献：用多个专家网络加门控为每个任务生成专属子网络，缓解多任务间的负迁移。
+        为什么值得读：多任务学习几乎是大规模推荐系统的默认配置，这篇论文给出了负迁移的可视化诊断方法。
+        难度：进阶。
+  \item \textbf{PLE（Progressive Layered Extraction: A Novel Multi-Task Learning Model for Personalized Recommendations）}，
+        Tang 等，2020，\cite{tang2020ple}。
+        核心贡献：把共享专家与任务独占专家分层抽取，进一步缓解任务冲突带来的跷跷板效应。
+        为什么值得读：工业界多任务的主流方案，读它要重点看「跷跷板」现象与实验设计，而不是只看结构图。
+        难度：进阶。
+  \item \textbf{LightGCN（LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation）}，
+        He 等，2020，\cite{he2020lightgcn}。
+        核心贡献：去掉图卷积中的特征变换与非线性，只保留邻域聚合，反而取得更好效果。
+        为什么值得读：这是一个典型的「做减法」洞察——证明在协同过滤图上，非线性是负担而非助力。
+        难度：进阶。
+  \item \textbf{PinSage（Graph Convolutional Neural Networks for Web-Scale Recommender Systems）}，
+        Ying 等，2018，\cite{ying2018pinsage}。
+        核心贡献：用随机游走采样邻居，把图卷积扩展到十亿级节点并上线服务。
+        为什么值得读：图模型落地的关键在采样而不是卷积本身，这篇论文是「采样换可扩展性」的范本。
+        难度：进阶。
+  \item \textbf{GraphSAGE（Inductive Representation Learning on Large Graphs）}，
+        Hamilton, Ying, Leskovec，2017，\cite{hamilton2017graphsage}。
+        核心贡献：学习聚合函数而非为每个节点学一个嵌入，使模型可以泛化到训练时未见过的新节点。
+        为什么值得读：新物品冷启动是推荐系统的长期痛点，归纳式表示是解决它的基础工具。
+        难度：进阶。
+  \item \textbf{TIGER（Recommender Systems with Generative Retrieval）}，
+        Rajput 等，2023，\cite{rajput2023tiger}。
+        核心贡献：把物品语义 ID 化，用生成式检索替代向量近邻查找，实现端到端的候选生成。
+        为什么值得读：生成式召回的代表工作，读它要关注语义 ID 的构造方式与它对冷启动物品的天然优势。
+        难度：硬核——需要先理解语义 ID 与自回归解码。
+  \item \textbf{YouTube 深度推荐（Deep Neural Networks for YouTube Recommendations）}，
+        Covington, Adams, Sargin，2016，\cite{covington2016youtube}。
+        核心贡献：完整描述「候选生成 + 排序」两阶段架构，并给出把推荐建模成极端多分类的视角。
+        为什么值得读：两阶段漏斗架构的教科书级范文，几乎每个推荐工程师都该精读过一遍。
+        难度：入门。
+  \item \textbf{物品流行度与推荐准确率（Item Popularity and Recommendation Accuracy）}，
+        Steck，2011，\cite{steck2011diversity}。
+        核心贡献：量化分析流行度偏差与推荐准确率之间的权衡关系。
+        为什么值得读：读它是为了在做离线指标优化时保持清醒——指标上涨可能只是在推热门。
+        难度：入门。
+\end{itemize}
+
+\subsection{搜索与信息检索（20 篇）}
+
+\begin{itemize}
+  \item \textbf{信息检索导论（Introduction to Information Retrieval）}，
+        Manning, Raghavan, Sch\"utze，2008，\cite{manning2008ir}。
+        核心贡献：建立倒排索引、检索模型、评测与查询处理的完整知识框架。
+        为什么值得读：如果只能精读一本教材，选它；第 6 至 8 章与第 11 章是工程上回报最高的部分。
+        难度：入门，评测章节为进阶。
+  \item \textbf{搜索引擎：原理与实践（Search Engines: Information Retrieval in Practice）}，
+        Croft, Metzler, Strohman，2010，\cite{croft2010search}。
+        核心贡献：从检索模型讲到索引压缩、分布式检索与查询处理，工程视角更强。
+        为什么值得读：与上一本互补，适合作为「要把检索系统做出来」的实操参考。
+        难度：入门到进阶。
+  \item \textbf{向量空间模型（A Vector Space Model for Automatic Indexing）}，
+        Salton, Wong, Yang，1975，\cite{salton1975vsm}。
+        核心贡献：把文档与查询表示为加权词向量，用夹角余弦衡量相关性。
+        为什么值得读：现代稠密检索本质仍是向量空间模型，只是把稀疏词向量换成了可学习的稠密向量。
+        难度：入门。
+  \item \textbf{Okapi at TREC-3}，
+        Robertson 等，1994，\cite{robertson1994okapi}。
+        核心贡献：BM25 的早期完整实现与调参报告，确立了词频饱和与文档长度归一化的组合形式。
+        为什么值得读：想理解 BM25 两个超参 $k_1$、$b$ 的真实作用，读原始报告比读二手总结有效得多。
+        难度：入门。
+  \item \textbf{概率相关框架：BM25 及之后（The Probabilistic Relevance Framework: BM25 and Beyond）}，
+        Robertson, Zaragoza，2009，\cite{robertson2009bm25}。
+        核心贡献：从概率相关框架出发推导 BM25 及其变体，给出统一的推导脉络。
+        为什么值得读：稀疏检索至今仍是强基线，读它可以理解「为什么 BM25 在有些场景仍然赢过稠密检索」。
+        难度：进阶——需要概率论与信息论基础。
+  \item \textbf{检索的语言模型方法（A Language Modeling Approach to Information Retrieval）}，
+        Ponte, Croft，1998，\cite{ponte1998ql}。
+        核心贡献：把查询似然建模为「文档语言模型生成查询的概率」，开辟查询似然检索路线。
+        为什么值得读：它提供了与向量空间模型完全不同的解释框架，也是平滑参数讨论的源头。
+        难度：进阶。
+  \item \textbf{基于相关性的语言模型（Relevance-Based Language Models）}，
+        Lavrenko, Croft，2001，\cite{lavrenko2001rm}。
+        核心贡献：用查询相关的文档集合估计相关性模型，缓解查询似然中的查询词稀缺问题。
+        为什么值得读：伪相关反馈的思想源头，在今天的稠密检索查询扩展中仍在以新形式复现。
+        难度：进阶。
+  \item \textbf{RankNet（Learning to Rank using Gradient Descent）}，
+        Burges 等，2005，\cite{burges2005ranknet}。
+        核心贡献：用成对概率损失与梯度下降训练排序模型，使排序学习首次可规模化。
+        为什么值得读：它定义了成对排序损失的写法，后续 LambdaRank 与 LambdaMART 都从这里长出来。
+        难度：进阶。
+  \item \textbf{从 RankNet 到 LambdaRank 再到 LambdaMART（From RankNet to LambdaRank to LambdaMART: An Overview）}，
+        Burges，2010，\cite{burges2010ranknet}。
+        核心贡献：系统梳理三个方法之间的演进关系，解释把 \metric{NDCG} 的梯度乘进损失的做法。
+        为什么值得读：这是排序学习最好的单篇综述，读它一篇可以省下读三篇原始论文的时间。
+        难度：进阶。
+  \item \textbf{ListNet（Learning to Rank: From Pairwise Approach to Listwise Approach）}，
+        Cao 等，2007，\cite{cao2007listnet}。
+        核心贡献：把排序损失从成对推广到列表级，用排列概率分布之间的散度作为优化目标。
+        为什么值得读：它引出「损失与评测指标不一致」这一根本问题，是理解 Lambda 类方法动机的前提。
+        难度：进阶。
+  \item \textbf{SVMrank（Training Linear SVMs in Linear Time）}，
+        Joachims，2006，\cite{joachims2006svmrank}。
+        核心贡献：给出线性时间训练排序 SVM 的割平面算法，使大规模排序训练可行。
+        为什么值得读：作为成对方法的工程实现来读，重点看约束生成策略而非优化细节。
+        难度：硬核——需要凸优化基础。
+  \item \textbf{LambdaMART（Adapting Boosting for Information Retrieval Measures）}，
+        Wu 等，2010，\cite{wu2010lambdamart}。
+        核心贡献：把梯度提升树与 Lambda 梯度结合，成为随后十年排序任务最强基线之一。
+        为什么值得读：即使深度学习时代，树模型在表格特征上仍是强对手，读它能理解「什么时候别上深度模型」。
+        难度：进阶。
+  \item \textbf{稠密段落检索（Dense Passage Retrieval for Open-Domain Question Answering）}，
+        Karpukhin 等，2020，\cite{karpukhin2020dpr}。
+        核心贡献：用双塔编码器加批内负样本训练稠密检索，证明纯稠密检索可以击败 BM25。
+        为什么值得读：稠密检索的奠基工作，负样本构造策略是这篇论文里最值钱的工程细节。
+        难度：进阶。
+  \item \textbf{ColBERT（Efficient and Effective Passage Search via Contextualized Late Interaction over BERT）}，
+        Khattab, Zaharia，2020，\cite{khattab2020colbert}。
+        核心贡献：用「延迟交互」把查询与文档的 token 级匹配推迟到检索阶段，兼顾效果与效率。
+        为什么值得读：它给出了双塔表达力与交叉编码器精度之间的第三条路，是多向量检索的思想源头。
+        难度：进阶。
+  \item \textbf{ANCE（Approximate Nearest Neighbor Negative Contrastive Learning for Dense Text Retrieval）}，
+        Xiong 等，2021，\cite{xiong2020ance}。
+        核心贡献：用近似近邻检索出的「难负样本」训练稠密检索器，缓解随机负样本过于简单的问题。
+        为什么值得读：难负样本是稠密检索提升效果的关键杠杆，这篇论文把「用索引训练编码器」讲得最清楚。
+        难度：进阶。
+  \item \textbf{SPLADE（SPLADE: Sparse Lexical and Expansion Model for First Stage Ranking）}，
+        Formal 等，2021，\cite{formal2021splade}。
+        核心贡献：用稀疏词项权重加词项扩展建模，兼具稀疏检索的效率与神经模型的语义扩展能力。
+        为什么值得读：稀疏与稠密并非二选一，读它能理解倒排索引为什么在延迟敏感场景仍不可替代。
+        难度：进阶。
+  \item \textbf{Sentence-BERT（Sentence Embeddings using Siamese BERT-Networks）}，
+        Reimers, Gurevych，2019，\cite{reimers2019sbert}。
+        核心贡献：用孪生网络与对比学习训练句向量，把语义相似度计算的复杂度从平方级降到线性级。
+        为什么值得读：语义检索与去重的基础工具，也是理解「对比学习如何塑造向量空间」的入门材料。
+        难度：进阶。
+  \item \textbf{MonoBERT（Passage Re-ranking with BERT）}，
+        Nogueira, Cho，2019，\cite{nogueira2019monobert}。
+        核心贡献：用查询-段落拼接进 BERT 做交叉编码精排，给出极简却极强的精排基线。
+        为什么值得读：它明确了「交叉编码器只能用于精排」这一约束，是检索分层架构设计的关键依据。
+        难度：进阶。
+  \item \textbf{FAISS（Billion-Scale Similarity Search with GPUs）}，
+        Johnson, Douze, J\'egou，2019，\cite{johnson2019faiss}。
+        核心贡献：给出面向十亿级向量的 GPU 相似度检索方案与索引结构组合策略。
+        为什么值得读：向量召回是线上召回的主力，读它是为了能读懂 IVF、PQ 与量化组合的取舍。
+        难度：进阶。
+  \item \textbf{HNSW（Efficient and Robust Approximate Nearest Neighbor Search using Hierarchical Navigable Small World Graphs）}，
+        Malkov, Yashunin，2020，\cite{malkov2020hnsw}。
+        核心贡献：用层次化小世界图实现高召回低延迟的近似近邻检索，并给出鲁棒性分析。
+        为什么值得读：掌握 HNSW 的 \code{ef} 与 \code{M} 两个参数，基本就能覆盖线上向量索引的调优工作。
+        难度：硬核——图结构分析与复杂度证明需要耐心。
+\end{itemize}
+
+\subsection{NLP 与大模型（22 篇）}
+
+\begin{itemize}
+  \item \textbf{词向量与短语的分布式表示（Distributed Representations of Words and Phrases and their Compositionality）}，
+        Mikolov 等，2013，\cite{mikolov2013word2vec}。
+        核心贡献：给出负采样与高频词下采样等训练加速技巧，使词向量训练在普通机器上可用。
+        为什么值得读：物品嵌入、字段嵌入的思想源头，负采样几乎是所有召回模型的标准组件。
+        难度：入门。
+  \item \textbf{GloVe（GloVe: Global Vectors for Word Representation）}，
+        Pennington, Socher, Manning，2014，\cite{pennington2014glove}。
+        核心贡献：把词的全局共现统计与局部上下文窗口统一到对数双线性目标中。
+        为什么值得读：读它是为了理解「矩阵分解式方法」与「采样式方法」的关系，二者的等价性至今有启发。
+        难度：进阶。
+  \item \textbf{FastText 子词表示（Enriching Word Vectors with Subword Information）}，
+        Bojanowski 等，2017，\cite{bojanowski2017fasttext}。
+        核心贡献：用字符 n-gram 组合表示词，使罕见词与形态变化丰富的语言也获得合理向量。
+        为什么值得读：子词思想是解决未登录词与拼写噪声的关键，跨境电商的多语言场景尤其需要它。
+        难度：入门。
+  \item \textbf{ELMo（Deep Contextualized Word Representations）}，
+        Peters 等，2018，\cite{peters2018elmo}。
+        核心贡献：用双向语言模型产生随上下文变化的词表示，开启预训练加微调的范式。
+        为什么值得读：读它是为了看清「静态词向量到上下文词向量」这一跃迁，以及 ELMo 为何被 BERT 取代。
+        难度：进阶。
+  \item \textbf{Transformer（Attention Is All You Need）}，
+        Vaswani 等，2017，\cite{vaswani2017attention}。
+        核心贡献：用自注意力与位置编码完全替代循环与卷积结构，实现可并行的高效序列建模。
+        为什么值得读：这是近十年最重要的一篇论文，也是序列推荐与生成式推荐的结构基座；
+        缩放点积注意力与多头机制的推导必须能默写。
+        难度：硬核——第一次读建议配合逐行代码实现。
+  \item \textbf{注意力机制与对齐（Neural Machine Translation by Jointly Learning to Align and Translate）}，
+        Bahdanau, Cho, Bengio，2015，\cite{bahdanau2015attention}。
+        核心贡献：第一次把注意力机制用于神经机器翻译，解决固定长度编码瓶颈。
+        为什么值得读：读它才能理解注意力的原始动机是「对齐」，而不是今天常见的加权池化。
+        难度：进阶。
+  \item \textbf{序列到序列学习（Sequence to Sequence Learning with Neural Networks）}，
+        Sutskever, Vinyals, Le，2014，\cite{sutskever2014seq2seq}。
+        核心贡献：确立编码器-解码器框架并用源序列逆序等技巧显著提升翻译质量。
+        为什么值得读：生成式推荐的目标函数与解码策略都可以追溯到这篇论文。
+        难度：入门到进阶。
+  \item \textbf{条件随机场（Conditional Random Fields: Probabilistic Models for Segmenting and Labeling Sequence Data）}，
+        Lafferty, McCallum, Pereira，2001，\cite{lafferty2001crf}。
+        核心贡献：提出判别式的序列标注模型，用全局归一化解决标注偏置问题。
+        为什么值得读：NER 与查询理解任务至今大量使用 CRF 层，理解它与 softmax 逐帧标注的差别非常实用。
+        难度：硬核——需要概率图模型基础。
+  \item \textbf{BERT（BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding）}，
+        Devlin 等，2019，\cite{devlin2019bert}。
+        核心贡献：用掩码语言模型加下一句预测做双向预训练，在多项任务上刷新纪录。
+        为什么值得读：几乎所有中文 NLP 落地都从 BERT 系模型开始，掩码比例与微调策略是必须掌握的细节。
+        难度：进阶。
+  \item \textbf{RoBERTa（RoBERTa: A Robustly Optimized BERT Pretraining Approach）}，
+        Liu 等，2019，\cite{liu2019roberta}。
+        核心贡献：通过去掉下一句预测、动态掩码、更大批量与更多数据，显著提升 BERT 的表现。
+        为什么值得读：它是一次典型的「超参消融比结构创新更重要」的示范，值得学习它的实验方法论。
+        难度：进阶。
+  \item \textbf{GPT-2（Language Models are Unsupervised Multitask Learners）}，
+        Radford 等，2019，\cite{radford2019gpt2}。
+        核心贡献：证明足够大的自回归语言模型在零样本设定下即可完成多种任务。
+        为什么值得读：从 BERT 的双向到 GPT 的自回归，这条分岔决定了后来生成与理解两条技术路线。
+        难度：入门。
+  \item \textbf{GPT-3（Language Models are Few-Shot Learners）}，
+        Brown 等，2020，\cite{brown2020gpt3}。
+        核心贡献：展示上下文学习能力，用提示与少量样例替代梯度更新。
+        为什么值得读：这是「不做微调也能用模型」的转折点，也是所有提示工程实践的理论起点。
+        难度：进阶。
+  \item \textbf{T5（Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer）}，
+        Raffel 等，2020，\cite{raffel2020t5}。
+        核心贡献：把所有 NLP 任务统一成文本到文本格式，并系统比较预训练目标与架构选择。
+        为什么值得读：它的实验矩阵本身就是一份「如何做对照实验」的教材，值得模仿其消融设计。
+        难度：进阶。
+  \item \textbf{缩放定律（Scaling Laws for Neural Language Models）}，
+        Kaplan 等，2020，\cite{kaplan2020scaling}。
+        核心贡献：给出损失与参数量、数据量、计算量之间的幂律关系，量化「增大模型」的收益。
+        为什么值得读：理解算力预算分配的第一篇论文，也是后来 Chinchilla 修正的对象。
+        难度：硬核——需要对幂律拟合与实验设计有耐心。
+  \item \textbf{Chinchilla（Training Compute-Optimal Large Language Models）}，
+        Hoffmann 等，2022，\cite{hoffmann2022chinchilla}。
+        核心贡献：修正了「参数优先」的结论，指出在给定算力下参数量与训练 token 数应大致同比例增长。
+        为什么值得读：一个旧结论被新实验推翻的经典案例，对做实验的人来说比结论本身更有价值。
+        难度：进阶。
+  \item \textbf{InstructGPT（Training Language Models to Follow Instructions with Human Feedback）}，
+        Ouyang 等，2022，\cite{ouyang2022instructgpt}。
+        核心贡献：用监督微调加人类反馈强化学习把模型行为对齐到用户意图。
+        为什么值得读：对齐技术的主干，读它要弄清奖励模型、策略优化与 KL 约束三者的分工。
+        难度：硬核——需要强化学习基础。
+  \item \textbf{LoRA（LoRA: Low-Rank Adaptation of Large Language Models）}，
+        Hu 等，2022，\cite{hu2021lora}。
+        核心贡献：冻结原权重，只训练低秩增量矩阵，把微调显存需求降低一个量级。
+        为什么值得读：中小团队微调模型的主流方案，秩、缩放系数与目标模块的选择决定效果上限。
+        难度：进阶。
+  \item \textbf{RAG（Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks）}，
+        Lewis 等，2020，\cite{lewis2021rag}。
+        核心贡献：把参数化生成模型与非参数化检索器联合训练，用于知识密集任务。
+        为什么值得读：当前企业级问答系统的标准架构源头，重点是它如何端到端联合训练检索与生成。
+        难度：硬核。
+  \item \textbf{RAG 综述（Retrieval-Augmented Generation for Large Language Models: A Survey）}，
+        Gao 等，2023，\cite{gao2023ragsurvey}。
+        核心贡献：把 RAG 划分为朴素、进阶与模块化三代范式，系统整理检索、生成与增强三部分技术。
+        为什么值得读：做技术选型时的地图，读它可以避免重复发明已经在别处失败的方案。
+        难度：入门到进阶。
+  \item \textbf{幻觉综述（Survey of Hallucination in Natural Language Generation）}，
+        Ji 等，2023，\cite{ji2023hallucination}。
+        核心贡献：系统梳理生成模型幻觉的成因分类、评测方法与缓解手段。
+        为什么值得读：只要做生成式产品就必须面对幻觉，这篇综述给出了可直接落地的评测维度。
+        难度：入门。
+  \item \textbf{FlashAttention（FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness）}，
+        Dao 等，2022，\cite{dao2022flashattention}。
+        核心贡献：通过分块计算与显存层级感知的 IO 优化，在保持精确性的前提下大幅降低注意力显存占用。
+        为什么值得读：长序列推荐与长文本场景的成本瓶颈常常就在这里，理解 IO 感知比理解公式更重要。
+        难度：硬核。
+  \item \textbf{潜在狄利克雷分配（Latent Dirichlet Allocation）}，
+        Blei, Ng, Jordan，2003，\cite{blei2003lda}。
+        核心贡献：提出生成式主题模型与变分推断求解方法。
+        为什么值得读：做商品类目、查询意图的弱监督聚类时仍常用；读它可以理解主题模型与嵌入方法的互补性。
+        难度：硬核。
+\end{itemize}
+
+\subsection{计算广告（14 篇）}
+
+\begin{itemize}
+  \item \textbf{反投机、拍卖与竞争性密封投标（Counterspeculation, Auctions, and Competitive Sealed Tenders）}，
+        Vickrey，1961，\cite{vickrey1961counterspeculation}。
+        核心贡献：提出第二价格拍卖并证明其占优策略是真实报价。
+        为什么值得读：理解「为什么出价等于价值」这一广告系统基石的必要材料。
+        难度：入门。
+  \item \textbf{最优拍卖设计（Optimal Auction Design）}，
+        Myerson，1981，\cite{myerson1981optimal}。
+        核心贡献：给出单物品最优拍卖的收益等价与虚拟价值刻画，确立保留价理论。
+        为什么值得读：谈到机制设计就绕不开这篇；了解虚拟价值才能理解平台为什么设置保留价与底价。
+        难度：硬核——需要机制设计与概率论基础。
+  \item \textbf{广义第二价格拍卖（Internet Advertising and the Generalized Second-Price Auction）}，
+        Edelman, Ostrovsky, Schwarz，2007，\cite{edelman2007gsp}。
+        核心贡献：分析 GSP 的均衡性质，指出它并非激励相容但具有可解释的定价性质。
+        为什么值得读：搜索广告二十年的计价逻辑就建立在这篇论文上，是做商业化系统必读。
+        难度：硬核。
+  \item \textbf{位置拍卖（Position Auctions）}，
+        Varian，2007，\cite{varian2007position}。
+        核心贡献：给出位置拍卖的统一分析框架，讨论点击率可分离性假设下的均衡与收益。
+        为什么值得读：与上一篇互为补充，读完二者基本能看懂广告位计价的全部经济学争议。
+        难度：硬核。
+  \item \textbf{首价拍卖的迁移（Google's Shift to First-Price Auctions）}，
+        Krengel，2019，\cite{krengel2019firstprice}。
+        核心贡献：梳理头部广告平台由第二价格转向首价结算的过程与影响。
+        为什么值得读：这是近年最重要的商业化规则变化，直接影响出价策略与竞价模型的输入输出定义。
+        难度：入门。
+  \item \textbf{FTRL（Ad Click Prediction: A View from the Trenches）}，
+        McMahan 等，2013，\cite{mcmahan2013ftrl}。
+        核心贡献：把 FTRL-Proximal 用于超大规模稀疏点击率预测，并给出内存与校准的工程经验。
+        为什么值得读：这是工业界在线学习的经典实务论文，几乎每一条工程建议都仍然适用。
+        难度：进阶。
+  \item \textbf{Facebook 广告点击预测的实务经验（Practical Lessons from Predicting Clicks on Ads at Facebook）}，
+        He 等，2014，\cite{he2014practical}。
+        核心贡献：验证了决策树特征变换加线性模型的强组合，并总结数据新鲜度与负下采样的影响。
+        为什么值得读：读它要记住两个结论——特征工程常比模型结构更重要，模型校准必须单独监控。
+        难度：入门到进阶。
+  \item \textbf{实时竞价中的出价优化与库存评分（Bid Optimizing and Inventory Scoring in Targeted Online Advertising）}，
+        Perlich 等，2012，\cite{perlich2012rtb}。
+        核心贡献：把 RTB 出价分解为点击率预估与出价决策两部分，并给出库存评分思路。
+        为什么值得读：DSP 侧决策链路的经典描述，理解「预估」与「决策」为什么要分开优化。
+        难度：进阶。
+  \item \textbf{展示广告的实时竞价综述（Real-Time Bidding: A Review）}，
+        Wojciechowski 等，2017，\cite{wojciechowski2017}。
+        核心贡献：梳理 RTB 生态、出价策略与相关模型的整体图景。
+        为什么值得读：适合作为进入广告技术领域的第一次全局扫描。
+        难度：入门。
+  \item \textbf{展示广告的最优实时竞价（Optimal Real-Time Bidding for Display Advertising）}，
+        Zhang, Yuan, Wang，2016，\cite{zhang2016ocpc}。
+        核心贡献：在预算与投放约束下求解最优出价函数，给出从点击率预估到出价函数的完整链条。
+        为什么值得读：读它才能讲清「出价不等于价值乘系数」背后的约束优化结构。
+        难度：硬核。
+  \item \textbf{Shapley 值（A Value for n-Person Games）}，
+        Shapley，1953，\cite{shapley1953value}。
+        核心贡献：提出合作博弈中满足四条公理的唯一分配方案。
+        为什么值得读：多触点归因与特征归因的理论基础，理解公理假设才能说清它的适用边界。
+        难度：硬核。
+  \item \textbf{数据驱动的多触点归因模型（Data-Driven Multi-Touch Attribution Models）}，
+        Shao, Li，2016，\cite{shao2016attribution}。
+        核心贡献：比较多种归因模型并引入基于合作博弈思想的归因方法。
+        为什么值得读：归因结果直接决定预算分配，读它能避免把相关性当成因果贡献。
+        难度：进阶。
+  \item \textbf{因果评估与代理指标（Evaluating and Optimizing Online Advertising: Forget the Click, but there are Good Proxies）}，
+        Dalessandro 等，2012，\cite{dalessandro2012causal}。
+        核心贡献：论证点击并非良好的长期目标代理，提出寻找更好代理指标的方法。
+        为什么值得读：在流量作弊与误点普遍存在的环境下，这篇论文的警示至今有效。
+        难度：进阶。
+  \item \textbf{反事实推断与离线策略评估（Counterfactual Risk Minimization / Doubly Robust Policy Evaluation）}，
+        Swaminathan, Joachims，2015 \cite{swaminathan2015counterfactual}；
+        Dud\'ik, Langford, Li，2011 \cite{dudik2011ee}。
+        核心贡献：给出用日志数据无偏评估新策略的方法与方差控制手段。
+        为什么值得读：广告与推荐的新策略上线前，离线评估的正确性比模型精度更值钱，这两篇是工具书。
+        难度：硬核。
+\end{itemize}
+
+\subsection{增长与实验（8 篇）}
+
+\begin{itemize}
+  \item \textbf{可信的在线对照实验（Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing）}，
+        Kohavi, Tang, Xu，2020，\cite{kohavi2020trustworthy}。
+        核心贡献：系统给出 A/B 实验的设计、指标、方差控制、护栏指标与常见失效模式。
+        为什么值得读：增长团队的必备手册；重点读指标选择、样本比例失衡与多重比较三章。
+        难度：入门到进阶。
+  \item \textbf{精益创业（The Lean Startup）}，
+        Ries，2011，\cite{ries2011lean}。
+        核心贡献：提出构建-测量-学习循环与最小可行产品的工作方法。
+        为什么值得读：它提供的是实验节奏而非具体算法，适合用来组织团队的验证优先级。
+        难度：入门。
+  \item \textbf{增长黑客（Hacking Growth）}，
+        Ellis, Brown，2017，\cite{ellis2021growth}。
+        核心贡献：把增长拆解为获取、激活、留存、变现、推荐五个环节并给出跨职能团队组织方式。
+        为什么值得读：读它是为了建立指标树与漏斗模型，把技术工作挂到业务目标上。
+        难度：入门。
+  \item \textbf{古德哈特定律（Problems of Monetary Management: The U.K. Experience）}，
+        Goodhart，1975，\cite{goodhart1975}。
+        核心贡献：提出「当指标成为目标，它就不再是好指标」这一经验规律。
+        为什么值得读：每一次指标异化（刷单、刷时长、刷点击）都能在这里找到解释框架。
+        难度：入门。
+  \item \textbf{为什么大多数已发表的研究发现是错的（Why Most Published Research Findings Are False）}，
+        Ioannidis，2005，\cite{ioannidis2005why}。
+        核心贡献：论证在小样本、多重比较与发表偏倚之下，阳性结果的后验为真概率可能很低。
+        为什么值得读：把这篇的推理套到公司内部的实验报告上，你会立刻开始怀疑那些漂亮的小提升。
+        难度：进阶。
+  \item \textbf{因果关系（Causality: Models, Reasoning, and Inference）}，
+        Pearl，2009，\cite{pearl2009causality}。
+        核心贡献：建立结构因果模型、干预与反事实的统一语言，给出后门与前门准则。
+        为什么值得读：决定了你能否分清「相关」与「因果」，是做归因、增量实验与因果推断的理论根基。
+        难度：硬核。
+  \item \textbf{随机逼近（A Stochastic Approximation Method）}，
+        Robbins, Monro，1951，\cite{robbins1951stochastic}。
+        核心贡献：提出在噪声观测下逐步逼近根的迭代方法，奠在线学习收敛性分析基础。
+        为什么值得读：线上模型持续更新的理论起点，理解步长衰减为什么是必需的。
+        难度：硬核。
+  \item \textbf{在线对照实验之外的决策纪律}：实验能回答「改动是否有效」，但不能回答「备多少货」。
+        把实验结论接到库存与定价决策上，需要额外的成本模型；这一环的定量方法见供应链一节的参考书，
+        \cite{kohavi2020trustworthy} 只解决统计层面的可信性。
+        难度：进阶。
+\end{itemize}
+
+\subsection{供应链（6 篇）}
+
+\begin{itemize}
+  \item \textbf{牛鞭效应（Information Distortion in a Supply Chain: The Bullwhip Effect）}，
+        Lee, Padmanabhan, Whang，1997，\cite{lee1997bullwhip}。
+        核心贡献：指出需求信息在链条上游被逐级放大，并归因于需求预测更新、批量订货、价格波动与短缺博弈。
+        为什么值得读：跨境电商最贵的一课就是库存错配，这篇论文的四个成因至今是排查清单。
+        难度：入门。
+  \item \textbf{供应链管理（Supply Chain Management: Strategy, Planning, and Operation）}，
+        Chopra, Meindl，2019，\cite{chopra2019supply}。
+        核心贡献：用「战略匹配」框架把库存、运输、信息与采购决策串成一体。
+        为什么值得读：做供应链侧数据系统时要理解的业务语言，重点读需求预测与库存周转章节。
+        难度：入门到进阶。
+  \item \textbf{目标（The Goal: A Process of Ongoing Improvement）}，
+        Goldratt, Cox，2004，\cite{goldratt2004goal}。
+        核心贡献：以小说形式讲清约束理论：系统产出由瓶颈决定，局部效率最优会伤害整体。
+        为什么值得读：这本书能纠正大量「优化每个环节反而更慢」的工程直觉错误。
+        难度：入门。
+  \item \textbf{需求预测：原理与实践（Forecasting: Principles and Practice）}，
+        Hyndman, Athanasopoulos，2021，\cite{hyndman2021forecasting}。
+        核心贡献：系统讲解指数平滑、ARIMA、层次预测与预测评估方法，并配有可运行示例。
+        为什么值得读：备货与补货的输入就是预测，读它能避免用错误的误差指标选模型。
+        难度：进阶。
+  \item \textbf{库存管理与生产计划（Inventory Management and Production Planning and Scheduling）}，
+        Silver, Pyke, Peterson，1998，\cite{silver1998inventory}。
+        核心贡献：给出安全库存、服务水平、批量订货与补货策略的系统化定量方法。
+        为什么值得读：安全库存公式是所有备货系统的核心，读它才能把「服务水平」这种业务语言翻译成可计算的目标。
+        难度：进阶。
+  \item \textbf{牛鞭效应四成因的排查清单（Bullwhip Effect checklist）}，
+        对照 \cite{lee1997bullwhip} 的结论复盘自家链路。实务延伸条目。
+        核心内容：需求预测更新、批量订货、价格波动、短缺博弈四类成因，在跨境场景下分别表现为
+        多级备货、起订量约束、大促囤货与断货抢货。
+        为什么值得读：这是一条\textbf{排查清单而不是模型}；当库存周转突然恶化时，
+        按这四类逐条核对，通常比直接上预测模型更快定位问题。
+        难度：入门。
+\end{itemize}
+
+\subsection{跨境电商与平台实务（14 条文档，非论文）}
+
+以下条目全部是\textbf{实务文档与官方说明}，不是学术论文，阅读目的也不同：
+论文读「方法是否成立」，文档读「规则当前是什么」。所有费率、政策与规则细节
+\textbf{必须以官方最新文档为准}，本章所列仅作为入口。
+
+\begin{itemize}
+  \item \textbf{Incoterms 2020 国际贸易术语解释通则}，
+        国际商会，2020，\cite{incoterms2020}。实务文档。
+        核心内容：十一种贸易术语下买卖双方在风险、费用与手续上的责任划分。
+        为什么值得读：跨境履约纠纷九成源于责任划分不清，读它是为了避免把「谁付运费」和「谁担风险」混为一谈。
+        难度：入门。
+  \item \textbf{欧盟增值税一站式申报（One-Stop Shop, OSS）}，
+        欧盟委员会，2024，\cite{eu_oss}。实务文档。
+        核心内容：跨境 B2C 销售的增值税申报口径与简化申报机制。
+        为什么值得读：定价与合规成本直接受其影响，是欧盟市场财务模型的必备输入。
+        难度：进阶——税法条款需要与财税同事一起核对。
+  \item \textbf{Statista 跨境电商市场数据}，
+        Statista，2024，\cite{statista_ecommerce}。实务文档。
+        核心内容：跨境电商规模、区域结构与品类的公开统计数据入口。
+        为什么值得读：用于给商业计划建立量级参照，注意口径差异与统计年份，不要跨口径比较。
+        难度：入门。
+  \item \textbf{Temu 商业模式与卖家中心文档}，
+        Temu，2024，\cite{temu_about}。实务文档。
+        核心内容：平台招商、定价与履约模式的官方说明。
+        为什么值得读：理解平台侧定价权与选品逻辑，是做平台化运营分析的第一手材料。
+        难度：入门。
+  \item \textbf{SHEIN 按需供应链与卖家平台}，
+        SHEIN，2024，\cite{shein_about}。实务文档。
+        核心内容：小单快反的供应链组织方式与卖家侧流程说明。
+        为什么值得读：小单快反是近年最具影响力的柔性供应链范式，值得对照自己的备货策略。
+        难度：入门。
+  \item \textbf{TikTok Shop 卖家中心与平台履约（Fulfillment by TikTok）}，
+        TikTok Shop，2024，\cite{tiktokshop_about}。实务文档。
+        核心内容：内容电商的卖家准入、履约与结算规则说明。
+        为什么值得读：内容电商的转化路径与货架电商完全不同，履约与退货规则差异尤其需要提前确认。
+        难度：入门。
+  \item \textbf{Schema.org 结构化数据词表}，
+        Schema.org 社区组，2024，\cite{schemaorg}。实务文档。
+        核心内容：商品、评价、面包屑等结构化标记的标准词表。
+        为什么值得读：站内结构化数据是搜索与生成式摘要的基础设施，字段选错等于白做。
+        难度：入门。
+  \item \textbf{Google 搜索优化入门指南}，
+        Google Search Central，2024，\cite{google2024seostarter}。实务文档。
+        核心内容：抓取、索引与排名的官方基础说明。
+        为什么值得读：所有 SEO 讨论的第一手依据，用来校准二手教程里的偏差说法。
+        难度：入门。
+  \item \textbf{核心网页指标（Core Web Vitals）}，
+        web.dev，2024，\cite{google2024corewebvitals}。实务文档。
+        核心内容：加载性能、交互响应与视觉稳定性的量化指标与阈值口径。
+        为什么值得读：性能优化最容易做成「局部变快、整体无感」，读它是为了统一度量口径。
+        难度：入门。
+  \item \textbf{搜索质量评估员指南（Search Quality Rater Guidelines）}，
+        Google Search Central，2024，\cite{google2024quality}。实务文档。
+        核心内容：人工评估网页质量与经验、专业、权威、可信标准的公开说明。
+        为什么值得读：理解内容质量判定逻辑，比研究排序因子更接近「搜索想要什么」的本质。
+        难度：进阶。
+  \item \textbf{AI 功能与网站（AI Features and Your Website）}，
+        Google Search Central，2024，\cite{google2024ai_overviews}。实务文档。
+        核心内容：生成式搜索摘要场景下站点的呈现方式与官方建议。
+        为什么值得读：生成式检索改变了流量分配逻辑，这个文档是判断长期 SEO 策略的现实依据。
+        难度：入门。
+  \item \textbf{Meta Advantage+ 与 Pixel、Conversions API 文档}，
+        Meta Business Help Center，2024，\cite{meta_advantage}。实务文档。
+        核心内容：自动化投放产品与转化回传接口的官方配置说明。
+        为什么值得读：广告优化效果高度依赖回传信号质量，接口配置错误会静默地拉低模型表现。
+        难度：进阶。
+  \item \textbf{Google Ads 智能出价与效果最大化说明}，
+        Google Ads Help，2024，\cite{googleads_help}。实务文档。
+        核心内容：自动化出价与跨渠道投放的官方规则与设置说明。
+        为什么值得读：自动化投放时代，优化师的核心工作从「调价」转向「喂对目标与信号」。
+        难度：入门。
+  \item \textbf{llms.txt 提案（The llms.txt Proposal）}，
+        llms.txt 工作组，2024，\cite{openaillmstxt}。实务文档。
+        核心内容：为语言模型提供站点内容导航的约定草案。
+        为什么值得读：生成式引擎优化尚未形成标准，理解草案的意图有助于判断哪些做法值得先做。
+        难度：入门。
+\end{itemize}
+
+\begin{insight}[清单的价值在于排序，不在于长度]
+如果你只想从这一节拿走一条建议：\textbf{把清单压缩到能读完的长度}。
+一个可以真正执行的计划是「每季度精读 3 篇 + 泛读 12 篇」。
+精读的 3 篇负责改变你的方法库，泛读的 12 篇负责让你知道新东西在往哪走。
+清单越长，执行率越低；这就是把 100 篇论文列出来的最大风险。
+\end{insight}
+
+\section{学习路径：三阶段}
+
+\subsection{总体节奏与验收标准}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=7mm,
+  stage/.style={draw=NavyMid, fill=BoxBG, rounded corners=3pt, minimum height=16mm,
+                inner sep=5pt, text width=3.1cm, align=center, font=\sffamily\scriptsize},
+  outbox/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=10mm,
+                 inner sep=4pt, text width=3.1cm, align=center, font=\sffamily\scriptsize},
+  arrow/.style={-{Stealth}, thick, SlateGray}
+]
+\node[stage] (s1) {\textbf{阶段一：入门}\\12 周\\把经典论文读薄\\建立指标与口径直觉};
+\node[stage, right=14mm of s1] (s2) {\textbf{阶段二：进阶}\\16 周\\复现两篇核心论文\\搭一个端到端小系统};
+\node[stage, right=14mm of s2] (s3) {\textbf{阶段三：前沿}\\20 周\\跟踪新论文与开源实现\\做一次可复现改进};
+\node[outbox, below=8mm of s1] (o1) {产出：一页纸笔记 20 篇\\指标口径对照表};
+\node[outbox, below=8mm of s2] (o2) {产出：可运行复现仓库\\离线评测流水线};
+\node[outbox, below=8mm of s3] (o3) {产出：技术报告一份\\开源或内部分享};
+\draw[arrow] (s1) -- (s2);
+\draw[arrow] (s2) -- (s3);
+\draw[arrow] (s1) -- (o1);
+\draw[arrow] (s2) -- (o2);
+\draw[arrow] (s3) -- (o3);
+\end{tikzpicture}
+\caption{三阶段学习路径：每一阶段的产出物都是下一阶段的输入}
+\label{fig:learning-path}
+\end{figure}
+
+三个阶段之间不是时间上的简单切分，而是\textbf{输入方式的改变}：
+入门阶段输入别人的结论，进阶阶段输入别人的方法并动手复现，前沿阶段输入自己的问题并回头去论文里找工具。
+
+\begin{table}[htbp]
+\centering
+\caption{三阶段验收标准对照}
+\label{tab:stage-criteria}
+\small
+\begin{tabularx}{\textwidth}{L{1.8cm} L{3.4cm} Y}
+\toprule
+\tabhead{阶段} & \tabhead{能力目标} & \tabhead{验收方式} \\
+\midrule
+入门 & 能讲清推荐、搜索、广告三大系统的输入输出、指标口径与漏斗分工 &
+白板上画出任意一个系统的完整链路，并说明每一层的指标与失败模式 \\
+\midrule
+进阶 & 能独立复现一篇论文的核心实验，并解释离线与线上差异的来源 &
+提交可运行仓库：数据预处理、训练、评测与消融一键跑通，指标可复现 \\
+\midrule
+前沿 & 能判断一篇新论文是否值得投入，并把方法翻译成自己系统的改造方案 &
+写出一份技术报告：现状基线、改造方案、预期收益、风险与回滚策略 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{入门阶段：12 周计划}
+
+目标是「读薄经典、拉通口径」。这一阶段不追求最新，而是把每个领域最常被引用的根基论文读透。
+
+\begin{table}[htbp]
+\centering
+\caption{入门阶段 12 周计划}
+\label{tab:plan-basic}
+\small
+\begin{tabularx}{\textwidth}{L{1.4cm} L{3.4cm} Y}
+\toprule
+\tabhead{周次} & \tabhead{主题} & \tabhead{产出物} \\
+\midrule
+第 1--2 周 & 指标与评测基础：显式与隐式反馈、\metric{Recall@K}、\metric{NDCG}、\metric{AUC} &
+一页指标口径表：每个指标的定义、适用场景、常见误读 \\
+第 3--4 周 & 协同过滤与矩阵分解：\cite{koren2009mf,sarwar2001itemcf,linden2003amazon} &
+手推 MF 与 BPR 损失，写出 i2i 召回的离线评测脚本 \\
+第 5--6 周 & 特征交叉与 CTR：\cite{rendle2010fm,guo2017deepfm,cheng2016widendeep} &
+FM 二阶项复杂度推导笔记；用一个小数据集跑通 DeepFM \\
+第 7--8 周 & 序列建模：\cite{kang2018sasrec,sun2019bert4rec,zhou2018din} &
+画出三种序列建模范式的对比表，说明各自的训练目标与推理方式 \\
+第 9 周 & 检索基础：\cite{robertson2009bm25,manning2008ir} &
+实现一个可调 $k_1$、$b$ 的 BM25 检索器并做参数敏感性分析 \\
+第 10 周 & 稠密检索入门：\cite{karpukhin2020dpr,reimers2019sbert} &
+双塔检索小实验：对比随机负样本与批内负样本的召回差异 \\
+第 11 周 & 广告与计价基础：\cite{vickrey1961counterspeculation,edelman2007gsp,he2014practical} &
+写清从曝光到结算的完整计费链路，标出每一步的输入输出 \\
+第 12 周 & 实验方法论：\cite{kohavi2020trustworthy} &
+设计一份 A/B 实验方案：假设、指标、样本量、护栏指标与停止规则 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{进阶阶段：16 周计划}
+
+目标是「动手复现」。这一阶段的核心不是读更多，而是把两到三篇论文真正跑起来。
+
+\begin{table}[htbp]
+\centering
+\caption{进阶阶段 16 周计划}
+\label{tab:plan-advanced}
+\small
+\begin{tabularx}{\textwidth}{L{1.4cm} L{3.4cm} Y}
+\toprule
+\tabhead{周次} & \tabhead{主题} & \tabhead{产出物} \\
+\midrule
+第 1--2 周 & 数据与评测流水线：时间切分、负采样、去重 &
+可复用的数据与评测模块，保证任何模型都能在同一口径下比较 \\
+第 3--5 周 & 复现召回模型：\cite{he2020lightgcn,he2017ncf} &
+LightGCN 或 NCF 的完整复现，含消融与超参敏感性 \\
+第 6--8 周 & 复现排序模型：\cite{zhou2018din,tang2020ple} &
+DIN 或 PLE 的复现，重点复现注意力可视化与多任务跷跷板现象 \\
+第 9--10 周 & 向量检索工程：\cite{johnson2019faiss,malkov2020hnsw} &
+搭建百万级向量的索引，测出召回率与延迟、内存的权衡曲线 \\
+第 11--12 周 & 稠密检索与精排：\cite{khattab2020colbert,nogueira2019monobert,xiong2020ance} &
+两阶段检索系统：召回加精排，报告端到端指标与延迟分解 \\
+第 13--14 周 & 序列推荐落地：\cite{kang2018sasrec,zhai2024hstu} &
+长序列建模实验：对比截断长度与性能的关系，给出成本曲线 \\
+第 15--16 周 & 实验与因果：\cite{kohavi2020trustworthy,pearl2009causality} &
+对复现系统做一次离线策略评估，写清偏差来源与置信区间 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{前沿阶段：20 周计划}
+
+目标是「产出可被他人复用的结论」。这一阶段应围绕一个真实问题组织阅读，而不是按主题漫游。
+
+\begin{table}[htbp]
+\centering
+\caption{前沿阶段 20 周计划}
+\label{tab:plan-frontier}
+\small
+\begin{tabularx}{\textwidth}{L{1.6cm} L{3.4cm} Y}
+\toprule
+\tabhead{周次} & \tabhead{主题} & \tabhead{产出物} \\
+\midrule
+第 1--3 周 & 选题与现状扫描：明确要解决的问题边界与可用数据 &
+一页问题定义：现状基线、痛点量化、成功判据 \\
+第 4--7 周 & 生成式推荐与生成式检索：\cite{rajput2023tiger,zhai2024hstu} &
+方案对比报告：语义 ID 与向量检索在冷启动上的差异量化 \\
+第 8--11 周 & 大模型与检索增强：\cite{lewis2021rag,gao2023ragsurvey,ji2023hallucination} &
+一个最小可用的 RAG 原型与幻觉评测集 \\
+第 12--14 周 & 高效训练与推理：\cite{hu2021lora,dao2022flashattention} &
+显存与延迟基准测试表：不同配置下的吞吐、显存与效果 \\
+第 15--17 周 & 机制设计与商业化：\cite{varian2007position,zhang2016ocpc,shao2016attribution} &
+一次离线出价或归因实验，给出收益区间与假设敏感性 \\
+第 18--20 周 & 沉淀与输出：把结论写成可复现的技术报告 &
+技术报告加开源仓库；一次内部分享或投稿 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[每周两小时的可执行节奏]
+\begin{itemize}
+  \item \textbf{周一 20 分钟}：扫一遍上周 arXiv 新论文标题与摘要，只挑 1--2 篇进候选池。
+  \item \textbf{周三 60 分钟}：对候选池中的一篇做第一遍通读，回答五个问题并决定是否进入第二遍。
+  \item \textbf{周六 40 分钟}：写一页纸笔记（三栏结构），更新方法演进图上的一个连线。
+  \item \textbf{每季度一次 4 小时}：把当季笔记重排一遍，删掉已经过时的条目——\textbf{维护清单比扩充清单更难也更有价值}。
+\end{itemize}
+\end{toolbox}
+
+\section{公开数据集与竞赛}
+
+数据集选择的第一原则是：\textbf{选一个能让你复现论文结论的数据集，而不是最大的那个}。
+第二原则是提前知道坑在哪，否则你会在数据预处理上耗掉全部时间预算。
+
+\begin{table}[htbp]
+\centering
+\caption{推荐与广告方向常用公开数据集}
+\label{tab:datasets-recsys}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.4cm} Y}
+\toprule
+\tabhead{数据集} & \tabhead{规模与形态} & \tabhead{适合练什么 / 坑点} \\
+\midrule
+MovieLens 100K / 1M / 32M &
+10 万至 3300 万条评分与标签，含用户、物品与时间戳 &
+适合练 MF、BPR、序列推荐与评测脚本。坑点：它是显式评分数据且时间跨度长，
+直接沿用随机留一会高估效果，必须改时间切分再做结论。 \\
+Amazon Reviews 系列 &
+数亿条评论与评分，含元数据与类别子集 &
+适合练跨域推荐、评论文本与行为联合建模、长尾分析。坑点：更新频繁、版本间物品 ID 不兼容，
+务必固定一版并记录下载日期。 \\
+Yelp Open Dataset &
+数百万条评论、商户与用户属性，含图片与签到 &
+适合练多模态与本地生活场景的排序。坑点：许可证限制再分发，特征里含大量地理信息需单独处理。 \\
+Criteo Display Advertising Challenge / Terabyte &
+数千万至数十亿条曝光记录，含数值与类别特征 &
+CTR 预估的事实标准，练 FM、FFM、DeepFM、DCN 与在线学习。坑点：\code{count} 字段语义特殊，
+泄露特征会导致离线指标虚高；类别基数极大，哈希桶数要先规划。 \\
+Avazu &
+约 4000 万条移动端点击记录，特征多为高基数类别 &
+适合练高基数类别特征的嵌入与哈希技巧。坑点：正样本率低，\metric{AUC} 对负采样策略很敏感。 \\
+AliExpress 用户行为数据集 &
+约 400 万条行为记录，含点击、加购、下单等多类行为 &
+适合练多行为联合建模与转化路径分析。坑点：行为类型极不平衡，不能把四类行为简单当同等正样本。 \\
+Taobao 用户行为数据集 &
+约 1 亿条行为记录，含点击与购买标签 &
+适合练大规模序列建模与转化率建模。坑点：数据量对单机不友好，需先做用户抽样再迭代模型。 \\
+MIND（新闻推荐） &
+约 100 万用户、16 万篇新闻与上亿条曝光日志 &
+适合练新闻推荐中的冷启动与时效性建模。坑点：新闻生命周期极短，
+离线评测必须严格按时间切分，且要留出「当天新文章」的测试集合。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{检索、NLP 与竞赛类资源}
+\label{tab:datasets-ir}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.4cm} Y}
+\toprule
+\tabhead{数据集} & \tabhead{规模与形态} & \tabhead{适合练什么 / 坑点} \\
+\midrule
+MS MARCO &
+百万级查询与段落，含人工标注的相关性判断 &
+练稠密检索、重排与端到端问答的标准集合。坑点：训练集为稀疏标注，
+直接当强监督会引入噪声，需配合负采样策略。 \\
+BEIR &
+十余个跨领域检索任务的零样本评测集合 &
+练跨域泛化与检索器鲁棒性。坑点：任务域差异极大，
+单一领域的调参结论不可迁移，必须报告全任务平均。 \\
+MTEB &
+覆盖分类、聚类、检索、重排等多项任务的嵌入评测集合 &
+练嵌入模型选型与多任务评估。坑点：不同子任务的指标不可相加，
+选型时应按业务对应的子集排序。 \\
+Kaggle 赛题（如 Otto、H\&M、Instacart、Home Depot 等） &
+以排行榜驱动的真实业务数据，规模中等 &
+练特征工程、验证策略与集成方法。坑点：公开榜单容易过拟合，
+\textbf{务必用自己划出的验证集判断，而不是排行榜分数}；
+优胜方案里的信息泄露特征不能照搬到生产。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[数据集使用的四个高频错误]
+\begin{enumerate}
+  \item \textbf{随机切分代替时间切分}：推荐与广告都是时序问题，随机切分会把未来信息泄露到训练集，
+        离线指标虚高而线上无效。
+  \item \textbf{忽略曝光日志}：只用点击日志做训练，会把「没被展示」误当成「不喜欢」，
+        这是典型的 MNAR 问题，需要负采样与消偏处理。
+  \item \textbf{跨版本比较}：数据集更新后物品 ID 与字段语义变化，旧实验结论不再可比，
+        记录版本与下载日期是最低成本的纪律。
+  \item \textbf{把排行榜当目标}：竞赛目标是固定测试集上的分数，业务目标是长期留存与利润，
+        二者的最优解常常不在同一个方向上。
+\end{enumerate}
+\end{pitfall}
+
+\section{信息源与社区}
+
+信息源的价值取决于\textbf{信噪比}与\textbf{可检索性}。下面按类别给出方向性建议，不列出具体链接，
+因为站点结构与域名会变化，而以类别为单位建立自己的订阅与检索习惯更稳定。
+
+\subsection{论文与代码}
+
+\begin{itemize}
+  \item \textbf{arXiv}：按 \code{cs.IR}（信息检索）、\code{cs.LG}（机器学习）、\code{cs.CL}（计算语言学）
+        三个分类订阅。做法上的建议：不要逐篇读，用「标题 + 摘要」两秒筛一遍，
+        只把命中当前问题的放进候选池，每周不超过两篇。
+  \item \textbf{Papers with Code}：价值在于把论文与可运行实现对应起来，判断一篇论文是否值得深读时，
+        「有没有被广泛复现」是极强的信号。注意实现质量参差不齐，需要看复现结果的方差。
+  \item \textbf{开源仓库与模型卡}：对于工业落地，官方仓库的 issue 区常常比论文正文更有信息量——
+        别人踩过的坑就在那里，而且通常包含论文刻意省略的工程细节。
+\end{itemize}
+
+\subsection{会议与期刊：按方向对号入座}
+
+\begin{table}[htbp]
+\centering
+\caption{主要会议与期刊的方向定位}
+\label{tab:venues}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{3.0cm} Y}
+\toprule
+\tabhead{名称} & \tabhead{主要方向} & \tabhead{跟踪建议} \\
+\midrule
+SIGIR & 信息检索、检索模型、评测方法 &
+检索方向的第一会议，适合跟踪稠密检索与评测体系的变化。 \\
+\midrule
+KDD & 数据挖掘、工业系统、广告与推荐 &
+工业界论文比例高，适合看真实规模下的系统设计。 \\
+\midrule
+RecSys & 推荐系统专会 &
+篇幅短、主题集中，适合快速扫描推荐领域的新方向。 \\
+\midrule
+WWW & 网络挖掘、推荐与图学习 &
+跨学科程度高，图与推荐交叉的工作常在此出现。 \\
+\midrule
+NeurIPS / ICML / ICLR & 机器学习基础、优化、生成模型 &
+方法论的源头，读它们的论文要有选择：只挑与自己问题直接相关的。 \\
+\midrule
+ACL / EMNLP / NAACL & 自然语言处理与大模型 &
+NLP 应用与预训练进展的主要发布地。 \\
+\midrule
+CIKM / WSDM / TKDE / TOIS & 应用与期刊为主的补充 &
+适合查漏补缺与寻找综述类文章。 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{公开课与教材}
+
+\begin{itemize}
+  \item \textbf{检索方向}：以 \cite{manning2008ir} 与 \cite{croft2010search} 为主干，
+        配合公开课视频建立直觉，再用 \cite{robertson2009bm25} 补齐概率检索的推导。
+  \item \textbf{推荐方向}：以 \cite{ricci2015recsys} 作为手册随时查阅，
+        用 \cite{adomavicius2005survey} 建立分类框架，再进入具体模型的论文。
+  \item \textbf{实验方法论}：以 \cite{kohavi2020trustworthy} 为主线，
+        配合 \cite{ioannidis2005why} 建立对统计结论的怀疑习惯。
+  \item \textbf{因果推断}：以 \cite{pearl2009causality} 建立框架，
+        实操层面参考离线策略评估相关论文（\cite{dudik2011ee,swaminathan2015counterfactual}）。
+\end{itemize}
+
+\subsection{中文技术内容：按类别而非按账号筛选}
+
+中文技术内容的优势是工程细节与业务语境，劣势是时效衰减快、结论常缺少口径说明。建议按类别建立订阅：
+
+\begin{itemize}
+  \item \textbf{工程实践类}：以「系统架构 + 踩坑记录 + 性能数据」为主的内容最有价值。
+        读到任何性能数字，先问三个问题：数据规模多大、硬件是什么、基线是谁。
+  \item \textbf{业务复盘类}：关注指标定义与实验设计，而不是结论本身。
+        看到「提升了三成」时，先确认分母是什么。
+  \item \textbf{论文解读类}：适合作为第一遍阅读的辅助，\textbf{不要用它替代原文推导}。
+        解读文章丢掉的往往是假设条件，而假设条件恰恰决定方法能不能用。
+  \item \textbf{工具文档类}：平台规则与接口文档必须回到官方源确认，
+        二手总结的时效性风险最高，涉及合规与费率时尤其如此。
+\end{itemize}
+
+\begin{insight}[信息源的正确用法是「反向检索」]
+大多数人把信息源当成推送流：刷到什么读什么。更有效的方式是\textbf{反向检索}——
+先从自己的问题出发，明确需要的是一篇论文、一个开源实现，还是一份官方文档，
+再定向去对应的源里找。推送流适合发现新方向，反向检索适合解决具体问题；
+而绝大部分工作日里的真实需求属于后者。
+\end{insight}
+
+\section{本仓库的使用建议}
+
+这本书的价值不在于读完，而在于\textbf{变成你自己的知识库}。下面给一套可执行的做法。
+
+\subsection{把书当索引，不当地毯}
+
+不要从第一章顺读到最后一章。推荐的使用方式是\textbf{问题驱动}：
+
+\begin{enumerate}
+  \item 遇到一个真实问题（召回掉了、CTR 降了、库存积压了）。
+  \item 用 \cref{ch:recall,ch:ranking,ch:search,ch:ad} 定位到对应章节，只读相关小节。
+  \item 顺着该章的公式与代码去动手验证，再回到本附录查该主题的必读论文。
+  \item 补完论文后，把结论以批注形式写回自己的笔记，而不是留在书里。
+\end{enumerate}
+
+\subsection{周计划：输入与输出配对}
+
+\textbf{输出倒逼输入}的机制很简单：当你知道周五要交一份东西，周三读论文的效率会显著不同。
+建议把每周拆成一次输入与一次输出，并保证输出一定对外可见。
+
+\begin{table}[htbp]
+\centering
+\caption{周计划模板：每一个输入动作都配一个输出物}
+\label{tab:weekly-plan}
+\small
+\begin{tabularx}{\textwidth}{L{2.5cm} L{3.0cm} Y}
+\toprule
+\tabhead{时间段} & \tabhead{动作} & \tabhead{输出物与验收} \\
+\midrule
+周一 30 分钟 & 选一个本周要回答的问题，写下来 &
+一句可判定真假的问题陈述，写在共享文档第一行 \\
+\midrule
+周二至周三 3 小时 & 定向阅读：1 篇论文第二遍 + 相关章节 &
+三栏笔记一页：问题与假设、方法骨架、验证与怀疑 \\
+\midrule
+周四 2 小时 & 动手验证：复现一段指标口径或一个小实验 &
+一段可运行代码或一张对照表格 \\
+\midrule
+周五 1 小时 & 输出：写成对外可见的短文或分享 &
+一篇不少于 800 字的说明，含结论、证据与不确定性 \\
+\midrule
+每季度 4 小时 & 复盘与清理笔记 &
+删掉过时条目，更新方法演进图，列出下一季度要回答的三个问题 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[让这本书变成知识库的五个动作]
+\begin{enumerate}
+  \item \textbf{目录改造成问题清单}：把每章标题旁边写上「它能回答我的哪个问题」，没有对应问题的章节先跳过。
+  \item \textbf{维护一份自己的公式速查}：不要复制 \cref{app:formulas}，而是抄写你真正用过的那十几个公式，
+        并在旁边写下你踩过的坑；写过一遍的公式才是你的。
+  \item \textbf{给每篇读过的论文标注落地状态}：已复现 / 已用于线上 / 仅了解，三种状态管理不同优先级。
+  \item \textbf{建立「失败案例库」}：记录自己试过但没生效的方法与原因。
+        这个库的长期价值高于成功案例，因为失败的原因通常更稳定。
+  \item \textbf{每季度做一次删减}：清单、笔记、书签都要清理。知识库的质量由\textbf{检索速度}决定，不由容量决定。
+\end{enumerate}
+\end{toolbox}
+
+\begin{keypoint}[本附录要点回顾]
+\begin{enumerate}
+  \item 三遍阅读法的核心是\textbf{每遍都有退出条件}：第一遍答不出五个问题就止损，
+        第二遍读不懂的点超过三处就先补前置，第三遍必须产出推导笔记或复现记录。
+  \item 一篇论文值不值得深读，看四个维度：相关性、基础性、可复现性、时效性；
+        根节点论文即使相关性中等也值得深读。
+  \item 论文清单要按\textbf{方法演进链}组织，而不是按年份罗列——
+        理解「为什么上一代不够用」比记住结构图更重要。
+  \item 学习路径分三阶段：入门读薄经典并拉通口径，进阶动手复现并建评测流水线，
+        前沿围绕真实问题做一次可复现改进。每阶段的产出物就是下一阶段的输入。
+  \item 数据集选择的第一原则是\textbf{能复现论文结论}，第二原则是提前知道坑在哪；
+        时间切分、曝光日志与版本一致性是最容易出错的三处。
+  \item 信息源要用反向检索而非推送流；中文内容按类别筛选，涉及规则与费率必须回到官方文档。
+  \item 最终目标是把这本书变成\textbf{带否定意见和失败案例的个人知识库}，
+        用每周固定输出驱动输入——没有输出的阅读，留存率接近于零。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本附录对应的面试题]
+\begin{enumerate}
+  \item 请用三句话复述一篇你最近精读的推荐论文：它解决什么问题、用什么方法、在什么数据上赢了谁。
+  \item 如果论文报告离线提升 2\% 而线上没有提升，你会按什么顺序排查原因？
+  \item FM 与 FFM 的参数量差异是什么？在类别基数增长十倍时各自的内存代价如何变化？
+  \item 为什么 DIN 要用候选物品来给历史行为加权，而不用固定权重？
+  \item 稠密检索在什么条件下仍然打不过 BM25？请给出至少两个具体场景。
+  \item LambdaMART 中的 Lambda 梯度解决的是什么问题？它和 \metric{NDCG} 的关系是什么？
+  \item 你在做一个 A/B 实验时，哪些指标必须设为护栏指标？为什么？
+  \item 如果让你用八周时间从零搭一个推荐系统的最小闭环，你会如何安排周计划与验收标准？
+\end{enumerate}
+\end{interview}
+
+本附录给出的是入口与排序，不是终点。真正的分水岭发生在你把其中任何一篇论文的结论
+在自己的数据上复现、推翻或者修正的那一刻——那也是本书其余章节希望帮你抵达的位置。

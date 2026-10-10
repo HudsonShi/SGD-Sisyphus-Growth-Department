@@ -1,0 +1,416 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% notesstyle.sty —— 《增长技术笔记》统一排版样式
+%% 编译方式：xelatex -> biber -> xelatex -> xelatex
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{notesstyle}[2025/01/01 v1.0 Growth-Tech Notes Style]
+
+%==============================================================================
+% 1. 页面与版式
+%==============================================================================
+\RequirePackage{geometry}
+\geometry{
+  paper      = a4paper,
+  top        = 2.6cm,
+  bottom     = 2.6cm,
+  left       = 2.6cm,
+  right      = 2.4cm,
+  headheight = 15pt,
+  headsep    = 8mm,
+  footskip   = 12mm
+}
+
+\RequirePackage{xcolor}
+\definecolor{NavyDeep}{HTML}{12355B}
+\definecolor{NavyMid}{HTML}{1F5C99}
+\definecolor{TealDeep}{HTML}{0B6E4F}
+\definecolor{AmberDeep}{HTML}{A15C00}
+\definecolor{CrimsonDeep}{HTML}{9B1B30}
+\definecolor{VioletDeep}{HTML}{5B2A86}
+\definecolor{SlateGray}{HTML}{4A5568}
+\definecolor{BoxBG}{HTML}{F7F9FC}
+\definecolor{BoxBGAlt}{HTML}{F3F7F4}
+\definecolor{CodeBG}{HTML}{F5F5F2}
+\definecolor{RuleGray}{HTML}{D9DEE7}
+
+\RequirePackage{amsmath,amssymb,amsthm,mathtools,bm}
+\RequirePackage{mathrsfs}
+\RequirePackage{booktabs,longtable,tabularx,xltabular,array,multirow,makecell}
+\RequirePackage{enumitem}
+\RequirePackage{graphicx}
+\RequirePackage{adjustbox}
+\RequirePackage{rotating}
+\RequirePackage{pdflscape}
+\RequirePackage{caption}
+\RequirePackage{subcaption}
+\RequirePackage{siunitx}
+\RequirePackage{etoolbox}
+\RequirePackage{xpatch}
+\RequirePackage{morefloats}
+\extrafloats{1000}
+\RequirePackage{fancyhdr}
+\RequirePackage{tikz}
+\RequirePackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,shadows.blur,fit,
+  backgrounds,calc,decorations.pathreplacing,matrix,chains,patterns}
+\RequirePackage{forest}
+\RequirePackage{tcolorbox}
+\tcbuselibrary{skins,breakable,raster}
+
+%==============================================================================
+% 2. 中文标题样式（使用 ctexset，避免 titlesec 与 ctexbook 冲突）
+%==============================================================================
+\ctexset{
+  chapter = {
+    name   = {第,章},
+    number = \arabic{chapter},
+    format = \normalfont\sffamily\bfseries\Large\color{NavyDeep},
+    nameformat = {},
+    titleformat = {},
+    aftername = \hspace{0.4em},
+    beforeskip = 8pt,
+    afterskip  = 18pt,
+    pagestyle  = fancy
+  },
+  section = {
+    format = \normalfont\sffamily\bfseries\large\color{NavyMid},
+    aftername = \hspace{0.35em}
+  },
+  subsection = {
+    format = \normalfont\sffamily\bfseries\normalsize\color{SlateGray},
+    aftername = \hspace{0.3em}
+  },
+  subsubsection = {
+    format = \normalfont\sffamily\bfseries\small\color{SlateGray}
+  },
+  part = {
+    format = \centering\normalfont\sffamily\bfseries\Huge\color{NavyDeep},
+    name   = {第,部分},
+    number = \arabic{part}
+  }
+}
+
+%==============================================================================
+% 3. 页眉页脚
+%==============================================================================
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancyhead[L]{\small\sffamily\color{SlateGray}\leftmark}
+\fancyhead[R]{\small\sffamily\color{SlateGray}\thepage}
+\fancyfoot[C]{\scriptsize\sffamily\color{SlateGray}增长技术笔记 · 推荐 / 搜索 / 广告 / NLP / SEO / GEO / 投流 / 跨境电商}
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \renewcommand{\headrulewidth}{0pt}%
+  \fancyfoot[C]{\small\sffamily\color{SlateGray}\thepage}%
+}
+
+%==============================================================================
+% 4. 常用宏
+%==============================================================================
+% 术语：中文（English）
+\newcommand{\term}[2]{\textbf{#1}（\textit{#2}）}
+% 内联代码
+\newcommand{\code}[1]{\texttt{\small #1}}
+% 关键词强调
+\newcommand{\kw}[1]{\textbf{\color{NavyMid}#1}}
+% 英文原词
+\newcommand{\en}[1]{\textit{#1}}
+% 指标名（小型大写风格）
+\newcommand{\metric}[1]{\textsf{#1}}
+% 待办/扩展标记
+\newcommand{\todo}[1]{\textcolor{CrimsonDeep}{\textbf{[TODO: #1]}}}
+% 公式中常用算子
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\softmax}{softmax}
+\DeclareMathOperator{\sigmoid}{\sigma}
+\DeclareMathOperator{\relu}{ReLU}
+\DeclareMathOperator{\concat}{Concat}
+\DeclareMathOperator{\MLP}{MLP}
+\DeclareMathOperator{\Attention}{Attention}
+\DeclareMathOperator{\AUC}{AUC}
+\DeclareMathOperator{\GAUC}{GAUC}
+\DeclareMathOperator{\NDCG}{NDCG}
+\DeclareMathOperator{\HR}{HR}
+\DeclareMathOperator{\Recall}{Recall}
+\DeclareMathOperator{\Precision}{Precision}
+\DeclareMathOperator{\Fone}{F_1}
+\DeclareMathOperator{\MAP}{MAP}
+\DeclareMathOperator{\MRR}{MRR}
+\DeclareMathOperator{\KL}{KL}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\Cov}{Cov}
+\DeclareMathOperator{\E}{\mathbb{E}}
+\DeclareMathOperator{\Prob}{\mathbb{P}}
+\DeclareMathOperator{\CTR}{CTR}
+\DeclareMathOperator{\CVR}{CVR}
+\DeclareMathOperator{\CPC}{CPC}
+\DeclareMathOperator{\CPM}{CPM}
+\DeclareMathOperator{\ROAS}{ROAS}
+\DeclareMathOperator{\ROI}{ROI}
+\DeclareMathOperator{\LTV}{LTV}
+\DeclareMathOperator{\CAC}{CAC}
+\DeclareMathOperator{\GMV}{GMV}
+\DeclareMathOperator{\AOV}{AOV}
+\DeclareMathOperator{\ECE}{ECE}
+\DeclareMathOperator{\CPA}{CPA}
+\DeclareMathOperator{\CPT}{CPT}
+\DeclareMathOperator{\CPI}{CPI}
+\DeclareMathOperator{\eCPM}{eCPM}
+\DeclareMathOperator{\oCPC}{oCPC}
+\DeclareMathOperator{\oCPM}{oCPM}
+\DeclareMathOperator{\oCPA}{oCPA}
+\DeclareMathOperator{\iROAS}{iROAS}
+\DeclareMathOperator{\pCTR}{pCTR}
+\DeclareMathOperator{\pCVR}{pCVR}
+\DeclareMathOperator{\ARPU}{ARPU}
+\DeclareMathOperator{\DAU}{DAU}
+\DeclareMathOperator{\MAU}{MAU}
+\DeclareMathOperator{\UV}{UV}
+\DeclareMathOperator{\PV}{PV}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\inner}[2]{\left\langle #1, #2 \right\rangle}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\T}{^{\mathsf{T}}}
+\newcommand{\given}{\,\vert\,}
+
+\numberwithin{equation}{chapter}
+\numberwithin{figure}{chapter}
+\numberwithin{table}{chapter}
+
+%==============================================================================
+% 5. 定理类环境
+%==============================================================================
+\theoremstyle{definition}
+\newtheorem{definition}{定义}[chapter]
+\newtheorem{example}{示例}[chapter]
+\newtheorem{remark}{评注}[chapter]
+\theoremstyle{plain}
+\newtheorem{theorem}{定理}[chapter]
+\newtheorem{lemma}{引理}[chapter]
+\newtheorem{proposition}{命题}[chapter]
+\newtheorem{corollary}{推论}[chapter]
+
+%==============================================================================
+% 6. 提示框：核心要点 / 案例 / 陷阱 / 洞察 / 工具 / 思考题 / 公式卡
+%==============================================================================
+\tcbset{
+  boxrule  = 0.6pt,
+  arc      = 2pt,
+  left     = 6pt, right = 6pt, top = 5pt, bottom = 5pt,
+  fonttitle= \sffamily\bfseries\small,
+  before skip = 9pt, after skip = 9pt,
+  breakable,
+  enhanced
+}
+
+\newtcolorbox{keypoint}[1][核心要点]{
+  colback=BoxBG, colframe=NavyMid, coltitle=white,
+  title={#1},
+  attach boxed title to top left={xshift=6pt,yshift=-\tcboxedtitleheight/2},
+  boxed title style={colback=NavyMid, arc=1pt, boxrule=0pt}
+}
+
+\newtcolorbox{insight}[1][洞察]{
+  colback=BoxBGAlt, colframe=TealDeep, coltitle=white,
+  title={#1},
+  attach boxed title to top left={xshift=6pt,yshift=-\tcboxedtitleheight/2},
+  boxed title style={colback=TealDeep, arc=1pt, boxrule=0pt}
+}
+
+\newtcolorbox{casebox}[1][案例]{
+  colback=white, colframe=TealDeep, coltitle=white,
+  title={#1},
+  attach boxed title to top left={xshift=6pt,yshift=-\tcboxedtitleheight/2},
+  boxed title style={colback=TealDeep, arc=1pt, boxrule=0pt}
+}
+
+\newtcolorbox{pitfall}[1][常见陷阱]{
+  colback=white, colframe=CrimsonDeep, coltitle=white,
+  title={#1},
+  attach boxed title to top left={xshift=6pt,yshift=-\tcboxedtitleheight/2},
+  boxed title style={colback=CrimsonDeep, arc=1pt, boxrule=0pt}
+}
+
+\newtcolorbox{toolbox}[1][工具与实操]{
+  colback=white, colframe=AmberDeep, coltitle=white,
+  title={#1},
+  attach boxed title to top left={xshift=6pt,yshift=-\tcboxedtitleheight/2},
+  boxed title style={colback=AmberDeep, arc=1pt, boxrule=0pt}
+}
+
+\newtcolorbox{interview}[1][面试追问]{
+  colback=white, colframe=VioletDeep, coltitle=white,
+  title={#1},
+  attach boxed title to top left={xshift=6pt,yshift=-\tcboxedtitleheight/2},
+  boxed title style={colback=VioletDeep, arc=1pt, boxrule=0pt}
+}
+
+\newtcolorbox{formulacard}[1][公式速记]{
+  colback=BoxBG, colframe=SlateGray, coltitle=white,
+  title={#1},
+  attach boxed title to top left={xshift=6pt,yshift=-\tcboxedtitleheight/2},
+  boxed title style={colback=SlateGray, arc=1pt, boxrule=0pt}
+}
+
+%==============================================================================
+% 7. 代码排版（代码块请只用 ASCII 字符，中文请放在正文说明中）
+%==============================================================================
+\RequirePackage{listings}
+\lstdefinestyle{growth}{
+  basicstyle       = \ttfamily\scriptsize,
+  keywordstyle     = \color{NavyMid}\bfseries,
+  commentstyle     = \color{TealDeep}\itshape,
+  stringstyle      = \color{CrimsonDeep},
+  numberstyle      = \tiny\color{SlateGray},
+  numbers          = left,
+  numbersep        = 6pt,
+  backgroundcolor  = \color{CodeBG},
+  frame            = single,
+  rulecolor        = \color{RuleGray},
+  framexleftmargin = 14pt,
+  showstringspaces = false,
+  breaklines       = true,
+  breakatwhitespace= false,
+  columns          = fullflexible,
+  keepspaces       = true,
+  tabsize          = 4,
+  captionpos       = b,
+  upquote          = true
+}
+\lstdefinestyle{growthnoline}{
+  style = growth, numbers = none, framexleftmargin = 6pt
+}
+\lstset{style=growth}
+
+\lstdefinelanguage{SQLx}{
+  morekeywords={SELECT,FROM,WHERE,GROUP,BY,ORDER,LIMIT,JOIN,LEFT,RIGHT,INNER,
+    OUTER,ON,AS,AND,OR,NOT,IN,COUNT,SUM,AVG,MAX,MIN,CASE,WHEN,THEN,ELSE,END,
+    WITH,UNION,ALL,DISTINCT,INSERT,INTO,VALUES,UPDATE,SET,DELETE,PARTITION,
+    OVER,ROW_NUMBER,RANK,DENSE_RANK,WINDOW,HAVING,CREATE,TABLE,ALTER,INDEX,
+    EXPLAIN,ANALYZE},
+  sensitive=false,
+  morecomment=[l]{--},
+  morestring=[b]'
+}
+\lstdefinelanguage{PyTorch}[]{Python}{
+  morekeywords={torch,nn,optim,Tensor,Module,Parameter,DataLoader,Dataset,
+    F,functional,device,cuda,backward,zero_grad,step,forward,embedding,
+    linear,softmax,cross_entropy,adam,sgd,lr,epoch,batch_size}
+}
+\lstdefinelanguage{json}{
+  string=[s]{"}{"},
+  stringstyle=\color{CrimsonDeep},
+  morestring=[b]',
+  comment=[l]{//},
+  literate=
+    *{0}{{{\color{NavyMid}0}}}{1}
+     {1}{{{\color{NavyMid}1}}}{1}
+     {2}{{{\color{NavyMid}2}}}{1}
+     {3}{{{\color{NavyMid}3}}}{1}
+     {4}{{{\color{NavyMid}4}}}{1}
+     {5}{{{\color{NavyMid}5}}}{1}
+     {6}{{{\color{NavyMid}6}}}{1}
+     {7}{{{\color{NavyMid}7}}}{1}
+     {8}{{{\color{NavyMid}8}}}{1}
+     {9}{{{\color{NavyMid}9}}}{1}
+     {:}{{{\color{SlateGray}{:}}}}{1}
+     {,}{{{\color{SlateGray}{,}}}}{1}
+     {\{}{{{\color{NavyDeep}{\{}}}}{1}
+     {\}}{{{\color{NavyDeep}{\}}}}}{1}
+     {[}{{{\color{NavyDeep}{[}}}}{1}
+     {]}{{{\color{NavyDeep}{]}}}}{1}
+}
+\lstdefinelanguage{yaml}{
+  keywords={true,false,null,y,n},
+  keywordstyle=\color{NavyMid}\bfseries,
+  basicstyle=\ttfamily\scriptsize,
+  sensitive=true,
+  comment=[l]{\#},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]',
+  morestring=[b]"
+}
+
+\newcommand{\codefile}[2]{%
+  \lstinputlisting[style=growth,caption={#1}]{#2}%
+}
+
+%==============================================================================
+% 8. 表格辅助
+%==============================================================================
+\renewcommand{\arraystretch}{1.25}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcolumntype{R}[1]{>{\raggedleft\arraybackslash}p{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\tabhead}[1]{\textbf{\color{NavyDeep}#1}}
+
+%==============================================================================
+% 9. 列表样式
+%==============================================================================
+\setlist[itemize,1]{label=\textcolor{NavyMid}{\textbullet}, leftmargin=1.6em, itemsep=2pt, topsep=3pt}
+\setlist[itemize,2]{label=\textcolor{TealDeep}{\textendash}, leftmargin=1.4em, itemsep=1pt, topsep=2pt}
+\setlist[enumerate,1]{label=\textcolor{NavyMid}{\arabic*.}, leftmargin=1.8em, itemsep=2pt, topsep=3pt}
+\setlist[enumerate,2]{label=\textcolor{TealDeep}{(\alph*)}, leftmargin=1.6em, itemsep=1pt}
+
+%==============================================================================
+% 10. 参考文献（natbib + gbt7714 + bibtex，兼容 GB/T 7714-2015 国标格式）
+%     注意：本机 TeX Live 的 biber 二进制不可用，故采用 bibtex 后端。
+%     若要改用 biblatex/biber，请把本节替换为 biblatex 配置并调整 Makefile。
+%==============================================================================
+\RequirePackage[numbers,sort&compress]{gbt7714}
+
+%==============================================================================
+% 11. 超链接与引用
+%==============================================================================
+\RequirePackage{hyperref}
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = NavyDeep,
+  citecolor  = TealDeep,
+  urlcolor   = VioletDeep,
+  filecolor  = VioletDeep,
+  bookmarksnumbered = true,
+  bookmarksopen = true,
+  pdftitle   = {增长技术笔记},
+  pdfauthor  = {SGD Notes},
+  pdfsubject = {推荐算法 · 搜索引擎 · 计算广告 · NLP · SEO · GEO · 广告投流 · 跨境电商供应链}
+}
+\RequirePackage{cleveref}
+\crefname{chapter}{第}{第}
+\crefname{section}{节}{节}
+\crefname{equation}{式}{式}
+\crefname{figure}{图}{图}
+\crefname{table}{表}{表}
+\crefname{theorem}{定理}{定理}
+\crefname{definition}{定义}{定义}
+
+%==============================================================================
+% 12. 杂项
+%==============================================================================
+\captionsetup{
+  font      = small,
+  labelfont = {sf,bf},
+  labelsep  = quad,
+  justification = centering
+}
+\setcounter{tocdepth}{1}
+\setcounter{secnumdepth}{3}
+
+% 让 \paragraph 更紧凑好用
+\makeatletter
+\renewcommand\paragraph{\@startsection{paragraph}{4}{\z@}%
+  {1.2ex \@plus .3ex \@minus .2ex}{0.6ex}%
+  {\normalfont\normalsize\sffamily\bfseries\color{SlateGray}}}
+\makeatother
+
+% 术语表命令：\gloss{中文}{English}{说明}——用于附录术语表
+\newcommand{\gloss}[3]{#1 & #2 & #3 \\}
+\endinput
