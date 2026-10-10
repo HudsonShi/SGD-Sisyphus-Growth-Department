@@ -1,4 +1,2066 @@
 \chapter{增长闭环：指标、归因与实验}
 \label{ch:growth}
 
-\todo{本章正在撰写中。}
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 为什么增长的复利来自「数据 $\to$ 假设 $\to$ 实验 $\to$ 沉淀」这个循环的\kw{转速}，
+        而不是任何一次爆发式的成功？闭环的四个环节分别会在哪里断掉？
+  \item AARRR 与 RARRA 的差别究竟落在哪一步？HEART 框架适合什么团队、不适合什么团队？
+        北极星指标应该如何拆成一棵可以责任到人的树？指标字典里必须写清哪几列？
+  \item 埋点该怎么设计才经得起三年后的分析需求？客户端埋点与服务端埋点各自会丢掉什么？
+        GA4 的事件-参数模型与 UTM 规范里，哪些写法会导致数据在源头就被切碎？
+  \item 平台后台、GA4、实际订单这三个数几乎永远不一致，各自的口径差在哪里？
+        三方差值对账表应该长什么样？MMM 与 MTA 各自回答什么问题？
+        「归因是分配不是真相」到底意味着什么决策纪律？
+  \item 一次 A/B 实验要多少样本才能测出 5\% 的提升？偷看数据、多重比较、分流污染、SRM
+        分别会把假阳性率抬高到什么程度？CUPED 能把有效样本放大几倍？
+        不能做 A/B 时，地理对照、双重差分、合成控制、断点回归各自需要什么识别假设？
+  \item LTV 该用收入口径还是毛利口径？混合 CAC 与付费 CAC 什么时候会给出相反的投放结论？
+        为什么回本周期往往比 $\LTV$/$\CAC$ 更适合做月度决策指标？
+  \item 实验档案、失败库与增长团队的协作节奏，如何把「一个人的经验」变成「组织的能力」？
+        自动化规则与预测模型（LTV 预测、流失预警、RFM 升级版）在什么条件下会失控？
+\end{enumerate}
+\end{insight}
+
+前面二十章讲的是\kw{单点技术}：怎么召回、怎么排序、怎么出价、怎么写落地页、怎么选品与备货。
+单点技术决定了「一件事的上限」，但一家公司的增长曲线并不由最强的那个单点决定，
+而是由\kw{把单点变成可重复结论的速度}决定。一个团队可以做出业界最好的召回模型，
+却因为指标口径每月一变、归因全靠平台后台、实验跑完从不归档，
+导致三年的努力没有沉淀成任何可复用的东西——这是行业里非常普遍的结局。
+
+本章讲的就是这一层的技术：\kw{指标体系、数据采集、归因与对账、增量实验、单位经济模型，
+以及把这一切组织成日常运转的机制}。
+它看起来不像模型那样「硬」，但它的难度并不低：模型的错误是局部的、可回滚的，
+而指标与归因的错误是全局的、会持续污染所有决策的。
+一个错误的归因口径可以让一家公司在正确的方向上连续亏损两年，
+一个错误的指标定义可以让上百个正确的实验得出错误的结论。
+
+本章与前后章节的关系是这样的：\cref{ch:overview} 给出了全书统一的优化形式与漏斗乘法链，
+\cref{ch:receng} 从系统侧讲了实验平台的分流、CUPED 与 SRM，
+\cref{ch:admodel} 讲了 oCPC 与出价的目标函数，\cref{ch:google} 与 \cref{ch:meta} 讲了两大投放平台的具体规则，
+\cref{ch:cbec} 讲了跨境业务的交付成本。
+本章把这些线索收到同一个闭环里：\kw{从指标定义开始，到增量结论沉淀结束}。
+
+\section{增长闭环：为什么转速比爆发更重要}
+
+\subsection{从「做功能」到「做循环」}
+
+\term{增长}{Growth} 在工程语境下的定义不是「用户变多」，而是一个可重复、可归因、可复利的过程：
+你能稳定地提出假设、用实验证伪、把结论写进系统与文档，然后进入下一轮。
+\cite{ries2011lean} 提出的「构建--度量--学习」循环与
+\cite{ellis2021growth} 总结的增长黑客方法论，讲的都是同一件事：
+\kw{把增长从艺术变成流水线}。
+
+这条流水线有四个环节，缺任何一个都不构成闭环：
+
+\begin{enumerate}
+  \item \textbf{数据}（Data）：埋点、数仓、对账，回答「现在发生了什么」。
+  \item \textbf{假设}（Hypothesis）：从指标缺口出发，提出一个可以被证伪的命题，
+        而不是「我们觉得应该做个新功能」。
+  \item \textbf{实验}（Experiment）：用 A/B 或准实验测量因果增量，回答「这个改动到底带来了什么」。
+  \item \textbf{沉淀}（Knowledge）：把结论写进实验档案、失败库、自动化规则与产品默认配置，
+        让下一轮不必重复验证同一件事。
+\end{enumerate}
+
+如果只做前三步，团队会陷入「每次都在证明同一件事」的循环；
+如果跳过假设直接做实验，团队会陷入「实验很多、结论没有」的循环；
+如果跳过实验直接上线，团队会陷入「老板拍板、事后归因」的循环。
+这三类失败在实务中出现的频率远高于模型失败。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  st/.style={draw=NavyMid, fill=BoxBG, rounded corners=3pt, minimum height=11mm,
+             text width=2.45cm, inner sep=4pt},
+  gov/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=3pt, minimum height=10mm,
+              inner sep=4pt},
+  inf/.style={draw=AmberDeep, fill=white, rounded corners=3pt, minimum height=10mm,
+              inner sep=4pt},
+  lb/.style={font=\sffamily\tiny, text=CrimsonDeep}
+]
+\node[st] (data) {数据\\埋点 / 数仓 / 对账};
+\node[st, right=8mm of data] (hyp) {假设\\指标缺口 $\to$ 可证伪命题};
+\node[st, right=8mm of hyp] (exp) {实验\\A/B + 准实验 + 增量};
+\node[st, right=8mm of exp] (know) {沉淀\\档案 / 失败库 / 规则};
+\draw[-{Stealth}, thick, SlateGray] (data) -- (hyp);
+\draw[-{Stealth}, thick, SlateGray] (hyp) -- (exp);
+\draw[-{Stealth}, thick, SlateGray] (exp) -- (know);
+\draw[-{Stealth}, thick, CrimsonDeep, dashed]
+  (know.north) -- ++(0,0.6) |- (data.north);
+\node[lb] at ($(data.north)!0.5!(know.north) + (0,1.35)$)
+  {闭环周期 $T$：从提出问题到结论可复用};
+\node[gov, below=13mm of hyp, minimum width=14.0cm, text width=13.6cm] (metrics)
+  {指标体系：北极星 + 过程 + 护栏 \quad|\quad 指标字典：口径 / 负责人 / 更新频率 \quad|\quad 治理：口径漂移 / 重复计数 / Goodhart};
+\node[inf, below=5mm of metrics, minimum width=14.0cm, text width=13.6cm] (infra)
+  {基础设施：埋点 SDK 与事件契约 \quad|\quad 分流与实验平台 \quad|\quad 数仓与反向 ETL \quad|\quad 归因与对账管道};
+\draw[-{Stealth}, TealDeep, dashed] (metrics.west) -- ++(-0.4,0) |- (data.south);
+\draw[-{Stealth}, AmberDeep, dashed] (infra.east) -- ++(0.4,0) |- (know.south);
+\end{tikzpicture}
+\caption{增长闭环飞轮：四个环节的转速决定复利，指标与基础设施决定转速的上限}
+\label{fig:growth-flywheel}
+\end{figure}
+
+\subsection{复利的算术：转速就是一切}
+
+把闭环写成最简单的一阶模型：每一轮把北极星指标（例如 $\GMV$ 或毛利）相对提升 $r$，
+闭环周期为 $T$，考察时长 $t$，则轮数为 $n = t/T$，
+
+\begin{equation}
+V_n = V_0\,(1+r)^{n} = V_0\,(1+r)^{t/T},
+\qquad
+\text{期间累计增益} = (1+r)^{t/T} - 1 .
+\label{eq:growth-loop}
+\end{equation}
+
+这个式子只有一个结论，但它极其反直觉：\kw{提升 $r$ 的边际价值远小于缩短 $T$ 的边际价值}，
+因为 $T$ 出现在指数的分母上。做一次示范量级的计算：
+
+\begin{itemize}
+  \item 方案 A：每轮提升 $r = 2\%$，周期 $T = 2$ 周，一年 26 轮，$(1.02)^{26} \approx 1.67$，
+        即全年提升约 67\%。
+  \item 方案 B：每轮提升 $r = 4\%$，周期 $T = 8$ 周，一年 6.5 轮，$(1.04)^{6.5} \approx 1.29$，
+        即全年提升约 29\%。
+\end{itemize}
+
+方案 B 的单轮效果是 A 的两倍，全年结果却只有 A 的一半不到。
+这就是为什么成熟团队愿意花大力气建实验平台、做分层正交分流、写实验模板：
+这些工作的直接产出不是「某个指标涨了」，而是\kw{把 $T$ 从 8 周压到 2 周}。
+一个更完整的产能公式是：
+
+\begin{equation}
+\#\text{有效结论} \;=\; N_{\text{并行}} \times \frac{t}{T} \times h \times (1-\ell),
+\label{eq:growth-throughput}
+\end{equation}
+
+其中 $N_{\text{并行}}$ 是能同时跑的互不干扰的实验数（由分层正交决定，见 \cref{ch:receng}），
+$h$ 是假设命中率（有效实验占比），$\ell$ 是知识复用损失（重复验证同一件事、结论没有写下来、
+文档找不到）。实务中 $h$ 的常见量级是 20\%--40\%，
+也就是说\kw{六成以上的实验会失败，这不是异常而是期望值}。
+$\ell$ 则完全由组织能力决定，可以接近零，也可以超过 50\%。
+
+\begin{insight}[闭环的敌人不是失败率，而是不可复用的失败]
+假设命中率只有 25\%，但每个失败都被完整归档（假设、样本、指标、MDE、结论），
+那么一年 200 个实验会留下 150 条「此路不通」的可靠知识，
+第二年团队的假设命中率会自然上升——因为大量低质量的候选假设已经被前置排除。
+
+反过来，如果失败实验不留档，第二年团队会重新提出同样的假设、重新花掉同样的流量，
+命中率永远停在 25\%，实验平台变成一台昂贵的随机数生成器。
+\kw{失败库不是「记录失败」，而是「把失败转化为排除条件」。}
+\end{insight}
+
+\subsection{三类杠杆与瓶颈识别}
+
+拆解增长杠杆的标准方式是把它归到三类之一：
+
+\begin{itemize}
+  \item \textbf{流量杠杆}：让更多人进来。自然搜索（\cref{ch:seo}、\cref{ch:geo}）、
+        付费投放（\cref{ch:google}、\cref{ch:meta}）、内容与私域、达人合作。
+        特点是\kw{边际成本递增}，规模越大越贵。
+  \item \textbf{转化杠杆}：让进来的人更多地完成关键动作。落地页、详情页、价格呈现、
+        支付流程、客服响应（\cref{ch:cro}）。特点是\kw{边际成本递减}，
+        改动一次可以永久受益。
+  \item \textbf{单位经济杠杆}：让每一单更赚钱。客单价（组货、连带、定价）、复购与留存、
+        退货率、履约成本（\cref{ch:cbec}、\cref{ch:supply}）。特点是\kw{收益最持久、见效最慢}，
+        且与供应链强耦合。
+\end{itemize}
+
+三类杠杆的优先级不能靠感觉，必须靠数据定位瓶颈。
+\cite{goldratt2004goal} 的约束理论给出了一条朴素的纪律：
+\kw{系统的产出由最窄的那一环决定，在非瓶颈环节投入资源只会增加库存与等待}。
+放到增长里就是：如果归因显示当前瓶颈是「有流量但转化不动」，
+那么继续加预算投广告就是把资源投在非瓶颈上——成本上升、指标不动、团队还更累。
+
+识别瓶颈的标准工具是 \cref{eq:growth-gmv-tree} 的乘法链逐项分解，
+但要注意一个陷阱：乘法链里各项的「相对变化」不能直接比较绝对值。
+正确的比较方式是用对数差分（\cref{eq:growth-log-decomp}），
+它把乘法关系变成了加法关系，各项的百分比变化可以直接相加并归因。
+
+\begin{keypoint}[先修度量，再谈增长]
+\textbf{没有可信的指标与归因，任何增长动作都无法被评估，也就无法被复用。}
+因此本节的可执行顺序是：
+(1) 定义北极星与拆解树；
+(2) 建立指标字典与口径文档；
+(3) 打通埋点、对账与归因管道；
+(4) 建实验平台与实验模板；
+(5) 最后才是大规模投放与产品改版。
+跳过前三步直接做第五步的团队，通常会在六个月后推倒重来。
+\end{keypoint}
+
+\section{指标体系：从北极星到指标字典}
+
+\subsection{AARRR 与 RARRA：顺序之争}
+
+\term{AARRR 模型}{AARRR} 把用户旅程拆成五段：获取（Acquisition）、激活（Activation）、
+留存（Retention）、收入（Revenue）、推荐（Referral）。
+它的价值在于\kw{把「增长」拆成了五个可以分别优化的问题}，
+并且天然对应一条漏斗：每一段的转化率相乘就是最终商业结果。
+它的缺点同样明显：把\term{获取}{Acquisition}放在第一位，
+在实践中会诱导团队\kw{先买量、后修产品}，用高成本的流量掩盖产品留存的缺陷。
+
+\term{RARRA 模型}{RARRA} 把顺序改成：留存（Retention）、激活（Activation）、推荐（Referral）、
+收入（Revenue）、获取（Acquisition）。
+它的主张是：\kw{先把留存修好，再放大流量}。
+理由很硬：如果 30 日留存只有 2\%，那么买来的用户会迅速流失，
+任何规模的流量投入都会被留存漏斗吞掉，$\CAC$ 看起来永远收不回来。
+只有留存修到「用户会自己回来」的程度，获客才是一笔投资而不是一笔费用。
+
+两者的差别不是「谁对」，而是\kw{适用阶段不同}。
+判断该用哪一个，看的是「留存是否已经过了门槛」：
+当次日留存与 7 日留存在同品类里处于中位数以下时，
+优先做 RARRA；当留存已经稳定在品类上游、且产品核心价值已被验证时，
+再按 AARRR 的节奏放大获取。具体阈值必须按品类取，不能跨品类套用
+（工具类与电商类的留存曲线差异极大，公开的品类基准也只能作为参考量级）。
+
+\begin{table}[htbp]
+\centering
+\caption{AARRR 与 RARRA 的对比：顺序变化背后的假设差异}
+\label{tab:growth-aarrr-rarra}
+\small
+\begin{tabularx}{\textwidth}{L{1.7cm} L{3.6cm} L{3.6cm} Y}
+\toprule
+\tabhead{环节} & \tabhead{AARRR 下的定位} & \tabhead{RARRA 下的定位} & \tabhead{关键指标与注意事项} \\
+\midrule
+获取 & 起点，优先级最高 & 末位，留存达标后才放大 & $\CAC$、渠道 UV 价值、增量转化；注意自然流量与付费流量的归因混算 \\
+\addlinespace
+激活 & 第二环，定义为「首次体验到核心价值」 & 第二环，定义必须与留存强相关 & 激活率、首单率、首次关键动作耗时；\kw{激活定义错，后面全错} \\
+\addlinespace
+留存 & 第三环 & \kw{起点，优先级最高} & 次日/7 日/30 日留存、留存曲线、周活跃率；按首单渠道与首单品类分群看 \\
+\addlinespace
+收入 & 第四环 & 第四环 & $\GMV$、$\AOV$、$\ARPU$、毛利率、退款率；必须拆收入口径与毛利口径 \\
+\addlinespace
+推荐 & 第五环，常被当成「有则更好」 & 第三环，作为低成本获客来源 & 分享率、邀请转化率；注意刷量与虚假邀请 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{HEART 框架：把体验变成可测量的指标}
+
+\term{HEART 框架}{HEART Framework} 由 Google 的度量研究团队提出，
+用于把「用户体验」这类模糊目标翻译成可测量的指标。五个维度是：
+愉悦度（Happiness）、参与度（Engagement）、接受度（Adoption）、留存度（Retention）、
+任务完成度（Task Success）。它的正确用法不是「五个维度各找一个指标」，
+而是走三步：\kw{目标（Goals）$\to$ 信号（Signals）$\to$ 指标（Metrics）}。
+
+\begin{table}[htbp]
+\centering
+\caption{HEART 框架在电商与内容产品上的落地（示范映射）}
+\label{tab:growth-heart}
+\small
+\begin{tabularx}{\textwidth}{L{1.6cm} L{3.4cm} L{3.4cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{目标（团队语言）} & \tabhead{信号（可观测行为）} & \tabhead{指标示例与坑} \\
+\midrule
+愉悦度 & 用户对产品与服务的态度是正向的 & 评分、净推荐值、投诉、客服工单、负反馈 & 投诉率、净推荐值；样本偏差大，只适合看趋势不适合看绝对值 \\
+\addlinespace
+参与度 & 用户在产品上投入了有意义的注意力 & 会话时长、访问深度、加购、收藏、观看完成率 & 人均会话时长、加购率；\kw{时长本身不是目标}，要配合完成率一起看 \\
+\addlinespace
+接受度 & 新功能或新品类被真实使用 & 新功能渗透率、首次使用、绑定率 & 新功能 7 日渗透率；注意「被弹窗推着点了一次」不算接受 \\
+\addlinespace
+留存度 & 用户会主动回来 & 回访、复购、订阅续费 & 7 日/30 日留存、复购率；\kw{必须分群看}，总体留存上升可能只是结构变化 \\
+\addlinespace
+任务完成度 & 用户能顺利达成目的 & 下单成功率、支付失败率、搜索无结果率、退款原因 & 支付成功率、无结果率；这是最容易被忽略但对体验伤害最直接的一项 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+HEART 的适用边界需要说清楚：\kw{它适合有明确任务与稳定用户群的产品}
+（工具、内容、电商站内），
+\kw{不适合早期产品}——早期产品的问题不是「体验好不好」，而是「有没有人真的需要它」，
+此时讨论愉悦度与参与度是没有意义的。
+同样，HEART 不适合被当成 KPI 分摊到个人头上，
+因为五个维度之间存在系统性冲突（提高接受度常用的强弹窗会伤害愉悦度），
+一旦分摊就会立刻出现局部最优。
+
+\subsection{北极星指标与拆解树}
+
+\term{北极星指标}{North Star Metric} 是「最能代表用户价值被交付、且与长期商业结果同向」的单一指标。
+它的选择有三条纪律：
+
+\begin{enumerate}
+  \item \textbf{必须代表用户获得的价值}，而不是公司获得的收入。
+        「订单数」「活跃买家数」通常合格，「收入」不合格——收入可以被涨价与提高广告密度短暂拉高，
+        但会伤害长期价值。
+  \item \textbf{必须可拆解}。拆不开的北极星指标无法定位问题，也无法分配到团队。
+  \item \textbf{必须少而稳定}。一年换三次北极星指标的团队，等于一年做了三次战略转向。
+\end{enumerate}
+
+电商场景最常用的拆解是四层乘法链，也就是 \cref{ch:overview} 中漏斗的展开：
+
+\begin{equation}
+\GMV = \underbrace{\UV}_{\text{流量}} \times \underbrace{\CVR}_{\text{首单转化}}
+\times \underbrace{\AOV}_{\text{客单价}} \times \underbrace{R}_{\text{人均下单次数}} ,
+\label{eq:growth-gmv-tree}
+\end{equation}
+
+其中 $R = 1 + \text{复购次数期望}$。这项拆解比只写「$\UV \times \CVR \times \AOV$」更实用，
+因为复购是电商增长里最容易被漏掉、却最有复利效应的一项：
+把 $R$ 从 1.15 提到 1.30 相当于 $\GMV$ 提升 13\%，
+而它不需要增加任何流量成本。
+
+要比较各因子的贡献，必须转成对数差分。对 \cref{eq:growth-gmv-tree} 两侧取对数再差分：
+
+\begin{equation}
+\Delta \ln \GMV \;\approx\; \Delta \ln \UV + \Delta \ln \CVR + \Delta \ln \AOV + \Delta \ln R .
+\label{eq:growth-log-decomp}
+\end{equation}
+
+这样「$\GMV$ 环比降 12\%」就可以被精确拆成「流量降 5\%、转化降 6\%、
+客单降 1\%、复购降 0.5\%」这样的可行动结论。
+要注意两点：一是当变化幅度较大（超过约 20\%）时一阶近似误差会变大，
+应改用精确分解 $(\GMV_1/\GMV_0) = (\UV_1/\UV_0)(\CVR_1/\CVR_0)\cdots$ 逐项相除；
+二是\kw{对数分解只告诉你「哪一项变了」，不告诉你「为什么变」}，
+因果关系仍然要靠实验或准实验来建立。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  root/.style={draw=NavyDeep, fill=BoxBG, rounded corners=3pt, minimum height=9mm,
+               text width=2.4cm, inner sep=3pt},
+  lv1/.style={draw=NavyMid, fill=BoxBG, rounded corners=3pt, minimum height=9mm,
+              text width=2.15cm, inner sep=3pt},
+  lv2/.style={draw=SlateGray, fill=white, rounded corners=3pt, minimum height=8mm,
+              text width=2.5cm, inner sep=3pt}
+]
+\node[root] (gmv) {北极星\\$\GMV$};
+\node[lv1] (uv)  at ($(gmv.south)+(-4.9,-1.55)$)  {$\UV$\\访客数};
+\node[lv1] (cvr) at ($(gmv.south)+(-1.65,-1.55)$) {$\CVR$\\首单转化率};
+\node[lv1] (aov) at ($(gmv.south)+(1.65,-1.55)$)  {$\AOV$\\客单价};
+\node[lv1] (ret) at ($(gmv.south)+(4.9,-1.55)$)   {$R$\\人均下单次数};
+\node[lv2] (u1) at ($(uv.south)+(-1.3,-1.5)$)  {渠道结构\\自然/付费/私域};
+\node[lv2] (u2) at ($(uv.south)+(1.5,-1.5)$)   {落地页\\加载与相关性};
+\node[lv2] (c1) at ($(cvr.south)+(0,-1.5)$)    {详情页与加购\\价格/信任/库存};
+\node[lv2] (a1) at ($(aov.south)+(-1.4,-1.5)$) {组货与连带\\搭配推荐};
+\node[lv2] (a2) at ($(aov.south)+(1.6,-1.5)$)  {定价与折扣\\价格带结构};
+\node[lv2] (r1) at ($(ret.south)+(-1.4,-1.5)$) {留存曲线\\会员与私域};
+\node[lv2] (r2) at ($(ret.south)+(1.6,-1.5)$)  {复购激励\\召回与触达};
+\draw[-{Stealth}, SlateGray] (gmv) -- (uv);
+\draw[-{Stealth}, SlateGray] (gmv) -- (cvr);
+\draw[-{Stealth}, SlateGray] (gmv) -- (aov);
+\draw[-{Stealth}, SlateGray] (gmv) -- (ret);
+\draw[-{Stealth}, RuleGray] (uv) -- (u1);
+\draw[-{Stealth}, RuleGray] (uv) -- (u2);
+\draw[-{Stealth}, RuleGray] (cvr) -- (c1);
+\draw[-{Stealth}, RuleGray] (aov) -- (a1);
+\draw[-{Stealth}, RuleGray] (aov) -- (a2);
+\draw[-{Stealth}, RuleGray] (ret) -- (r1);
+\draw[-{Stealth}, RuleGray] (ret) -- (r2);
+\end{tikzpicture}
+\caption{北极星指标的拆解树：每一片叶子都必须能找到一个负责人与一个可执行动作}
+\label{fig:growth-tree}
+\end{figure}
+
+拆解树的质量标准只有一条：\kw{每一片叶子都能对应一个人和一个动作}。
+如果某片叶子是「品牌力」「用户体验」这类无法分配的东西，它就不是叶子，
+必须继续往下拆到可执行层。
+反过来，如果树太深（超过四层），说明团队在把管理颗粒度当成分析颗粒度，
+分析会失去速度。
+
+\subsection{指标字典：口径、负责人、更新频率}
+
+\term{指标字典}{Metric Dictionary} 是把「大家口头说的指标」变成「唯一可计算的定义」的文档。
+它不是文档洁癖，而是最便宜的一致性工具：口径分歧造成的争论，
+平均每次要花掉一个团队数小时的会议时间，而写清楚只要十分钟。
+
+\begin{table}[htbp]
+\centering
+\caption{指标字典的必填字段（以「付费渠道首单 ROAS」为例）}
+\label{tab:growth-dict}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{4.3cm} Y}
+\toprule
+\tabhead{字段} & \tabhead{示例内容} & \tabhead{为什么必须写} \\
+\midrule
+指标名 & 付费渠道首单 $\ROAS$（\code{paid\_first\_order\_roas}） & 中文名与字段名一一对应，避免「同名不同义」 \\
+\addlinespace
+业务口径 & 统计周期内归因到付费渠道的新客首单实付金额 / 同期付费渠道花费 & 一句话说清分子分母，\kw{包含哪些、排除哪些} \\
+\addlinespace
+数据来源 & 订单表 \code{dwd\_order} 与广告花费表 \code{ods\_ads\_daily} & 出问题时可定位到表与字段 \\
+\addlinespace
+过滤条件 & 排除退款订单、排除自归因流量、排除测试账号；币种统一为结算币 & 排除项是最常见的口径分歧来源 \\
+\addlinespace
+时间窗口 & 归因窗口：点击后 7 天；统计窗口：自然日，按站点时区 & 窗口不同则数值不可比 \\
+\addlinespace
+负责人 & 数据团队与投放团队各一人（双签） & 口径变更必须双签，不能单方面改 \\
+\addlinespace
+更新频率 & 每日 08:00 更新 T-1；月末重算一次修正版 & 频率决定决策节奏与预期 \\
+\addlinespace
+质量阈值 & 埋点完整率 $>$ 98\%；花费与平台后台差异 $<$ 3\% & 越界时看板打标，禁止直接用 \\
+\addlinespace
+历史变更 & 2024-03-01 起排除自归因流量，此前数据不回溯 & 变更日志是「口径漂移」的唯一解药 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{指标治理：口径漂移、重复计数与 Goodhart 效应}
+
+指标治理要防的是三类系统性错误，它们的共同点是\kw{不会立刻暴露，但会持续污染决策}。
+
+\textbf{第一类：口径漂移（Metric Drift）。}
+同一个指标名在不同时间被用了不同算法，曲线出现跳变，
+团队却把跳变当成业务变化来解释。
+典型场景是「活跃用户」从「登录即算」改成「有核心行为才算」，
+导致 $\DAU$ 一夜下降 20\%，然后出现一周的无效排查。
+治理办法有三条：
+(1) 所有口径变更必须走双签并写入变更日志；
+(2) 变更时\kw{并行跑一段时间的两套口径}，
+在看板上同时展示，直到团队建立起对新口径的直觉；
+(3) 关键指标保留\kw{不可回改的历史快照}，新口径以新指标名发布，
+而不是覆盖旧指标名。
+
+\textbf{第二类：重复计数（Double Counting）。}
+同一个用户或同一笔订单在多个口径里被算多次。
+最常见的是跨渠道归因：用户先看到社交广告、再搜索品牌词点搜索广告、
+最后从邮件进入下单，三个渠道都会把这笔订单算成自己的转化，
+三者相加可以轻松超过实际订单数的两倍。
+另一类重复计数来自跨端与跨设备（同一人多设备、多账号）。
+治理办法是：\kw{任何渠道报表的加总都必须与「实际订单数」对账}，
+并把「渠道声称转化之和 / 实际订单数」作为一个常驻指标监控，见 \cref{eq:growth-recon}。
+
+\textbf{第三类：Goodhart 效应。}
+\cite{goodhart1975} 的表述是：
+当一个度量成为目标，它就不再是一个好的度量。
+在增长场景里它的表现非常有规律：
+把 $\CTR$ 当目标得到标题党，把停留时长当目标得到无限自动播放，
+把转化率当目标得到隐藏费用与虚假紧迫感，
+把质量分当目标得到关键词堆砌（见 \cref{ch:ad}）。
+治理办法不是放弃指标，而是三条组合：
+(1) \kw{每个优化目标必须配 2--4 个护栏指标}，且护栏必须与目标不同向，
+最好来自不同数据源（例如用退款率与客服工单率护栏转化率）；
+(2) \kw{把长期指标放进决策}，例如用长期 holdback 组的留存与 $\LTV$ 校准短期指标；
+(3) \kw{定期做指标审计}，找「指标涨了但用户价值没涨」的案例并回溯根因。
+
+\begin{casebox}[案例：一次「DAU 涨 18\%」的口径漂移复盘（示范案例）]
+这是一个综合多个团队常见事故构造的示范复盘，不代表任何具体公司的内部数据。
+
+\textbf{现象}：某 App 某月 $\DAU$ 环比上涨 18\%，团队据此把「用户增长」写进了季度总结，
+并追加了下一季度的买量预算。
+
+\textbf{排查}：两周后财务侧发现收入并未同步上涨，数据团队回溯后发现三个叠加问题：
+\begin{enumerate}
+  \item \textbf{口径变更未公告}：客户端 SDK 升级后，
+        「启动即上报 \code{app\_launch}」的触发时机从「冷启动」改成「冷启动加热启动恢复」，
+        同一用户一天的上报次数上升，而 $\DAU$ 的计算用的是「有心跳事件即算活跃」。
+  \item \textbf{重复计数}：新 SDK 在有网与无网恢复时各上报一次，
+        导致部分用户被两个 \code{device\_id} 记录（卸载重装后未做账号绑定回填）。
+  \item \textbf{口径漂移叠加归因变更}：同期投放平台切换了归因窗口，
+        拉新口径下的「新增设备」与内部分析的「新增账号」被混用。
+\end{enumerate}
+
+\textbf{修复}：回滚 SDK 触发逻辑、给 \code{device\_id} 增加账号绑定回填、
+在指标字典中把「活跃」拆成 \code{dau\_launch} 与 \code{dau\_core\_action} 两个指标、
+并把「多设备重复率」加入数据质量看板。
+
+\textbf{复盘}：根本原因不是 SDK 的 bug，而是\kw{没有指标变更的评审机制}。
+修复后团队加了一条硬规则：任何影响主指标的埋点变更，必须提前一周给出
+「新旧口径并行对比报告」，否则不允许上线。
+\end{casebox}
+
+\begin{pitfall}[把「可观测的过程指标」当北极星]
+\textbf{现象}：团队把「加购率」设为季度北极星，三个月内加购率从 9\% 提升到 13\%，
+但 $\GMV$ 几乎不动，退款率反而上升。
+
+\textbf{根因}：加购是\kw{成本极低的用户动作}，它可以被界面手段轻易抬高
+（默认勾选、把加购按钮做得比立即购买更显眼、把加购入口放进列表页），
+但它与「用户获得价值」之间没有强绑定。当它成为目标，团队就会沿着
+「加购与成交之间的缝隙」优化。
+
+\textbf{排查方法}：把候选北极星指标与长期指标做相关性检验——
+看过去 12--24 个月该指标的月度变化与下季度 $\GMV$ 或毛利变化是否同向且稳定。
+若相关性弱或方向不稳定，它就不适合做北极星。
+
+\textbf{正确做法}：北极星用「付费买家数」这类与价值强绑定的指标，
+把加购率放回过程指标层，并为它配「加购到支付转化率」与「退款率」两个护栏。
+\end{pitfall}
+
+\section{数据采集：埋点、事件模型与 UTM 规范}
+
+\subsection{事件模型：谁、何时、做了什么}
+
+一切分析的起点是事件表。一个设计良好的\term{事件模型}{Event Model} 可以概括为五元组：
+
+\begin{equation}
+\text{Event} = \big( \underbrace{\text{who}}_{\text{主体}}, \;
+\underbrace{\text{when}}_{\text{时间}}, \;
+\underbrace{\text{what}}_{\text{动作}}, \;
+\underbrace{\text{where}}_{\text{位置}}, \;
+\underbrace{\text{context}}_{\text{上下文}} \big).
+\label{eq:growth-event-model}
+\end{equation}
+
+对应的工程落地是三层属性：
+\kw{用户属性}（user properties，例如注册时间、首单渠道、会员等级、生命周期阶段）、
+\kw{事件属性}（event parameters，例如 \code{item\_id}、\code{price}、\code{quantity}、
+\code{page\_type}、\code{position}）、
+\kw{上下文属性}（context，例如 \code{utm\_source}、\code{device\_type}、\code{app\_version}、
+\code{session\_id}、\code{experiment\_id}）。
+
+三层属性的分工原则值得单独强调：
+\begin{itemize}
+  \item \kw{用户属性回答「这是谁」}，变化慢，适合做分群与长期分析。
+  \item \kw{事件属性回答「发生了什么」}，必须由业务代码在上报点显式写入，
+        不允许在分析阶段用「推导」代替（推导出的字段常常悄悄错半年）。
+  \item \kw{上下文属性回答「在什么条件下发生」}，是排查问题的关键，
+        尤其是 \code{app\_version}、\code{experiment\_id} 与 \code{page\_type} 三项——
+        缺少它们，事故复盘就只能靠猜。
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{核心事件清单与属性设计（电商场景，示范契约）}
+\label{tab:growth-events}
+\small
+\begin{tabularx}{\textwidth}{L{2.6cm} L{2.5cm} L{3.4cm} Y}
+\toprule
+\tabhead{事件名} & \tabhead{触发时机} & \tabhead{必填事件属性} & \tabhead{用途与口径要点} \\
+\midrule
+\code{session\_start} & 会话开始（前台且超过 30 秒无操作后重新进入） & \code{session\_id}, \code{utm\_*} & 流量入口分析；注意「刷新」不应重复计会话 \\
+\addlinespace
+\code{view\_item\_list} & 列表页渲染完成并可见 & \code{page\_type}, \code{list\_id}, \code{item\_ids} & 曝光口径（渲染即算，还是可见一半且持续 1 秒）必须二选一并写进字典 \\
+\addlinespace
+\code{click\_item} & 点击进入详情 & \code{item\_id}, \code{list\_id}, \code{position} & $\CTR$ 的分子；\code{position} 是位置偏差校正的必要字段 \\
+\addlinespace
+\code{view\_item} & 详情页渲染完成 & \code{item\_id}, \code{price}, \code{stock\_status} & 与 \code{click\_item} 配对可发现跳转丢失 \\
+\addlinespace
+\code{add\_to\_cart} & 加入购物车成功 & \code{item\_id}, \code{price}, \code{quantity} & 加购率；注意「重复加购同一商品」是否重复计数 \\
+\addlinespace
+\code{begin\_checkout} & 进入结算页 & \code{cart\_value}, \code{item\_count}, \code{coupon\_id} & 结算漏斗；与加购的差额暴露运费与优惠问题 \\
+\addlinespace
+\code{purchase} & 支付成功回调 & \code{order\_id}, \code{value}, \code{currency}, \code{item\_ids} & 唯一真值事件；\kw{必须服务端上报}，且与订单表对账 \\
+\addlinespace
+\code{refund} & 退款完成 & \code{order\_id}, \code{refund\_amount}, \code{reason} & 净收入口径的基础；缺了它 $\GMV$ 会被系统性高估 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{命名规范：一次写清，省三年时间}
+
+命名规范的目标只有一个：\kw{让分析同学不看文档也能猜对字段含义并找对字段}。
+下面这套规则（示范契约）在多数团队都够用：
+
+\begin{itemize}
+  \item \textbf{事件名用「动词 + 名词」的全小写形式}：\code{add\_to\_cart}、\code{begin\_checkout}、
+        \code{view\_item}。不要用大写驼峰、缩写或中文。
+  \item \textbf{禁止同义异名}：一个动作只能有一个事件名。
+        \code{add\_cart} 与 \code{add\_to\_cart} 同时存在是埋点治理失败的头号标志。
+  \item \textbf{属性名用「名词或名词短语」，单复数统一}。
+        列表类属性用复数（\code{item\_ids}），单值用单数（\code{item\_id}）。
+  \item \textbf{枚举值必须集中登记}：\code{page\_type} 只能是
+        \code{home}、\code{category}、\code{search}、\code{detail}、\code{cart}、
+        \code{checkout}、\code{payment} 中的一个，
+        不允许出现大小写变体或近义变体。
+  \item \textbf{金额与数量带单位或币种语义}：\code{value} 与 \code{currency} 必须成对出现，
+        单位统一为最小货币单位或小数，不能两套混用。
+  \item \textbf{版本化}：当事件语义发生不兼容变化时，发布新事件名
+        （\code{purchase\_v2}）而不是改变旧事件的语义。
+        旧事件保留双写一个版本周期后再下线。
+\end{itemize}
+
+\begin{insight}[埋点的真正成本不在写，而在治理]
+一个电商站上线三年后，事件表里出现 400 多个事件名、其中约三成功能重复，
+这是普遍状态而非例外。它的成因几乎永远是：埋点由各业务线
+「遇到需求就加一个」的方式增长，无人负责清理。
+
+治理的性价比极高：把重复事件收敛到一个规范集合，通常能减少 30\%--50\% 的事件数，
+同时让分析口径错误率显著下降。治理的次序建议是：
+(1) 先统计每个事件近 90 天的上报量与查询量，
+(2) 把「零查询、低上报」的事件标记为待下线，
+(3) 把「高查询、多同义」的事件合并并发布映射表，
+(4) 建立\kw{新增事件必须评审}的流程，防止边清边涨。
+\end{insight}
+
+\subsection{客户端埋点与服务端埋点}
+
+两种上报方式不是「选一个」，而是「按下述边界分工」：
+\kw{与用户交互有关的事件走客户端，与钱和状态有关的事件走服务端}。
+
+\begin{table}[htbp]
+\centering
+\caption{客户端埋点与服务端埋点的取舍}
+\label{tab:growth-client-server}
+\small
+\begin{tabularx}{\textwidth}{L{2.2cm} L{3.4cm} L{3.4cm} Y}
+\toprule
+\tabhead{对比项} & \tabhead{客户端埋点} & \tabhead{服务端埋点} & \tabhead{结论} \\
+\midrule
+覆盖范围 & 能采到交互细节：滑动、停留、点击位置、页面可见性 & 只能采到已到达服务端的动作 & 交互分析只能用客户端 \\
+\addlinespace
+丢失率 & 受广告拦截、隐私插件、网络中断、旧版本未升级影响，常见量级 5\%--20\% & 服务端成功请求可视为已上报，丢失主要来自上游请求失败 & 关键转化必须服务端 \\
+\addlinespace
+延迟 & 秒级到分钟级 & 依赖订单状态流转，可能延迟数小时（发货、结算） & 实时看板与结算对账要分开建 \\
+\addlinespace
+可篡改性 & 客户端可被改造，难以作为结算依据 & 不可被客户端篡改，可用于对账 & 涉及钱的口径只能服务端 \\
+\addlinespace
+实现成本 & SDK 接入快，但需处理版本兼容与队列缓存 & 需改造业务代码与消息链路，成本较高 & 先客户端铺面，再服务端补关键点 \\
+\addlinespace
+隐私合规 & 需在客户端做同意管理、字段脱敏、最小化采集 & 服务端集中处理，策略更容易统一 & 合规策略以服务端为主，客户端只做拦截 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+一个常见的实践错误是「同一个转化同时用客户端与服务端上报，
+然后在分析时直接相加」。正确做法是\kw{选定唯一真值源}：
+以服务端 \code{purchase} 为订单真值，客户端上报的同名事件只用于
+「漏斗层间跳转的诊断」，并在数仓里显式命名为 \code{purchase\_client\_hint}，
+禁止参与任何金额口径计算。
+
+\subsection{GA4 的事件-参数模型}
+
+\term{GA4}{Google Analytics 4} 与上一代 Universal Analytics 最大的结构差异是
+\kw{把「会话加页面浏览」模型换成了「事件加参数」模型}：
+所有行为都是事件，事件携带参数，参数决定它能否被拆解成维度。
+这带来三个工程后果：
+
+\begin{enumerate}
+  \item \textbf{事件是唯一的原子单位}，页面浏览也是一种事件。
+        自定义维度必须挂在事件参数上才有意义；
+        事件级参数只对该事件生效，用户级参数（user property）才对所有事件生效。
+  \item \textbf{参数有数量与长度限制}，且超限会被静默丢弃。
+        以官方文档量级为例：每个事件的自定义参数数量、参数名与参数值长度都有上限，
+        因此\kw{不要把长文本或无限枚举塞进参数}
+        （用 ID 或枚举，把详细内容留在自己的数仓里，需要时通过 ID 回连）。
+        具体限制以 Google 官方最新文档为准。
+  \item \textbf{聚合与基数（cardinality）是关键约束}。
+        把订单号这类高基数 ID 直接作为维度上报，
+        会迅速撑爆基数上限并让报表不可用；
+        正确做法是只在自定义事件中透传，落数仓后自行关联。
+\end{enumerate}
+
+\begin{toolbox}[埋点验收清单（上线前必须逐项过）]
+\begin{enumerate}
+  \item \textbf{契约检查}：事件名、属性名、枚举值是否都在事件契约表里登记？
+        是否有命名冲突或同义异名？
+  \item \textbf{埋点位置检查}：是否在「成功回调」而不是「点击时」触发？
+        支付成功是否在服务端确认后上报？
+  \item \textbf{幂等检查}：重复触发（页面重渲染、网络重试、返回再进）会不会重复计数？
+        是否用事件唯一 ID 做去重？
+  \item \textbf{版本与灰度检查}：新旧版本上报是否可区分？
+        灰度期间能否按 \code{app\_version} 拆分对比？
+  \item \textbf{缺失率检查}：灰度 24 小时后，关键属性的空值率是否低于阈值（例如 1\%）？
+  \item \textbf{对账检查}：埋点订单数与订单表订单数的差异率是否低于阈值（例如 1\%）？
+  \item \textbf{时区与币种检查}：时间戳是否带时区？金额是否带币种？
+  \item \textbf{合规检查}：是否在用户同意之后才采集？是否含不应采集的敏感字段？
+  \item \textbf{回归检查}：新埋点是否影响现有漏斗或看板的口径？
+        是否在字典里登记了新指标？
+  \item \textbf{下线检查}：本次上线是否顺带下线了废弃事件？（否则埋点只增不减）
+\end{enumerate}
+\end{toolbox}
+
+\subsection{UTM 规范与大小写陷阱}
+
+\term{UTM 参数}{Urchin Tracking Module} 是跨平台流量的「身份证」。
+它看起来简单，却是数据质量事故的高发区，原因是：
+\kw{这些参数是人工填写的自由文本，而下游工具把它们当作严格的分类键}。
+
+\begin{table}[htbp]
+\centering
+\caption{UTM 五参数的规范写法（示范契约）}
+\label{tab:growth-utm}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{2.5cm} L{4.1cm} Y}
+\toprule
+\tabhead{参数} & \tabhead{回答的问题} & \tabhead{规范写法} & \tabhead{常见错误与后果} \\
+\midrule
+\code{utm\_source} & 流量来自哪个平台 & 全小写、无空格：\code{google}、\code{meta}、\code{tiktok}、\code{newsletter} & 混用首字母大写与小写会被拆成两个来源，渠道汇总立刻裂开 \\
+\addlinespace
+\code{utm\_medium} & 用什么方式触达 & 使用规范值：\code{cpc}、\code{display}、\code{email}、\code{social}、\code{organic}、\code{affiliate} & 自造值会让渠道分组规则失效，报表里出现大量「未分类」 \\
+\addlinespace
+\code{utm\_campaign} & 哪次活动 & 结构化命名：\code{region-topic-yyyymm} & 中文、空格、大小写混用；空格在部分链路会被编码，导致同一活动两个值 \\
+\addlinespace
+\code{utm\_content} & 哪个素材或版本 & 素材 ID 或 A/B 标识：\code{creative\_a1}、\code{hero\_video} & 用它做 A/B 却不保证两版参数唯一，导致无法比较 \\
+\addlinespace
+\code{utm\_term} & 哪个关键词（主要用于付费搜索） & 关键词或关键词 ID，全小写 & 直接塞入用户搜索词会带来高基数与隐私风险 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[UTM 大小写与空格：一个字符造成的三方差值]
+\textbf{现象}：站点报表里「搜索来源」出现三条独立的行
+（首字母大写、全小写、带尾空格三种写法），
+每条的量级都不完整；GA4 的渠道分组里有 15\% 的流量落入「未分配」。
+
+\textbf{根因}：三个问题叠加。
+(1) 投放平台、邮件工具、联盟后台各自生成 UTM，没有中央校验；
+(2) 其中一个工具默认把 source 首字母大写；
+(3) 有人从表格粘贴时带入了不可见空格。
+
+\textbf{排查方法}：在数仓里对 \code{utm\_source} 做规范化分组统计——
+先用 \code{lower(trim())} 归一化再统计去重个数，
+如果规范化后数量显著下降，就说明存在大小写与空格问题。
+
+\textbf{修复}：
+(1) 建立\kw{UTM 生成器}（一个集中管理的表或链接生成服务），
+业务方只能从生成器取链接，不允许手工拼；
+(2) 在数据入口统一做 \code{lower(trim())} 与全角转半角清洗，
+并把「清洗前后不一致的记录数」加入数据质量看板；
+(3) 只用规范 \code{utm\_medium} 值，且把该枚举写进指标字典。
+\end{pitfall}
+
+\subsection{数据质量监控}
+
+数据质量不是一个静态结论，而是一条持续监控的曲线。
+最实用的做法是定义一个\kw{数据可信度分数}，把多个维度乘起来：
+
+\begin{equation}
+Q_{\text{data}} = p_{\text{complete}} \times p_{\text{valid}} \times p_{\text{fresh}} ,
+\label{eq:growth-dq}
+\end{equation}
+
+其中 $p_{\text{complete}}$ 是关键字段完整率（订单事件里订单号与金额均非空的比例）、
+$p_{\text{valid}}$ 是通过业务校验规则的比例（金额为正、币种在白名单内、时间戳在合理区间）、
+$p_{\text{fresh}}$ 是数据在规定时效内到达的比例（例如 T+1 的 06:00 前到达）。
+这三项乘积的意义在于：\kw{每个环节单独看都不错时，联合可信度可能已经低于 80\%}。
+以上面的示范量级为例，$0.90 \times 0.95 \times 0.90 \approx 0.77$，
+意味着「看起来都还行」的链路已经让近四分之一的记录不可直接使用。
+
+常驻的数据质量看板至少应包含：
+
+\begin{itemize}
+  \item \textbf{流量侧}：会话数、去重设备数、UTM 未分类占比、异常 UA 占比、爬虫占比。
+  \item \textbf{漏斗侧}：相邻层之间的转化率与其「历史同期分位」，
+        单日跳变超过三倍标准差即告警。
+  \item \textbf{金额侧}：埋点订单数与订单表订单数的差异率、
+        退款金额占比、币种分布异常。
+  \item \textbf{归因侧}：渠道声称转化之和与实际订单数的比值（见 \cref{eq:growth-recon}）。
+  \item \textbf{时效侧}：各层表的到达时间分布、重跑次数、失败任务数。
+\end{itemize}
+
+\begin{keypoint}[数据质量的四条硬纪律]
+(1) \kw{关键金额口径只允许一个真值源}，其余都是诊断口径；
+(2) \kw{任何口径变更必须双签并留下变更日志}；
+(3) \kw{渠道报表的加总必须与订单真值对账}，
+差异率超过阈值时看板直接打标，禁止用于决策；
+(4) \kw{新增埋点必须评审、下线必须主动清理}，
+否则三年后你会得到一张 400 个事件、互相矛盾的表格。
+\end{keypoint}
+
+\section{归因与对账：分配不是真相}
+
+\subsection{平台归因：各自的窗口与模型}
+
+\term{归因}{Attribution} 要解决的问题是：一笔转化应该把功劳分配给哪些触点、各分多少。
+这个问题在数学上\kw{没有唯一解}，因为「每个触点单独的贡献」依赖于反事实的定义，
+而反事实永远无法被完全观测——这正是 \cite{pearl2009causality} 意义上的因果识别问题。
+所以在读任何平台报表之前，必须先记住一句纪律：
+\kw{归因是分配，不是真相}。分配规则可以协商，真相只能靠实验测量。
+
+各平台给出的归因数字，最少在四个维度上不一致：\kw{归因模型}、\kw{归因窗口}、
+\kw{去重与跨设备规则}、\kw{转化定义（是否含退款、是否含站外转化）}。
+后两者往往最不透明，也最容易造成巨大差异。
+
+\begin{table}[htbp]
+\centering
+\caption{各类平台的归因口径差异（示范量级，具体以各平台官方最新文档为准）}
+\label{tab:growth-attrib-window}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{2.9cm} L{3.0cm} Y}
+\toprule
+\tabhead{平台类型} & \tabhead{默认归因模型} & \tabhead{默认窗口（常见量级）} & \tabhead{差异来源与注意事项} \\
+\midrule
+搜索广告 & 末次点击为主，可选数据驱动 & 点击 30 天、展示 1 天（可调） & 品牌词会大量「抢功」；窗口调长则转化数上升，但增量不一定上升 \\
+\addlinespace
+社交信息流 & 末次点击或平台自有模型 & 点击 7 天、展示 1 天（默认） & 展示归因会把「看见过」的用户后续自然转化也计入；跨设备依赖登录态 \\
+\addlinespace
+短视频信息流 & 平台自有模型 & 点击 7 天、展示 1 天（默认） & 素材驱动强，转化延迟短；归因虚高需配合 MMM 交叉验证 \\
+\addlinespace
+电商站内广告 & 平台内归因（站点内闭环） & 点击 7--14 天 & 与自然流量存在侵蚀，必须看全店增量 \\
+\addlinespace
+联盟与达人 & 末次点击为主 & 依合作方而定，常见 7--30 天 & 优惠券与折扣码会同时影响归因与毛利，需单独拆分 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{自建统一口径：规则模型与数据驱动模型}
+
+要做出跨平台可比的结论，必须自建一套统一口径的归因。
+它由两层组成：\kw{规则层}（可解释、可复现、易沟通）与
+\kw{数据驱动层}（更接近真实贡献，但需要解释成本）。
+
+\begin{table}[htbp]
+\centering
+\caption{常见归因模型的机制、优缺点与适用场景}
+\label{tab:growth-attrib-models}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.5cm} L{3.0cm} Y}
+\toprule
+\tabhead{模型} & \tabhead{分配规则} & \tabhead{优点} & \tabhead{缺点与适用边界} \\
+\midrule
+末次点击 & 全部功劳给最后一次点击 & 实现最简单、与平台口径接近 & \kw{系统性低估认知型触点}；适合决策链极短的品类 \\
+\addlinespace
+首次点击 & 全部功劳给首次触点 & 强调拉新 & 忽略临门一脚；适合评估品牌与内容的上层渗透 \\
+\addlinespace
+线性 & 所有触点平分 & 简单、无偏袒 & 平均主义，无法区分强触点与弱触点 \\
+\addlinespace
+时间衰减 & 越近权重越大，按半衰期衰减 & 贴近「近期触点更关键」的直觉 & 半衰期参数是人为选择，必须做敏感性分析 \\
+\addlinespace
+位置加权 & 首末各占较大比例，中间均分 & 兼顾拉新与收口 & 中间触点被系统性低估，长链路会失真 \\
+\addlinespace
+马尔可夫移除 & 用移除某触点后转化率的下降衡量贡献 & 数据驱动、可处理任意链路长度 & 需要较大样本；对共线触点不稳定 \\
+\addlinespace
+Shapley 值 & 对所有触点顺序取边际贡献的平均 & 理论上满足若干公平性公理（\cite{shapley1953value}） & 计算量随触点数指数增长，通常需要近似与采样 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+时间衰减模型的权重可以直接写成归一化形式：
+
+\begin{equation}
+w_c = \frac{2^{-t_c/\tau}}{\sum_{c' \in \mathcal{C}(u)} 2^{-t_{c'}/\tau}} ,
+\qquad \sum_{c} w_c = 1 ,
+\label{eq:growth-time-decay}
+\end{equation}
+
+其中 $t_c$ 是触点 $c$ 距转化的时间，$\tau$ 是半衰期。
+$\tau$ 的选择必须做敏感性分析：如果 $\tau$ 从 7 天变到 14 天会改变预算分配结论，
+那么说明你的结论比你以为的更脆弱，应该改成区间决策而不是点决策。
+
+数据驱动方法里最常用的是\term{马尔可夫移除效应}{Markov Removal Effect}：
+把用户的多触点到转化路径建成有向图（状态包含各触点与「转化」「流失」两个吸收态），
+用历史数据估计转移概率，然后逐个移除触点，观察转化概率的下降：
+
+\begin{equation}
+\text{RE}(c) = \frac{p_{\text{conv}}(\mathcal{G}) - p_{\text{conv}}(\mathcal{G} \setminus \{c\})}
+{p_{\text{conv}}(\mathcal{G})},
+\qquad
+\text{归因份额}(c) = \frac{\text{RE}(c)}{\sum_{c'} \text{RE}(c')} .
+\label{eq:growth-markov-removal}
+\end{equation}
+
+这里的 $p_{\text{conv}}$ 是图中从起点到「转化」吸收态的到达概率。
+\cite{shao2016attribution} 系统比较了这类数据驱动归因方法与传统规则模型的差异，
+结论与实务经验一致：\kw{数据驱动方法会把大量份额从末次点击转移到上层触点}，
+转移幅度常常在 20\%--40\% 量级（示范量级，随品类与链路长度变化很大）。
+
+\begin{insight}[为什么数据驱动归因也不能当作真相]
+马尔可夫移除与 Shapley 值解决的只是「在给定路径数据下的贡献分配」问题，
+它们共用两个强假设：
+(1) \kw{触点之间没有混淆}——如果高价值用户本来就更容易同时接触多个渠道，
+那么被算法评为「高贡献」的可能只是「高价值用户的代理」；
+(2) \kw{路径数据本身没有偏}——而路径是被过去的上线策略塑造的，
+没投过的渠道不会出现在路径里，这不代表它没效果。
+
+因此数据驱动归因的正确用途是\kw{排序与发现异常}（哪个渠道的贡献被低估了），
+而不是\kw{定量的预算分配依据}。定量的预算分配必须靠增量实验或 MMM。
+这也是 \cite{dalessandro2012causal} 一类增量测量工作被反复引用的原因：
+它把问题从「谁被记录在路径上」换成了「谁真的改变了行为」。
+\end{insight}
+
+\subsection{三方差值：对账表设计}
+
+实务中最有效的归因治理工具不是更复杂的模型，而是一张\kw{三方差值对账表}：
+把\kw{平台后台}、\kw{站内埋点与 GA4}、\kw{实际订单（财务口径）}三列并排，
+逐维度计算差异率，天天看。
+
+\begin{equation}
+\text{差异率}_p = \frac{\text{平台报告转化}_p - \text{站点真实订单}_p}{\text{站点真实订单}_p},
+\qquad
+\text{重叠度} = \frac{\abs{\mathcal{O}_{\text{平台}} \cap \mathcal{O}_{\text{站点}}}}
+{\abs{\mathcal{O}_{\text{平台}} \cup \mathcal{O}_{\text{站点}}}} .
+\label{eq:growth-recon}
+\end{equation}
+
+差异率回答「平台报多了多少」，重叠度回答「平台报的这些订单，有多少在我们的真值里也存在」。
+两者一起看才能区分两种完全不同的情况：
+\kw{差异率大但重叠度高}说明平台只是把同一批订单重复计算（跨渠道抢功）；
+\kw{差异率大且重叠度低}说明平台报的订单我们根本找不到，
+可能是跨设备未打通、可能是回传窗口错配，也可能是刷量。
+
+\begin{table}[htbp]
+\centering
+\caption{三方差值对账表的字段设计（示范模板）}
+\label{tab:growth-recon}
+\small
+\begin{tabularx}{\textwidth}{L{2.5cm} L{4.0cm} Y}
+\toprule
+\tabhead{字段组} & \tabhead{字段} & \tabhead{用途与判读规则} \\
+\midrule
+维度 & 日期、站点、平台、账户、广告系列、归因窗口 & 维度必须细到「可行动」的层级，否则差异无法定位 \\
+\addlinespace
+平台列 & 花费、曝光、点击、平台转化数、平台转化价值、平台成本与回报 & 从平台后台按日导出，\kw{保存原始快照}，避免后台回溯改写 \\
+\addlinespace
+站内列 & 会话数、加购数、订单数、实付金额、新客订单数、退款金额 & 站内口径必须写明归因规则与窗口，与平台列对齐后再比 \\
+\addlinespace
+差值与比率 & 差异率、重叠度、花费差异率、回报率差异、成本差异 & 差异率超阈值（例如正负 15\%）即在看板打标并触发排期 \\
+\addlinespace
+解释字段 & 差异原因分类、是否已确认、责任人、处置动作 & \kw{差异必须归因到一个具体原因}，否则看板会被无视 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+差异的五大常见成因（按实务出现频率排序）：
+(1) 归因窗口不同（平台默认 7 天点击，站内算 30 天）；
+(2) 跨设备与跨端未打通（手机看到广告、电脑下单）；
+(3) 站内自归因流量的归属（品牌词、直接访问）；
+(4) 平台回传延迟与去重逻辑（同一用户多次曝光只算一次）；
+(5) 退款与取消订单的处理口径不同（平台一般不算退款）。
+把每一条差异都归到这五类中的一类，对账表就从「吵架工具」变成了「排期工具」。
+
+\begin{casebox}[案例：三方差值对账如何发现「平台虚高 2.3 倍」（示范案例）]
+这是一个综合公开方法论构造的示范复盘，数字为便于说明而设定，不代表任何具体公司的内部数据。
+
+\textbf{背景}：某跨境独立站月投放预算约 80 万元，分布在搜索、社交信息流与短视频三个平台。
+月度汇报时发现：三个平台后台声称的转化数之和为 1.4 万笔，
+而站内订单表当月新客订单只有约 6 千笔。
+
+\textbf{第一步：拆分差异}。按平台分别计算差异率与重叠度，得到：
+搜索平台差异率约 1.4 倍（品牌词抢功为主），
+社交平台约 1.3 倍（展示归因与跨设备），
+短视频平台约 4.1 倍（展示归因、站内自归因流量被计入、回传去重缺失三者叠加）。
+
+\textbf{第二步：定位短视频平台的三个具体原因}。
+(1) 平台默认开启「展示归因 1 天」，而同品类用户的决策周期常在 3 天以上，
+于是大量自然转化被算成广告转化；
+(2) 站内的自然搜索与直接访问在 UTM 缺失时被平台按「最后一次点击兜底」认领；
+(3) 站点的转化回传没有携带订单去重键，同一订单在「加购回传」与「支付回传」各算一次。
+
+\textbf{第三步：修复与验证}。
+缩短展示归因窗口、给回传加上订单级去重键、
+在站内建立自归因流量的独立归因类目，
+并用\kw{地理对照实验}（选两个可比市场，一个暂停短视频投放两周）测量真实增量。
+实验结果显示短视频渠道的真实增量回报约为报表数字的 0.45 倍，
+与对账表的差异方向一致。
+
+\textbf{结论与动作}：预算没有立即砍半，而是改成：
+把短视频预算的 60\% 转向增量已验证的再营销与搜索精确流量，
+其余 40\% 保留用于持续测量（因为渠道效果会随创意与竞争变化，
+一次测量不能永久使用）。这个决策的价值在于\kw{它基于对账与实验两个独立证据}，
+而不是基于任何单一后台的数字。
+\end{casebox}
+
+\subsection{MMM 与 MTA 的分工}
+
+\term{营销组合模型}{Marketing Mix Modeling, MMM} 与\term{多触点归因}{Multi-Touch Attribution, MTA}
+经常被当成竞争方案，实际上它们回答的是不同问题、覆盖不同粒度、付出不同代价。
+
+\begin{table}[htbp]
+\centering
+\caption{MMM 与 MTA 的分工}
+\label{tab:growth-mmm-mta}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{3.5cm} L{3.5cm} Y}
+\toprule
+\tabhead{维度} & \tabhead{MMM} & \tabhead{MTA} & \tabhead{实务建议} \\
+\midrule
+数据粒度 & 时间序列（周或月），全国或大区层级 & 用户级触点路径 & 粒度不同，结论不能直接换算 \\
+\addlinespace
+能否用隐私数据 & 不需要个人标识符，聚合数据即可 & 依赖标识符打通路径 & 隐私收紧后 MMM 的可用性上升 \\
+\addlinespace
+擅长回答 & 各类渠道的边际增量、预算在渠道间的分配、长期与滞后效应 & 渠道与素材的细粒度贡献排序 & MMM 定预算，MTA 定优化对象 \\
+\addlinespace
+主要假设 & 需要处理趋势、季节、内生性（花费与销量互相影响） & 触点无混淆、路径无偏 & 两者都需要实验做锚点校准 \\
+\addlinespace
+见效周期 & 需要 1--3 年的周度数据才能稳定 & 数周数据即可出结果 & 早期用 MTA 与实验，规模期补 MMM \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+MMM 的技术骨架是「广告存量（adstock）加饱和效应加控制变量」。
+广告存量刻画触达的滞后与累积，饱和效应刻画边际递减，
+两者结合才能避免「多花一倍钱就多一倍效果」的错误外推：
+
+\begin{equation}
+\text{AdStock}_t = \sum_{l=0}^{L} \lambda^{l}\,\text{Spend}_{t-l},
+\qquad
+y_t = \beta_0 + \beta \cdot \frac{\text{AdStock}_t^{s}}{K^{s} + \text{AdStock}_t^{s}}
++ \gamma z_t + \varepsilon_t ,
+\label{eq:growth-adstock}
+\end{equation}
+
+其中 $\lambda \in (0,1)$ 是留存率（越大表示效果衰减越慢），
+$s$ 控制 S 形曲线的陡度，$K$ 是半饱和点，$z_t$ 是控制变量
+（价格、促销、季节、竞品动作、供给约束等）。
+\cite{hyndman2021forecasting} 一类的时序建模方法在这里是基础工具，
+但必须强调：\kw{回归系数不等于因果效应}。
+花费与销量之间存在双向因果（销量好就多花钱），
+因此 MMM 的输出必须与地理实验或 holdback 实验交叉校准，
+否则会把「因为卖得好所以多投」误读成「因为多投所以卖得好」。
+
+\begin{insight}[归因的正确用法：它是协商工具，不是裁判]
+「归因是分配不是真相」这句话的实际含义是三条决策纪律：
+
+(1) \kw{内部各团队的考核可以按分配口径，但公司级预算必须按增量口径分配}。
+用分配口径考核是管理需要（可拆分、可结算），用分配口径做预算会系统性错配。
+
+(2) \kw{当两个平台的归因数字冲突时，不要试图裁决谁对}，
+而要问「在什么反事实下它们都对」。通常是两个不同的反事实：
+平台算的是「接触过广告且转化的人」，公司要的是「如果没有广告就不会转化的人」。
+
+(3) \kw{所有归因结果都必须标注口径与不确定性}。
+一个不带窗口、不带模型说明、不带置信区间的「渠道回报率排名」，宁可不用。
+\end{insight}
+
+\begin{pitfall}[用「最后一次点击」做预算决策导致的错配]
+\textbf{现象}：某独立站用末次点击归因做月度预算分配，
+连续六个月把预算从「内容与达人种草」转向「品牌词与再营销」，
+因为后者的末次点击回报高出一倍以上。
+结果：一年后品牌搜索量增速转负，新客占比从 45\% 降到 28\%，
+总获客成本在半年后反而上升 35\%。
+
+\textbf{根因}：末次点击只记录「最后一跳」，而种草类触点几乎永远不是最后一跳。
+把预算移出上层触点，短期回报率上升（因为收口环节的边际效率本来就高），
+但流量池的「进水口」在缩小，等到再营销可触达人群耗尽，成本就会跳升。
+
+\textbf{排查方法}：看三个信号。
+(1) 新客占比与品牌搜索量趋势；
+(2) 「首次触点分布」是否在收窄；
+(3) 再营销人群池的规模与活跃度是否在下降。
+三者同时恶化，基本可以确认是上层投入不足。
+
+\textbf{正确做法}：\kw{把「末次点击回报」只用于收口环节的优化，
+用 MMM 与地理实验决定渠道间的预算分配}；
+并把「新客占比」「品牌搜索量的自然部分」「上层触点的首次接触覆盖」
+写成护栏指标，与回报率一起看。
+\end{pitfall}
+
+\section{增量实验：唯一能证明因果的方法}
+
+\subsection{从相关到因果：假设的写法}
+
+任何实验的起点都是一句可以被证伪的话。
+一条合格的假设包含五个要素：\kw{观察}（我们看到什么数据）、
+\kw{机制}（我们相信原因是什么）、\kw{动作}（要改什么）、
+\kw{预期}（哪个指标变化多少）、\kw{代价与止损}（如果错了会损失什么）。
+
+一个反例与正例的对比：
+\begin{itemize}
+  \item 反例：「优化落地页，提升转化率。」——没有观察、没有量级、没有代价，无法设计实验。
+  \item 正例：「观察到移动端结算页在 3 秒内未加载完成时，加购到支付的转化率从 62\% 掉到 41\%
+        （近 30 天数据）。我们相信把结算页首屏体积降低 40\% 能把该段转化率提升 5--8 个百分点。
+        动作：延迟加载非首屏模块。预期：移动端加购到支付提升 5 个百分点，
+        整体 $\CVR$ 提升 0.3 个百分点。代价：前端改动 3 人日；若两周内主指标无变化则回滚，
+        并检查是否因为用户已习惯等待而收益有限。」
+\end{itemize}
+
+第二句话可以直接翻译成样本量、实验周期、主指标与停止条件；第一句话不能。
+\cite{kohavi2020trustworthy} 反复强调的一个经验是：
+\kw{实验的失败大多数发生在实验开始之前}——假设不清楚、主指标没定、护栏缺失、
+样本量不够，这些都无法在分析阶段补救。
+
+\subsection{分流、样本量与 MDE}
+
+\term{实验单元}{Experimental Unit} 是分流的单位：用户、设备、会话、请求或地理区域。
+单元选择决定了两件事：\kw{同一用户是否会看到不同版本}（体验与污染），
+以及\kw{指标方差有多大}（决定灵敏度）。
+A/B 的基本要求是分流随机且稳定：同一个单元在实验期内必须始终落在同一组，
+实现方式是哈希（见 \cref{eq:bucket-hash}），并且\kw{分流点在业务逻辑之前}，
+不能「先看用户符合什么条件再分流」，否则会引入选择偏差。
+
+两组转化率比较所需样本量（每组，双侧检验，无连续性校正）的标准式是：
+
+\begin{equation}
+n_{\text{每组}} = \frac{\left( z_{1-\alpha/2}\sqrt{2\bar p (1-\bar p)}
++ z_{1-\beta}\sqrt{p_t(1-p_t)+p_c(1-p_c)} \right)^{2}}{(p_t-p_c)^{2}} ,
+\qquad \bar p = \frac{p_t + p_c}{2} .
+\label{eq:growth-samplesize}
+\end{equation}
+
+反过来，给定流量预算 $n$，能测出的最小绝对提升
+（\term{最小可检测效应}{Minimum Detectable Effect, MDE}）近似为：
+
+\begin{equation}
+\delta_{\min} \;\approx\; (z_{1-\alpha/2} + z_{1-\beta})
+\sqrt{\frac{p_t(1-p_t)+p_c(1-p_c)}{n}} .
+\label{eq:growth-mde}
+\end{equation}
+
+用 \cref{eq:growth-samplesize} 做示范量级计算：基线 $\CVR$ 为 3.0\%、
+$\alpha = 0.05$、功效 80\%，则相对提升 5\%（绝对 0.15 个百分点）需要每组约 7--8 万用户；
+相对提升 20\% 只需每组约 5 千用户左右；两者相差十几倍。
+这解释了实务中最常见的矛盾：\kw{业务想要的提升幅度与流量能测出的幅度不匹配}。
+当流量不足时，正确的应对有三个：
+(1) 改用方差更小的指标（例如用「人均订单数」而不是「是否有订单」）；
+(2) 用 CUPED 降低方差（见 \cref{eq:growth-cuped}）；
+(3) 承认只能测大效应，把资源集中到「有理由相信是大效应」的改动上。
+
+本仓库配套脚本 \code{code/ab\_test\_planner.py} 就是为这三件事服务的：
+它实现了双侧两比例样本量公式、给定流量反解 MDE、以及 CUPED 的最优系数与方差缩减比例；
+脚本本身还会打印一张「相对提升到样本量」的对照表，
+以及不同日活规模下 14 天实验能测出的 MDE。
+典型用法如下：
+
+\begin{lstlisting}[style=growthnoline, language=Python, caption={调用 ab\_test\_planner.py 估算样本量、MDE 与 CUPED 收益}]
+from ab_test_planner import sample_size_per_arm, mde, cuped_variance_reduction
+
+# baseline CVR 3.0%, target 3.3% (relative lift +10%), alpha=0.05, power=0.80
+n = sample_size_per_arm(0.030, 0.033)
+print("n per arm:", round(n))
+
+# given 20k users per arm for 14 days, what is the smallest lift we can detect?
+print("MDE:", round(mde(0.030, 20_000), 5))
+
+# CUPED: if corr(pre-period metric, metric) = 0.7, how much variance do we save?
+theta, reduction = cuped_variance_reduction(var_y=1.0, var_x=1.0, cov_xy=0.7)
+print("theta:", round(theta, 3), "variance reduction:", round(reduction, 3))
+# -> variance reduction about 0.51, i.e. effective sample x2.0
+\end{lstlisting}
+
+\begin{formulacard}[样本量的三个速算记忆点]
+(1) $\alpha = 0.05$、功效 80\% 时，$z$ 部分约为 $(1.96 + 0.84)^{2} \approx 7.85$；
+(2) 对均值型指标，$n_{\text{每组}} \approx 16\,\sigma^{2}/\delta^{2}$，
+相对效应 $\delta/\mu$ 越小，样本按平方增长；
+(3) 转化率在 3\% 附近时，相对提升 10\% 大约需要每组 5--8 万用户
+（示范量级，随基线变化很大），这意味着多数中小站点\kw{只能靠 CUPED、
+更长周期或更大的效应量来获得统计功效}。
+\end{formulacard}
+
+\subsection{显著性与置信区间}
+
+「显著」只说明「在零假设下观测到这么大差异的概率很小」，
+它不说明效应有多大、也不说明效应是真的。
+决策必须看三件事：\kw{效应量}（相对提升）、\kw{置信区间}（最坏情况下有多少提升）、
+\kw{业务意义}（提升 0.2\% 是否值得上线的复杂度）。
+
+相对提升的置信区间可用 delta 方法近似：
+
+\begin{equation}
+\widehat{\text{lift}} = \frac{\hat p_t - \hat p_c}{\hat p_c},
+\qquad
+\widehat{\Var}\!\left(\widehat{\text{lift}}\right) \approx
+\frac{1}{\hat p_c^{2}}\left[
+\frac{\hat p_t(1-\hat p_t)}{n_t}
++ \frac{\hat p_t^{2}}{\hat p_c^{2}}\cdot\frac{\hat p_c(1-\hat p_c)}{n_c}
+\right] .
+\label{eq:growth-lift-ci}
+\end{equation}
+
+\cite{ioannidis2005why} 关于「为什么多数已发表的研究结论是错的」的论证，
+在增长实验里有一个非常具体的对应版本：
+\kw{当效应量很小、样本量刚好够显著、且研究者有自由度选择指标与分群时，
+被报告出来的显著性有相当大的比例是假阳性}。
+增长实验里「研究者自由度」尤其大——指标几十个、分群几十个、
+时间窗口可以调，只要不预先注册主指标，总能找到「显著」的那一个。
+因此预先注册主指标与护栏指标不是一个学术规范，而是工程必需。
+
+\subsection{常见陷阱：偷看、多重比较、污染与 SRM}
+
+\textbf{陷阱一：偷看数据（Peeking）。}
+每天看 p 值，一旦小于 0.05 就停止实验。
+在零效应下这样做，\kw{实际的假阳性率会远高于 5\%}——
+直觉上的量级是：若连续观察 10 次并在任一次显著时停止，
+假阳性率可以轻松超过 20\%，在某些相关结构下甚至接近 30\%。
+正确的三种做法：
+(1) 固定样本量，样本不满不看主指标（可以看护栏做安全监控）；
+(2) 使用组序贯设计，用 alpha spending 分配各次观察的显著性预算；
+(3) 使用序贯检验框架，它给出以时间为条件的有效推断。
+
+\textbf{陷阱二：多重比较（Multiple Comparisons）。}
+同时看 20 个指标，至少一个「显著」的概率约为 $1 - 0.95^{20} \approx 64\%$。
+对策按保守程度排序：Bonferroni 阈值 $\alpha/m$、
+Holm 逐步法、Benjamini--Hochberg 控制错误发现率。
+但在增长实务里\kw{最有效的对策是流程而不是统计}：
+预先指定一个主指标（决定是否上线），其余指标只作诊断（决定怎么优化），
+并在做分群分析时明确标注「这是探索性分析，需二次实验确认」。
+
+\textbf{陷阱三：分流污染（Contamination）。}
+三个典型来源：\kw{跨设备}（同一人在手机上看到 A 版、在电脑上看到 B 版）、
+\kw{社交传播}（用户把 B 版链接发给了对照组的朋友）、
+\kw{共享资源}（两组共享同一库存、同一预算、同一客服人力，
+A 组的成功会挤占 B 组的资源，导致效应被低估）。
+对策分别是：用账号级 ID 而不是设备级分流；
+在实验期内对裂变类改动保持谨慎，或使用聚类随机化；
+对共享资源类实验，必须使用\kw{地理或时间上的分组}，而不是用户级分流。
+
+\textbf{陷阱四：样本比例不匹配（SRM）。}
+观察到的各组样本量与分流比例不符，说明分流或日志有问题。
+用卡方检验：
+
+\begin{equation}
+\chi^{2} = \sum_{g=1}^{G} \frac{(O_g - N p_g)^{2}}{N p_g} \sim \chi^{2}_{G-1},
+\label{eq:growth-srm}
+\end{equation}
+
+其中 $O_g$ 是第 $g$ 组实际样本数、$N$ 是总样本数、$p_g$ 是设计分流比例。
+\kw{SRM 的判定阈值要比常规统计检验严得多}：
+业界经验（见 \cite{kohavi2020trustworthy}）是 p 值小于 0.001 就直接判定实验无效，
+先排查 bug 再看效果指标。因为分流 bug 会让所有指标同时漂移，
+此时的「显著」更可能是 bug 的表达。
+SRM 的常见成因：分流哈希在不同服务上实现不一致（一个有加盐一个没加）、
+日志上报有丢失且丢失与分组相关（例如某个版本的上报更晚导致被截断）、
+实验配置在中途被修改。
+
+\begin{toolbox}[一次增长 A/B 实验的 12 步检查表]
+\begin{enumerate}
+  \item 写出可证伪假设：观察、机制、动作、预期量级、代价与止损条件。
+  \item 指定\kw{一个主指标}与 3--5 个护栏指标，其余指标标注为诊断。
+  \item 选择实验单元（用户、设备、会话或地理），并说明为什么它不影响其他实验。
+  \item 检查分层归属：本实验所在的层内是否与其他实验互斥？
+  \item 用 \cref{eq:growth-samplesize} 计算样本量与周期，周期必须是完整周（不少于 7 天）。
+  \item 先跑 A/A 或复用平台基线，确认无 SRM、无指标异常。
+  \item 校验分流稳定性：同一用户标识跨天是否落在同一桶。
+  \item 确认实验组与对照组的埋点、日志、数仓链路完全一致（不能只给实验组加新埋点）。
+  \item 固定停止条件：达到预定样本量，或使用序贯与组序贯方案；
+        期间只看护栏指标做安全监控，不看主指标 p 值。
+  \item 分析顺序：先护栏，再主指标，再分群（分群需做多重比较校正并标注为探索性）。
+  \item 检查新奇效应与长期效应：对比第 1 周与第 2 周的效应，
+        必要时保留 holdback 继续观察。
+  \item 无论成败，写入实验档案；失败也要写清「排除了什么假设、MDE 是多少」。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{CUPED：用实验前的数据换灵敏度}
+
+\term{CUPED}{Controlled-experiment Using Pre-Experiment Data} 的核心思想非常朴素：
+如果用户在实验前的行为能在很大程度上预测实验期的行为，
+那么这部分「可预测的差异」就不是实验效应，而是噪声，可以被消掉。
+做法是用实验前的同一指标 $X$ 对实验期指标 $Y$ 做中心化回归调整：
+
+\begin{equation}
+Y^{cv} = Y - \theta\,(X - \E[X]),
+\qquad
+\theta = \frac{\Cov(Y, X)}{\Var(X)},
+\qquad
+\frac{\Var(Y^{cv})}{\Var(Y)} = 1 - \rho_{YX}^{2},
+\qquad
+n_{\text{等效}} = \frac{n}{1-\rho_{YX}^{2}} .
+\label{eq:growth-cuped}
+\end{equation}
+
+这个式子有三个必须记住的推论：
+
+\begin{enumerate}
+  \item \kw{收益只取决于相关系数}。$\rho = 0.7$ 时方差降 51\%，
+        等效样本翻倍（$1/0.49 \approx 2.04$）；
+        $\rho = 0.5$ 时降 25\%，等效样本增加 33\%；
+        $\rho = 0.2$ 时只降 4\%，基本无感。
+  \item \kw{$X$ 必须在分流之前确定，且不能受实验影响}。
+        用实验期内或实验后的数据做 $X$ 会引入偏差甚至直接抹掉真实效应。
+        正确用法是「实验前 1--4 周的同一指标」或「与指标强相关且不受实验影响的协变量」
+        （例如实验前的活跃天数、历史客单价分层）。
+  \item \kw{$\theta$ 必须用实验前数据估计}（或使用样本内交叉拟合），
+        不能用实验期数据估计——后者会利用实验效应本身，
+        造成「方差降低」的假象。工程上通常用全部实验前历史离线估计 $\theta$，
+        并在实验开始时冻结。
+\end{enumerate}
+
+CUPED 不是唯一手段。工程上常见的方差缩减组合是：
+CUPED 加分层的随机化（按实验前活跃度分层）、加指标变换
+（对长尾指标取对数或做缩尾处理）、加更长的观察窗口。
+它们可以叠加，但\kw{每一层都要检查是否引入偏差}。
+\cref{ch:receng} 中已经从实验平台的角度讲过 CUPED 的实现位置与风险，
+本节要强调的是它的组织前提：\kw{必须有可信的实验前数据}，
+因此「实验前的埋点与数据链路」本身也是实验平台的一部分投资。
+
+\subsection{不能做 A/B 时：准实验方法}
+
+有些决策无法做用户级 A/B：预算分配（花钱的量级无法只给一半用户）、
+定价（价格不一致会引发投诉）、品牌广告（无法只让一半人看不见）、
+算法大改（可能影响生态）。这时只能使用\term{准实验方法}{Quasi-Experiment}。
+所有准实验方法的核心都是\kw{用一个「反事实构造」替代随机对照}，
+因此它们的可信度取决于识别假设是否成立，而不是数据量有多大。
+
+最常用的是\term{双重差分}{Difference-in-Differences, DID}：
+找一组未受干预的对照区域，比较干预组与对照组在干预前后的变化之差：
+
+\begin{equation}
+\hat\tau_{\text{DID}} = \left( \bar Y^{\text{post}}_{T} - \bar Y^{\text{pre}}_{T} \right)
+- \left( \bar Y^{\text{post}}_{C} - \bar Y^{\text{pre}}_{C} \right) .
+\label{eq:growth-did}
+\end{equation}
+
+DID 的关键假设是\kw{平行趋势}：如果没有干预，干预组与对照组的指标会沿着平行路径变化。
+这个假设不可直接检验，但可以做两件事来增加信心：
+(1) 检查干预前的多期数据是否平行（安慰剂检验）；
+(2) 用「合成控制」构造一个更可比的对照。
+
+\term{合成控制}{Synthetic Control} 的做法是：用多个未干预区域加权组合成
+一个「合成干预区域」，使其在干预前的关键特征与干预区域尽可能接近：
+
+\begin{equation}
+\min_{w \in \R^{J}} \norm{X_1 - X_0 w}^{2}
+\qquad \text{s.t.} \qquad w_j \ge 0,\; \sum_{j=1}^{J} w_j = 1 ,
+\label{eq:growth-synth}
+\end{equation}
+
+其中 $X_1$ 是干预区域预处理期的特征向量，$X_0$ 是 $J$ 个候选对照区域的特征矩阵，
+$w$ 是权重。权重约束保证合成对照是「凸组合」，避免外推。
+识别假设是「干预后的合成对照能代表干预区域的反事实路径」，
+它比 DID 的平行趋势假设更弱，但代价是\kw{依赖预处理期的拟合质量，
+且当干预区域的特征超出所有候选区域张成的范围时不可靠}。
+
+另外两种常用方法：
+\term{中断时间序列}{Interrupted Time Series, ITS}——
+用干预前的趋势外推做反事实，适合有清晰干预时点且趋势稳定的场景，
+主要风险是混淆事件（同期还有其他变化）；
+\term{断点回归}{Regression Discontinuity, RD}——
+利用某个阈值附近的近似随机性（例如「满 199 免运费」这条线附近的订单），
+优点是识别假设最接近实验，缺点是只能估计阈值附近的局部效应，
+不能外推到全量。
+
+\begin{table}[htbp]
+\centering
+\caption{准实验方法的适用条件与代价}
+\label{tab:growth-quasi}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.4cm} L{3.2cm} Y}
+\toprule
+\tabhead{方法} & \tabhead{核心识别假设} & \tabhead{适用场景} & \tabhead{主要风险与代价} \\
+\midrule
+地理对照 & 两地区在无干预下指标差异稳定 & 预算、品牌、无法用户级分流的改动 & 地区异质性、跨区溢出（物流共享、人群流动） \\
+\addlinespace
+双重差分 & 平行趋势 & 有明确干预时点与可用对照区域 & 平行趋势被破坏（同期政策、季节错位） \\
+\addlinespace
+合成控制 & 合成对照能代表反事实路径 & 单一干预区域、多个候选对照 & 权重不稳定、需要长预处理期、无直接显著性判定 \\
+\addlinespace
+中断时间序列 & 干预前趋势可外推且无同期混淆 & 有清晰时点的政策或产品切换 & 同期事件混淆，趋势本身可能已被干预影响 \\
+\addlinespace
+断点回归 & 阈值附近近似随机 & 满减门槛、评分门槛、价格分档 & 只估计局部效应；人群可能在阈值附近操纵行为 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[无法做 A/B 时的选择清单]
+按顺序问五个问题：
+\begin{enumerate}
+  \item \textbf{能不能制造随机或近似随机？} 如果能（哪怕只在部分流量上），
+        优先做随机实验；随机化是唯一不需要识别假设的方法。
+  \item \textbf{有没有清晰的干预时点？} 有则考虑中断时间序列；
+        注意排查同期发生的其他变化。
+  \item \textbf{有没有多个可比的对照单元？} 有则考虑双重差分或合成控制；
+        先做干预前的平行趋势检验。
+  \item \textbf{有没有阈值或门槛？} 有则考虑断点回归；先检查阈值附近是否有操纵行为
+        （例如用户拆单以刚好跨过满减线）。
+  \item \textbf{什么都不成立时怎么办？} 那就\kw{承认无法测量}，
+        只做方向性判断并明确标注不确定性；
+        绝不能用「后台回报率涨了」冒充因果证据。
+\end{enumerate}
+报告准实验结论时必须同时给出三样东西：方法、识别假设、稳健性检验
+（换对照区域、换窗口、做安慰剂检验的结果是否一致）。
+\end{toolbox}
+
+\section{单位经济模型：LTV、CAC 与回本周期}
+
+\subsection{LTV：分群、留存曲线与毛利口径}
+
+\term{用户生命周期价值}{Lifetime Value, LTV} 是把「一个用户未来会贡献多少」折现到今天。
+最一般的形式是对每期贡献求和：
+
+\begin{equation}
+\LTV = \sum_{t=0}^{\infty} \frac{m_t \cdot r_t}{(1+d)^{t}} ,
+\label{eq:growth-ltv-sum}
+\end{equation}
+
+其中 $r_t$ 是第 $t$ 期仍然活跃（或仍在复购）的概率，$m_t$ 是活跃用户的当期贡献，
+$d$ 是折现率。这个式子在实务中必须配合三条纪律使用：
+
+\begin{enumerate}
+  \item \kw{必须分群计算}。「全体用户的 $\LTV$」是一个幻觉指标，
+        因为它混合了不同来源、不同品类的用户，而这些子群体的留存曲线差异极大。
+        最小可用的分群维度是：首单渠道（自然、付费、私域）、首单品类、
+        首单价格带、注册月（用于观察趋势）。
+  \item \kw{必须区分收入 LTV 与毛利 LTV}。收入 $\LTV$ 用 $\GMV$ 计算，
+        毛利 $\LTV$ 用「$\GMV$ 减货值、减物流、减关税、减佣金、减支付手续费、减退货损耗」计算。
+        跨境电商里两者的差距可以达到 2--4 倍（示范量级，随品类差异极大），
+        用收入 $\LTV$ 算 $\LTV$/$\CAC$ 会得到系统性乐观的结论。
+  \item \kw{$r_t$ 必须用拟合而不是直接外推}。观察期通常只有 90--180 天，
+        而 $\LTV$ 需要对无限期求和，因此必须拟合一条留存曲线。
+        最常用的两种形式是幂律与指数加长期留存底：
+\end{enumerate}
+
+\begin{equation}
+\text{幂律：} \; r_t = a\,t^{-b},
+\qquad
+\text{指数加底：} \; r_t = r_\infty + (1-r_\infty) e^{-\lambda t} .
+\label{eq:growth-retention-fit}
+\end{equation}
+
+指数加底形式有一个非常有用的闭式解（取 $m_t = m$ 为常数）：
+
+\begin{equation}
+\LTV = m\left[ r_\infty \frac{1+d}{d}
++ (1-r_\infty)\frac{1+d}{1+d-e^{-\lambda}} \right] .
+\label{eq:growth-ltv-closed}
+\end{equation}
+
+幂律形式更贴近真实的长尾留存（尾部衰减慢），但在 $t \to \infty$ 时若 $b \le 1$ 则求和发散，
+因此实务中必须在某个截断期（例如 24 或 36 个月）停止求和，
+并明确写出「这是 24 个月 $\LTV$，不是终身 $\LTV$」。
+这一点在汇报时极其重要：\kw{不同截断期的 $\LTV$ 不可比较}，
+一个团队用 12 个月、另一个用 36 个月，两者的 $\LTV$/$\CAC$ 可以差一倍以上。
+
+\begin{pitfall}[三个让 LTV 系统性偏高的错误]
+\textbf{错误一：用收入口径混算毛利口径。}
+现象：报表显示 $\LTV$/$\CAC$ 为 3.2，看起来很健康；
+换成毛利口径后只有 1.1，实际处于亏损边缘。
+根因：忘记扣除货值、物流、平台佣金与退货损耗。
+排查：把 $\LTV$ 的分子逐项列出，与财务的毛利表逐项对齐。
+
+\textbf{错误二：用「全体用户」的留存曲线外推。}
+现象：$\LTV$ 看起来很稳，但新客的 $\LTV$ 在持续下降。
+根因：总体留存被高价值老用户与自然流量用户拉高，
+掩盖了新买量人群质量下滑的事实。
+排查：按「首单月份」分群，看每个群体的 30 日、60 日、90 日留存与累计贡献趋势。
+
+\textbf{错误三：忽略退货与退款的时间分布。}
+现象：$\LTV$ 在首月被高估，之后被迫向下修正。
+根因：跨境退货可能在 30--60 天后才发生，早期数据不含这部分损耗。
+排查：用「净收入 = 实付减退款减拒付」的口径，
+并给最近 60 天的分群打上「未完整」标记，禁止用于外推。
+\end{pitfall}
+
+\subsection{CAC：混合口径与付费口径}
+
+\term{获客成本}{Customer Acquisition Cost, CAC} 的口径分歧比 $\LTV$ 更大，
+因为它取决于「算哪些费用」与「算哪些新客」：
+
+\begin{equation}
+\CAC_{\text{混合}} = \frac{\text{总营销费用}}{\text{全部新客数}},
+\qquad
+\CAC_{\text{付费}} = \frac{\text{付费渠道费用}}{\text{付费渠道新客数}} ,
+\label{eq:growth-cac}
+\end{equation}
+
+两者会给出相反的结论，而且这种相反是有规律可循的。设付费渠道新客数为 $P$、
+自然与私域新客数为 $O$，付费费用为 $S$，
+并假设营销固定成本（团队、工具、内容制作）为 $F$，则
+
+\begin{equation}
+\CAC_{\text{混合}} = \frac{S + F}{P + O},
+\qquad
+\CAC_{\text{付费}} = \frac{S}{P} .
+\label{eq:growth-cac-blend}
+\end{equation}
+
+当 $O$ 很大时（自然流量占比高），混合 $\CAC$ 会明显低于付费 $\CAC$，
+此时\kw{用混合 $\CAC$ 判断「该不该加投放预算」是错的}：
+因为增加预算主要增加的是 $P$（付费新客），而不是 $O$，
+新增流量的真实成本应该用付费 $\CAC$（更准确地说，用\kw{边际 CAC}——
+最后一块钱带来的新客的边际成本）。
+反过来，当 $O$ 很小时，两者接近，混合 $\CAC$ 也可以用作粗略判断。
+
+边际 $\CAC$ 是最容易被忽略、却最能解释「为什么加到某个点就不赚钱了」的概念：
+付费流量存在\term{边际成本递增}{Diminishing Returns}——
+最便宜的人群先被投到，随着预算扩大，平台会把你推向转化率更低的人群，
+于是边际 $\CAC$ 上升。因此在预算决策中应该比较的是：
+
+\begin{equation}
+\text{扩张条件：} \quad \frac{\Delta \text{毛利} \LTV}{\Delta \text{新客}} > \CAC_{\text{边际}} .
+\label{eq:growth-marginal-cac}
+\end{equation}
+
+这条式子解释了为什么「平均 $\LTV$/$\CAC$ 等于 3 却不能再加预算」是可能的：
+平均值被早期便宜的流量拉高，而边际已经在盈亏线附近。
+
+\subsection{回本周期与现金流}
+
+\term{回本周期}{Payback Period} 是累计毛利追平 $\CAC$ 所需的时间：
+
+\begin{equation}
+T_{\text{回本}} = \min\left\{ t : \sum_{k=1}^{t} m_k \ge \CAC \right\} .
+\label{eq:growth-payback}
+\end{equation}
+
+它比 $\LTV$/$\CAC$ 更适合做月度决策指标，原因有三条：
+(1) \kw{它对留存曲线的尾部不敏感}——因为回本通常发生在前期，
+即使尾部拟合有误差也不影响回本判断；
+(2) \kw{它直接对应现金流}——回本周期 3 个月意味着每 3 个月要把一笔钱垫进去，
+回本 18 个月意味着要准备 6 倍的现金去支持同样的增长；
+(3) \kw{它是可执行的门槛}——团队可以直接说「所有新渠道必须做到 6 个月内回本」，
+而「$\LTV$/$\CAC$ 大于 3」在 $\LTV$ 口径不透明时无法执行。
+
+示范量级：某跨境独立站毛利率 40\%，客单价 60 美元，
+首单毛利约 24 美元；若付费 $\CAC$ 为 30 美元，则首单即亏损 6 美元。
+假设复购用户的月毛利贡献为 6 美元、月留存率 60\%，
+则累计毛利大约在 3--4 个月追平 $\CAC$，回本周期约 3--4 个月，
+属于可以扩张的区间（假定现金能支撑）。
+如果把毛利率估成 60\%（把佣金与退货忘掉），首单毛利就会变成 36 美元，
+看起来「首单就盈利」，从而做出过度投放的决定——
+这就是口径错误如何直接变成现金损失的一个典型路径。
+
+\subsection{不同 LTV/CAC 目标下的投放策略}
+
+$\LTV$/$\CAC$ 是常用但被滥用的指标。它有三个必须说明的前提：
+\kw{口径}（毛利还是收入）、\kw{周期}（12 个月还是 36 个月）、\kw{分群}（全体还是渠道）。
+只有在三者都明确时，它才有可比性。
+
+\begin{table}[htbp]
+\centering
+\caption{以毛利 LTV 与边际 CAC 为口径的投放策略矩阵（阈值为经验量级，非定律）}
+\label{tab:growth-ltvcac}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{3.4cm} L{3.2cm} Y}
+\toprule
+\tabhead{毛利 $\LTV$/$\CAC$} & \tabhead{判读} & \tabhead{建议动作} & \tabhead{注意事项} \\
+\midrule
+小于 1 & 每获取一个用户就亏一笔钱，扩张只会加速亏损 & 立即收缩；先修留存与转化，或提高客单价 & 唯一例外是有明确战略价值的卡位，且必须写成有期限、有金额上限的专项 \\
+\addlinespace
+1 到 2 & 微利或盈亏平衡，现金压力大 & 小步测试、严格控制边际 $\CAC$；优先做复购与客单价 & 这一区间最容易被「平均 $\LTV$ 很高」误导，必须看边际 \\
+\addlinespace
+2 到 3 & 健康区间，可以规模化 & 按回本周期批复预算；优先扩张边际 $\CAC$ 最低的渠道 & 需监控新客占比与自然流量是否被侵蚀 \\
+\addlinespace
+大于 3 & 大概率存在未开发的增长空间 & 加大投入直到边际 $\CAC$ 接近盈亏线 & 需先确认口径没有高估 $\LTV$；也要检查渠道饱和与竞争者反应 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+增量视角下的投放评估指标是\term{增量回报}{Incremental ROAS, iROAS}：
+
+\begin{equation}
+\iROAS = \frac{\Delta \text{毛利}}{\text{广告花费}},
+\qquad
+\iROAS^{*} = \frac{1}{\text{毛利率}} ,
+\label{eq:growth-iroas}
+\end{equation}
+
+其中 $\iROAS^{*}$ 是盈亏平衡点：毛利率 40\% 时，$\iROAS$ 必须大于 2.5 才是在赚钱。
+这个门槛经常被忽略：很多人用 1 作为盈亏线，把「$\iROAS$ 等于 1.5」
+当成盈利，而实际上在 40\% 毛利率下它是明显亏损的。
+\kw{ROAS 与毛利率必须一起看}，这也是 \cref{ch:ad} 与 \cref{ch:admodel} 反复强调的换算关系。
+
+\begin{casebox}[案例：把 LTV 口径从收入改成毛利之后（示范案例）]
+这是一个综合公开方法论构造的示范复盘，数字为便于说明而设定。
+
+\textbf{背景}：某家居品类的独立站，客单价约 120 美元，付费 $\CAC$ 约 55 美元。
+数据团队给的收入 $\LTV$（36 个月）为 210 美元，
+因此 $\LTV$/$\CAC$ 约为 3.8，团队按这个数字连续 9 个月把预算提高了 4 倍。
+
+\textbf{问题出现}：第 8 个月开始，现金周转紧张。
+财务发现「营收增长 3 倍、经营现金流几乎没变」。
+
+\textbf{口径重算}：把收入 $\LTV$ 换成毛利 $\LTV$：
+扣除货值（约 35\%）、国际物流（约 12\%）、平台与支付费用（约 6\%）、
+退货与拒付损耗（约 8\%），毛利率约 39\%；
+再考虑跨境退货主要发生在 30--60 天，36 个月的毛利 $\LTV$ 约为
+$210 \times 39\% \approx 82$ 美元。
+修正后的 $\LTV$/$\CAC$ 约为 1.5，属于「微利、现金压力大」的区间，
+与财务的现金流观察完全一致。
+
+\textbf{动作}：
+(1) 停止扩张，把预算维持在当前水平；
+(2) 按渠道分别计算边际 $\CAC$ 与回本周期，砍掉边际 $\CAC$ 超过 70 美元的部分；
+(3) 把主推品类转向连带率高、退货率低的组合，提高首单毛利；
+(4) 建立「毛利 $\LTV$ 与回本周期」的双月度看板，收入口径只作为参考。
+
+\textbf{结论}：同一个业务，同一批数据，只因为把收入口径换成毛利口径，
+战略结论就从「加速扩张」变成了「收缩并修单位经济」。
+\kw{单位经济模型的口径错误，是增长里代价最高的一类技术错误}——
+因为它不会报错、不会告警，只会让公司安静地亏损。
+\end{casebox}
+
+\section{实验的组织：评审、仓库与失败文化}
+
+\subsection{实验评审机制}
+
+实验评审的目的不是审批，而是\kw{在花掉流量之前排除设计缺陷}。
+一个高效的一页纸评审模板包含八个字段，缺任何一个都说明实验还不该开始。
+
+\begin{toolbox}[一页纸实验文档模板]
+\begin{enumerate}
+  \item \textbf{背景与观察}：哪份数据、哪个时间段、观察到了什么具体现象（带数字）。
+  \item \textbf{假设}：机制解释加可证伪的预期（预期要带量级，例如「提升 0.3 个百分点」）。
+  \item \textbf{变更内容}：改什么、不改什么；工程上如何实现灰度与回滚。
+  \item \textbf{主指标}：唯一一个决定是否上线的指标，及其口径与数据来源。
+  \item \textbf{护栏指标}：3--5 个，必须与主指标不同向，且尽可能来自不同数据源。
+  \item \textbf{设计与样本}：实验单元、分流比例、分层归属、所需样本量、周期、
+        MDE、是否使用 CUPED。
+  \item \textbf{停止条件}：固定样本量或序贯方案；中途终止的唯一合法理由是护栏严重恶化。
+  \item \textbf{决策规则}：主指标达到什么水平上线、什么水平回滚、
+        什么水平「不改动但保留学习」（例如中性结果但护栏改善）。
+\end{enumerate}
+评审会议只做三件事：质疑假设的机制是否成立、质疑样本量与 MDE 是否匹配预期、
+质疑护栏是否覆盖了这次改动最可能造成的伤害。
+\end{toolbox}
+
+\subsection{实验仓库与知识沉淀}
+
+实验做完不归档，等于没做。一个可用的\term{实验档案}{Experiment Archive}
+必须是\kw{结构化的、可检索的、可统计的}，
+否则三年后没有任何人能从中得出「我们团队在什么类型的改动上命中率最高」这样的结论。
+
+\begin{table}[htbp]
+\centering
+\caption{实验档案的字段设计}
+\label{tab:growth-archive}
+\small
+\begin{tabularx}{\textwidth}{L{2.4cm} L{4.2cm} Y}
+\toprule
+\tabhead{字段组} & \tabhead{字段} & \tabhead{用途} \\
+\midrule
+身份 & 实验 ID、名称、发起人、所属层、开始与结束时间 & 唯一索引，便于回查与统计 \\
+\addlinespace
+假设 & 观察、机制、动作、预期量级、代价 & 用于事后判断「假设错在哪里」而不只是「结果对不对」 \\
+\addlinespace
+设计 & 单元、分流比例、样本量、MDE、周期、是否 CUPED & 用于复查统计功效；不显著的实验必须留下 MDE 才知道「是否白做」 \\
+\addlinespace
+结果 & 主指标点估计与置信区间、护栏指标、SRM p 值、分群探索结论 & 结论必须带区间与 SRM 判定，禁止只写「显著或不显著」 \\
+\addlinespace
+决策 & 上线、回滚或保留学习；上线后的实际长期表现 & 用于校准「实验期效应」与「长期效应」的差距 \\
+\addlinespace
+失败原因 & 分类：假设错误、实现错误、测量错误、流量不足、被其他实验干扰 & 失败库的核心字段，用于提升团队假设命中率 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\term{失败库}{Failure Library} 是实验档案的一个特殊视图，
+它只收录「失败的实验」，但要求写清失败的类型。
+它的价值可以用一个具体问题来衡量：
+\kw{新同学入职后，能不能在失败库里查到「我们试过哪些方向、为什么不行」？}
+如果不能，团队就会持续提出已经被证伪过的假设。
+
+失败分类的一个实用体系（示范）：
+(1) \textbf{假设错误}——机制想错了，改动没产生预期行为（最常见）；
+(2) \textbf{实现错误}——改了但没生效、只对部分用户生效、或引入了其他变化；
+(3) \textbf{测量错误}——埋点或口径有问题，结论不可用；
+(4) \textbf{流量不足}——效应小于 MDE，无法判定；
+(5) \textbf{干扰}——被其他实验、季节、外部事件污染。
+把失败分到这五类，团队才能知道该改进哪一环：
+如果 60\% 的失败属于「实现错误」，问题在工程流程而不在创意。
+
+\subsection{实验文化与团队协作}
+
+实验文化最难的部分不是技术，而是\kw{对失败的处理方式}。
+有效实验文化的三条规则：
+
+\begin{enumerate}
+  \item \textbf{不惩罚「设计良好的失败」，惩罚「设计不良的实验」。}
+        前者是必要的探索成本，后者才是浪费。
+        区分标准是前者有清晰假设、足够样本量、完整记录。
+  \item \textbf{失败必须公开。} 私下说「这个方向试过不行」等于没试过；
+        公开复盘让整个团队的排除条件同步更新。
+  \item \textbf{复盘的焦点是判断过程，而不是结果。}
+        一个基于错误推理却碰巧成功的实验，比一个基于正确推理却失败的实验更危险，
+        因为它会强化错误的推理方式。
+\end{enumerate}
+
+增长团队的协作模式通常是\kw{跨职能小队}：增长产品（提出并实现改动）、
+数据与分析（口径、实验设计、归因与对账）、投放（渠道执行与预算）、
+内容（素材与文案）、工程（平台与链路）。
+最有效的节奏是固定周节拍：
+周一假设评审会（决定本周跑什么）、周三中期检查（只看护栏与实现是否正常）、
+周五复盘会（结论入库）。节拍固定后，$T$ 会自然缩短，
+而根据 \cref{eq:growth-loop}，$T$ 的缩短是复利的主要来源。
+
+\begin{table}[htbp]
+\centering
+\caption{增长团队的角色分工与协作接口（示范）}
+\label{tab:growth-team}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{3.4cm} L{3.0cm} Y}
+\toprule
+\tabhead{角色} & \tabhead{主要产出} & \tabhead{关键接口} & \tabhead{最常见的失效模式} \\
+\midrule
+增长产品 & 假设、变更实现、实验档案 & 向数据要口径与样本量；向工程要灰度能力 & 把「做功能」当成目标，实验只用来给已决定的方案背书 \\
+\addlinespace
+数据与分析 & 指标字典、口径、实验设计与分析、归因对账 & 向业务解释口径；向工程提埋点需求 & 变成「取数机器」，不参与假设设计，事后被动解释 \\
+\addlinespace
+投放 & 渠道执行、预算、素材测试、边际 $\CAC$ 监控 & 与数据对齐增量口径；与内容对齐素材节奏 & 只看平台后台回报，与站内口径长期不一致 \\
+\addlinespace
+内容 & 素材、文案、落地页内容、达人内容 & 与投放共享素材表现数据；与搜索团队共享选题 & 素材不做结构化标签，无法复用与归因 \\
+\addlinespace
+工程 & 事件契约、埋点 SDK、实验平台、数仓管道 & 与数据共建质量看板；与产品共建灰度能力 & 埋点只增不减，无契约与评审 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{一次「转化率提升 8\%」实验的完整档案}
+
+\begin{casebox}[案例：一次「结算页转化率提升 8\%」实验的完整档案（示范案例）]
+这是一个综合公开方法论构造的示范档案，数字为便于说明而设定，
+不代表任何具体公司的内部数据。
+
+\textbf{1. 观察}。近 30 天移动端数据：
+进入结算页后未点击支付的用户中，有 22\% 在结算页停留超过 20 秒后离开；
+分位分析显示首屏渲染时间 75 分位为 3.4 秒，而渲染时间小于 1.5 秒的用户
+加购到支付转化率为 62\%，大于 3 秒的用户为 41\%。
+
+\textbf{2. 假设}。我们相信结算页首屏体积过大（主要是优惠券列表与推荐模块）
+导致移动端渲染慢，从而提高了跳出。
+动作：把非首屏模块改为延迟加载，首屏体积降低约 40\%。
+预期：移动端加购到支付转化率提升 5--8 个百分点，
+整体 $\CVR$ 提升 0.3--0.5 个百分点。
+代价：前端 3 人日加埋点改造 1 人日；若两周内主指标无变化则回滚。
+
+\textbf{3. 设计}。实验单元为账号级用户（避免跨设备污染）；
+分流各半；归属「界面层」；预算所需样本量按基线 $\CVR$ 3.0\%、
+相对提升 10\% 计算，每组约 5.5 万用户，按日活倒推需要 12 天；
+周期取 14 天以覆盖两个完整周；使用 CUPED（协变量为实验前 14 天的人均会话数，
+$\rho \approx 0.35$，方差降约 12\%，等效样本增加约 14\%）。
+主指标：移动端加购到支付转化率。
+护栏：桌面端转化率、支付成功率、页面错误率、首单退款率、客服工单量。
+
+\textbf{4. 结果}。SRM 的 p 值 0.41，分流正常。
+主指标：移动端加购到支付转化率从 61.8\% 提升到 63.4\%，
+相对提升 2.6\%，95\% 置信区间约 1.1\% 到 4.1\%，显著。
+但整体 $\CVR$ 只提升 0.08 个百分点，未达预期的 0.3 个百分点，
+置信区间上界低于 0.2 个百分点。
+护栏全部正常，页面错误率无变化，支付成功率无变化。
+分群分析（标注为探索性）：低端机型收益更大（相对提升约 5\%），
+高端机型无显著变化；结论为「延迟加载确实提速，但收益集中在慢设备上」。
+
+\textbf{5. 复盘}。假设的机制方向正确，但量级高估了：
+团队把「慢设备提升 5 个百分点」当成了「全体提升 5 个百分点」，
+忽略了慢设备只占流量的一部分。
+这是\kw{从极端分群外推的错误}——观察来自「渲染大于 3 秒」这个小群体，
+但改动影响的是全量。
+记录进失败库的分类：\kw{假设错误（量级估计偏差）加观察样本的分群代表性问题}。
+
+\textbf{6. 后续动作}。
+(1) 全量上线（显著且护栏安全，长期收益为正）；
+(2) 立项第二个实验：针对低端机型做更激进的资源裁剪，预期相对提升 5\%；
+(3) 把「按机型与网络分群看性能类指标」写入性能改动实验的标准流程；
+(4) 更新假设模板，要求\kw{写明观察所在的子群占总体流量的比例}。
+
+\textbf{7. 这个档案的价值}。它留下了三样可复用的东西：
+一个「性能改动的收益上限」的经验量级、
+一条「主动检查分群代表性」的流程规则、
+以及一个可供后续性能类实验参照的护栏清单。
+这些都是模型与算法无法替代的组织资产。
+\end{casebox}
+
+\section{自动化与 AI 在增长中的应用}
+
+\subsection{自动化投放规则}
+
+\term{自动化规则}{Automated Rules} 是增长运营中最容易见效、也最容易失控的自动化形式。
+它的结构永远是三件套：\kw{触发条件、执行动作、护栏与回滚}。
+第三条最常被忽略，也是事故的来源。
+
+一条规则的期望收益可以写成一个简单的决策式：
+
+\begin{equation}
+\E[\Delta \text{利润}] = p_{\text{命中}} \cdot G_{\text{节省}}
+- (1-p_{\text{命中}}) \cdot C_{\text{误触发}} ,
+\label{eq:growth-rule}
+\end{equation}
+
+其中 $p_{\text{命中}}$ 是「触发确实对应需要动作的真实变化」的概率，
+$G_{\text{节省}}$ 是正确动作带来的节省或增量，
+$C_{\text{误触发}}$ 是错误动作的成本（频繁调价导致的学习期损失、
+过早关停导致的曝光损失等）。
+这个式子的实践含义是：\kw{越是高成本的误触发，触发条件就必须越稳健}。
+因此规则设计有三条硬要求：
+
+\begin{enumerate}
+  \item \textbf{用滑动窗口而不是单日值}。单日回报率的波动可能来自结算延迟、周末效应、
+        统计口径抖动；用 7 日滑窗（或同时满足「7 日均值越界」与「连续 3 天越界」）
+        可以大幅降低误触发。
+  \item \textbf{最小样本量门槛}。低于一定曝光或点击量的广告组不做自动决策，
+        否则会因随机波动被反复开关。
+  \item \textbf{动作幅度限制与冷却期}。
+        单次调价幅度设上限（例如正负 15\%），同一广告组的两次自动动作之间设冷却期
+        （例如 24--48 小时），避免与平台的出价学习期互相干扰。
+\end{enumerate}
+
+\begin{table}[htbp]
+\centering
+\caption{自动化投放规则示例（阈值均为示范量级，需按业务基线校准）}
+\label{tab:growth-rules}
+\small
+\begin{tabularx}{\textwidth}{L{2.6cm} L{3.1cm} L{2.7cm} Y}
+\toprule
+\tabhead{触发条件} & \tabhead{动作} & \tabhead{护栏} & \tabhead{为什么这样设计} \\
+\midrule
+7 日回报低于盈亏线七成，且花费超过阈值 & 预算下调 20\%，进入观察名单 & 冷却 48 小时；单日最多触发一次 & 用滑窗避免单日波动；冷却期避免与平台学习期冲突 \\
+\addlinespace
+7 日回报高于盈亏线 1.3 倍，且回本周期低于目标 & 预算上调 15\%，上限为原日预算的 1.5 倍 & 边际 $\CAC$ 超过阈值则停止上调 & 扩张必须看边际成本，不能只看平均值 \\
+\addlinespace
+素材频次超阈值且 7 日 $\CTR$ 低于同类均值两成 & 暂停该素材，标记为「疲劳」 & 同广告组至少保留 3 个在跑素材 & 依据 \code{code/funnel\_analysis.sql} 中的素材疲劳滑窗口径 \\
+\addlinespace
+支付成功率单日下降超过 3 个百分点 & 暂停投放并告警 & 需要人工确认后才恢复 & 支付链路问题会放大所有渠道的损失，优先止血 \\
+\addlinespace
+新客占比连续 7 日下降超过 5 个百分点 & 暂停缩减上层触点预算的规则 & 需要人工复核 & 防止自动化规则互相叠加，把上层投入一路压到零 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+本仓库配套脚本 \code{code/funnel\_analysis.sql} 提供了这类规则所需的五个基础查询，
+建议与自动化规则一起使用：
+第一段是\kw{全链路漏斗}（曝光到支付的条件聚合与逐层转化率），
+用于定位是哪一层出了问题，而不是只看最终回报；
+第二段是\kw{分渠道漏斗与单位经济}（渠道 UV 价值等于渠道净 $\GMV$ 除以渠道 UV），
+它比 $\ROAS$ 更能暴露「高客单低转化」的渠道；
+第三段是\kw{留存曲线}（按首单日分群计算次日、7 日、30 日留存），
+用于 \cref{eq:growth-ltv-closed} 的留存拟合与回本判断；
+第四段是\kw{三方差值对账}（平台后台、站内订单、花费并排比较，
+输出平台转化与站内订单的比值），正好对应 \cref{eq:growth-recon}；
+第五段是\kw{素材疲劳监测}（同一素材的频次与 7 日滑动 $\CTR$），
+可直接作为「素材疲劳」自动规则的触发源。
+把这五段查询接成每日任务并用看板打标，是「先修度量」的最低成本版本。
+
+\begin{pitfall}[自动化规则的正反馈与震荡]
+\textbf{现象}：某账户上线了 8 条自动规则后，广告组预算在两周内出现
+「下调、上调、再下调」的反复震荡，整体花费下降 18\%，转化下降 22\%。
+
+\textbf{根因}：三个问题叠加。
+(1) 两条规则的目标冲突：一条「回报低于阈值就降预算」，
+另一条「回本良好就加预算」，它们读的是不同窗口的同一指标，
+在波动期会同时触发；
+(2) 单日值触发导致噪声被当成信号；
+(3) 平台的出价学习期需要稳定的预算与转化量，
+频繁调整会让模型重新学习，转化率进一步下降，从而触发更多降预算动作
+——这就是\kw{正反馈失控}。
+
+\textbf{排查方法}：把每次自动动作的时间点与指标曲线画在一起，
+看动作是否在「指标的随机波动」上反复摆动；
+统计每条规则的触发次数与触发后的指标走向，
+如果触发后指标没有改善，说明规则只是在追随噪声。
+
+\textbf{修复}：统一到 7 日滑窗加最小样本量门槛加动作幅度上限加全局冷却期；
+给规则设置优先级与互斥关系（同一广告组同一时间只能有一条规则生效）；
+所有自动动作写入可回滚的日志，并保留一个 1\%--5\% 的\kw{不干预对照组}
+用于评估自动化本身的增量。
+\end{pitfall}
+
+\subsection{素材批量生成}
+
+素材是投放里唯一「可以工业化生产」的变量。批量生成的正确架构是
+\kw{结构化素材库加模板化生产加数据驱动筛选}：
+
+\begin{itemize}
+  \item \textbf{结构化标签}：每个素材至少标注
+        卖点、场景、受众、格式、开头前三秒类型、语言与地区。
+        没有标签的素材库就是一堆无法复用的文件。
+  \item \textbf{模板化生产}：把「脚本结构、视觉结构、文案变量」拆开，
+        用变量组合生成候选（例如 6 个开头类型乘 4 个卖点乘 3 个场景
+        等于 72 个候选）。生成环节的成本在快速下降，
+        瓶颈已经转移到\kw{筛选与迭代速度}。
+  \item \textbf{数据驱动筛选}：筛选不能用单一 $\CTR$，因为高 $\CTR$ 低 $\CVR$ 的素材会亏钱。
+        应该用「点击率乘转化率乘客单」的复合口径，
+        并同时监控频次与疲劳速度（见 \code{code/funnel\_analysis.sql} 第五段）。
+  \item \textbf{合规与真实性}：AI 生成的素材涉及真实性表述与平台政策
+        （例如对效果承诺、人物形象、比较性宣称的限制），
+        必须有人工审核环节，且\kw{具体政策以各平台官方最新文档为准}。
+        涉及版权素材、肖像与音乐授权时，需保留授权记录。
+\end{itemize}
+
+\subsection{智能出价}
+
+\term{智能出价}{Smart Bidding} 背后的机制是「平台替你把出价问题变成一个反馈控制问题」：
+你给出目标（目标 $\CPA$ 或目标 $\ROAS$）与预算，
+平台在每次竞价时预测转化概率与转化价值，并据此出价。
+从广告主视角，这件事的工程含义有三点：
+
+\begin{enumerate}
+  \item \textbf{目标设定必须与单位经济一致}。目标 $\CPA$ 应该来自
+        「首单毛利加合理预期复购毛利」的可承受上限，而不是竞争对手的数值。
+        目标设得太紧，系统会收缩到只投最便宜的人群，量起不来；
+        设得太松，会买到大量低质量流量。
+  \item \textbf{回传信号的质量决定上限}。转化回传缺失、延迟、口径不一致，
+        都会让算法学错。跨境场景特别要注意：
+        回传的转化是否含退款、是否含站内自归因流量、
+        是否用统一的币种与价值口径。
+        平台通常提供服务端转化回传方案（见 \cite{meta_advantage}，
+        具体能力与限制以官方最新文档为准）。
+  \item \textbf{不要频繁改目标和预算}。每次改动都会让系统重新进入学习期，
+        在实践中学习期常以「一周或若干次转化」为量级（随平台与转化量变化），
+        频繁操作会持续处在学习期，效果自然变差。
+\end{enumerate}
+
+一个简化的出价调节反馈律可以写成（仅用于理解机制，实际由平台实现）：
+
+\begin{equation}
+b_{t+1} = \mathrm{clip}\!\left(
+b_t \left( \frac{\CPA^{*}}{\widehat{\CPA}_t} \right)^{\kappa},\;
+b_{\min},\; b_{\max} \right),
+\label{eq:growth-bid-control}
+\end{equation}
+
+其中 $\CPA^{*}$ 是目标成本、$\widehat{\CPA}_t$ 是近期实际成本、
+$\kappa \in (0,1]$ 是调节强度（越大越激进）。
+这个式子的意义在于说明\kw{为什么短期波动不应该触发大幅调价}：
+如果 $\widehat{\CPA}_t$ 因为延迟回传而暂时偏高，
+激进调节会系统性地压低出价，等延迟转化回来时已经损失了曝光。
+
+\subsection{预测模型：LTV 预测、流失预警与 RFM 升级版}
+
+预测模型在增长中的三大应用，都遵循同一个模式：
+\kw{把「事后统计」变成「事前分配」}——
+预测值用于决定把预算、权益、触达资源投给谁。
+
+\textbf{(1) LTV 预测。} 目标是给每个新客一个 $\LTV$ 预测，
+用于出价（决定愿意为一个用户付多少钱）与分群运营。
+常用做法有三种，复杂度和适用阶段不同：
+(a) \kw{分群均值法}——按首单渠道、首单品类、首单价格带分组，用组均值作为预测。
+优点是简单、可解释、不需要模型；缺点是粒度粗。多数团队应该从这里开始。
+(b) \kw{回归或梯度提升模型}——特征包含首单信息、早期行为（首周访问次数、
+加购次数、客服交互）、渠道与地区；标签用 90 或 180 天的累计毛利。
+要注意\kw{标签窗口的期限截断}：不能用「已观察 30 天的用户」预测「180 天 $\LTV$」
+而不做校正，否则模型会系统性偏向早期表现好的用户。
+(c) \kw{生存与分位数模型}——预测的不是均值而是分布，
+因为投放决策关心的是「多少比例的用户能回本」，
+而均值会被少数高价值用户主导。
+分位数预测（例如预测中位数与 80 分位）比均值预测更适合做风险控制。
+
+\textbf{(2) 流失预警。} 本质是预测「用户在下一个窗口内不再活跃或不再复购的概率」。
+它与 \cref{ch:admodel} 中的延迟反馈问题共享同一套数学
+（生存分析与时间窗口），\cref{eq:survival} 给出的生存函数形式
+可以直接用于定义流失风险：
+风险越高，触达优先级越高，但要注意\kw{不要对即将自然复购的用户发券}
+（这会白送毛利）。正确做法是把触达对象限定为
+「高风险、高潜在价值、无自然复购迹象」的交集，
+并用 holdback 组测量触达的增量。
+
+\textbf{(3) RFM 升级版。} 经典 \term{RFM}{Recency, Frequency, Monetary}
+用三个维度给用户打分，优点是直观，缺点是三个维度都很粗、且与「未来价值」只是相关。
+升级方向有三个：
+(a) 用\kw{分位数标准化}替代人为分档，使打分在不同规模下可比；
+(b) 加入\kw{行为与预测维度}（最近 30 天的浏览加购序列、
+$\LTV$ 预测值、流失风险），把「过去买过多少」升级成「未来可能贡献多少」；
+(c) 用\kw{可解释的权重}而不是黑箱模型，因为 RFM 的主要用途是运营人的沟通语言。
+
+\begin{equation}
+\text{Score}(u) = w_R \tilde R_u + w_F \tilde F_u + w_M \tilde M_u ,
+\qquad
+\tilde x_u = \frac{\operatorname{rank}(x_u)}{N} ,
+\label{eq:growth-rfm}
+\end{equation}
+
+其中 $\tilde R, \tilde F, \tilde M$ 是分位数归一化后的取值（近度项越大表示越近），
+权重 $w$ 由业务目标决定：
+做复购促活时近度权重高，做客单价提升时金额权重高。
+权重必须写下并定期复核，否则 RFM 会退化成一个没人说得清含义的分数。
+
+\begin{insight}[预测模型在增长里的真正门槛不是准确率]
+一个 $\LTV$ 预测模型的排序能力提升 5\%，通常不会带来可测量的业务收益；
+而\kw{把预测结果接进一个可执行的决策（出价上限、权益发放、触达预算分配），
+并保留 holdout 组做增量测量}，几乎总能带来收益。
+
+所以在增长场景里，模型的评价标准应该是：
+(1) 预测值是否被\kw{真正用于一次决策}？
+(2) 这次决策是否有\kw{对照组}来验证增量？
+(3) 预测的\kw{偏差方向}是否已知（例如系统性高估新客 $\LTV$）？
+
+如果这三个问题的答案是否定的，那么把模型做得更准只是自我满足。
+\end{insight}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 增长的复利来自闭环的\kw{转速}：$V_n = V_0(1+r)^{t/T}$（\cref{eq:growth-loop}）说明
+        缩短周期 $T$ 的边际价值远大于提高单轮幅度 $r$；
+        有效结论数由并行度、周期、命中率与复用损失共同决定（\cref{eq:growth-throughput}）。
+  \item AARRR 与 RARRA 的差别是\kw{顺序假设}：留存未达标时优先 RARRA，
+        留存稳定后再按 AARRR 放大获取。HEART 适合有明确任务与稳定用户群的产品，
+        不适合早期产品，也不能按人头分摊。
+  \item 北极星必须可拆解可分配；电商的标准拆解是
+        $\GMV = \UV \times \CVR \times \AOV \times R$（\cref{eq:growth-gmv-tree}），
+        比较各项贡献必须用对数差分（\cref{eq:growth-log-decomp}）。
+  \item 指标治理防三件事：口径漂移（双签加变更日志加新旧并行）、
+        重复计数（渠道加总必须与订单真值对账）、
+        Goodhart 效应（每个目标配 2--4 个不同向护栏加长期指标加定期审计）。
+  \item 埋点设计的最小契约是「事件名加三层属性加枚举登记加版本化」；
+        \kw{与钱和状态有关的事件必须服务端上报}，
+        且同一转化只能有一个真值源（\cref{eq:growth-event-model}）。
+  \item UTM 的规范写法是\kw{全小写、无空格、medium 用规范值}；
+        GA4 的事件-参数模型要求控制参数数量与基数，
+        长文本与高基数 ID 应留在自己的数仓里。
+  \item 归因是\kw{分配}不是真相：平台之间在模型、窗口、去重、转化定义上必然不一致；
+        自建统一口径（规则层加数据驱动层）用于排序与发现异常，
+        预算分配必须靠增量实验或 MMM
+        （\cref{eq:growth-time-decay,eq:growth-markov-removal,eq:growth-adstock}）。
+  \item 三方差值对账表（平台后台、站内埋点、实际订单）是归因治理最有效的工具；
+        差异率与重叠度一起看，才能区分「重复抢功」与「根本找不到的订单」
+        （\cref{eq:growth-recon}）。
+  \item 实验设计的核心是样本量与 MDE 的匹配（\cref{eq:growth-samplesize,eq:growth-mde}）；
+        显著性必须与效应量和置信区间一起看（\cref{eq:growth-lift-ci}）；
+        偷看数据、多重比较、分流污染、SRM 是四类最常见的可信度杀手
+        （\cref{eq:growth-srm}）。
+  \item CUPED 的收益只取决于相关系数的平方：$\rho = 0.7$ 时方差降约 51\%、
+        等效样本翻倍（\cref{eq:growth-cuped}）；协变量必须在分流前确定。
+  \item 无法做 A/B 时用准实验：双重差分（\cref{eq:growth-did}）、
+        合成控制（\cref{eq:growth-synth}）、中断时间序列、断点回归，
+        每个方法都要报告识别假设与稳健性检验。
+  \item 单位经济决定投放策略：$\LTV$ 必须分群、必须用毛利口径、
+        必须拟合留存曲线（\cref{eq:growth-ltv-sum,eq:growth-retention-fit,eq:growth-ltv-closed}）；
+        $\CAC$ 必须区分混合与边际（\cref{eq:growth-cac,eq:growth-cac-blend,eq:growth-marginal-cac}）；
+        回本周期比 $\LTV$/$\CAC$ 更适合月度决策（\cref{eq:growth-payback}）；
+        增量回报的盈亏线是毛利率的倒数（\cref{eq:growth-iroas}）。
+  \item 组织能力是增长的复利来源：一页纸实验模板、结构化实验档案、
+        失败库（含失败分类）、固定周节拍（周一评审、周三检查、周五复盘）。
+  \item 自动化与 AI 的前提是\kw{度量可信加决策可回滚}：
+        规则必须有滑窗、样本量门槛、幅度上限与冷却期（\cref{eq:growth-rule}）；
+        预测模型的价值取决于它是否接进了决策并有 holdout 验证
+        （\cref{eq:growth-rfm}）。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item 请设计一套指标字典的关键字段。如果两个团队对「活跃用户」的定义不同，
+        你会怎么推动统一？
+  \item 平台后台报表的转化数是站内订单数的 2.3 倍，请给出你的排查路径，
+        并说明你会设计什么样的对账表来长期监控这个问题。
+  \item 一次 A/B 实验的 p 值为 0.03、相对提升 0.8\%，样本量刚好达到预期。
+        你会怎么决策？还需要补充哪些信息？
+  \item 什么是 SRM？为什么它的判定阈值要比 0.05 严格得多？
+        如果发现 SRM，你的排查顺序是什么？
+  \item 请解释 CUPED 的原理与适用条件。若实验前指标与实验期指标的相关系数为 0.5，
+        等效样本量提升多少？什么情况下 CUPED 会失效甚至有害？
+  \item 预算分配无法做用户级 A/B，你会选择哪种准实验方法？
+        它需要什么识别假设？你会做哪些稳健性检验？
+  \item 请分别用收入口径与毛利口径计算一个业务的 $\LTV$/$\CAC$，
+        并说明两种口径会如何导致不同的投放决策。
+        回本周期在你的决策里起什么作用？
+  \item 如何设计一条「自动降预算」的投放规则？你会设置哪些护栏来防止震荡与失控？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+\section{全书结语：从单点技术到可复利的系统}
+
+回过头看，本书从 \cref{ch:overview} 开始搭了一条五层链路，
+并且给出了一个统一的优化形式（\cref{eq:unified}）。
+
+\begin{table}[htbp]
+\centering
+\caption{全书五层链路与本章的收口位置}
+\label{tab:growth-bookmap}
+\small
+\begin{tabularx}{\textwidth}{L{2.6cm} L{3.3cm} Y}
+\toprule
+\tabhead{层次} & \tabhead{核心问题} & \tabhead{本书对应的章节与能力} \\
+\midrule
+数据与特征层 & 用什么信号描述用户与物品？ & 埋点与事件契约、数仓分层、特征平台与样本拼接（\cref{ch:receng}、本章第 3 节） \\
+\addlinespace
+模型与策略层 & 如何把信号变成排序与出价？ & 召回、粗排、精排、重排、序列建模、点击与转化预估、出价与预算（\cref{ch:recall,ch:ranking,ch:sequence,ch:admodel}） \\
+\addlinespace
+服务与工程层 & 如何在延迟与成本约束下稳定交付？ & 在线服务、批推理、降级、延迟预算（\cref{ch:receng}） \\
+\addlinespace
+增长与获取层 & 如何低成本、可持续地获得增量用户？ & 自然搜索与推荐、搜索与生成式引擎优化、搜索广告、信息流投放、转化率优化（\cref{ch:seo,ch:geo,ch:google,ch:meta,ch:cro}） \\
+\addlinespace
+商业与履约层 & 如何把流量变成可持续的利润？ & 跨境履约、平台与供应链、单位经济模型（\cref{ch:cbec,ch:platform,ch:supply}、本章第 6 节） \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+这五层的关系不是并列，而是\kw{乘法关系}：
+数据错则模型错，模型错则服务浪费，服务不稳则增长无从谈起，
+单位经济不成立则所有增长都是在加速失血。
+本书贯穿始终的三条主线也在这里收束：
+
+\begin{enumerate}
+  \item \textbf{约束先于目标}。推荐受延迟与算力约束，广告受预算与频控约束，
+        搜索受权威性与时效约束，增长受单位经济与现金流约束。
+        任何优化都必须先写清约束（\cref{eq:unified} 中的 $g_j(\pi) \le b_j$），
+        否则优化的结果一定是在别处付出更大代价。
+  \item \textbf{度量先于优化}。没有可信的指标、对账与增量实验，
+        所有优化都无法被验证，也就无法被复用。
+        本章的所有内容——指标字典、埋点契约、对账表、实验档案——
+        都是在为「可复用的结论」付费。
+  \item \textbf{闭环先于规模}。规模放大的是系统的效率，
+        如果闭环里存在系统性的度量错误或单位经济错误，
+        规模放大的就是亏损的速度。这也是为什么本章把
+        「归因是分配不是真相」与「毛利 $\LTV$」放在如此重要的位置。
+\end{enumerate}
+
+如果要把这本书的后续精进方向浓缩成四条建议：
+
+\begin{itemize}
+  \item \textbf{补数学与因果推断的底子}。矩阵分解、注意力机制、拍卖理论之外，
+        因果推断（识别假设、双重差分、合成控制、工具变量）是唯一能把
+        「指标涨了」变成「是我们造成的」的工具（\cref{ch:math}）。
+  \item \textbf{动手实现一遍最小的闭环}。哪怕只有一个站点、
+        几百个日活，也要把「埋点、数仓、看板、A/B、实验档案」
+        完整跑通一遍。跑通一次之后，你对所有环节的代价会有真实的直觉。
+  \item \textbf{建立自己的「经验量级库」}。记录每一类改动的典型效应量级
+        （例如性能优化的转化收益通常在个位数百分点、
+        落地页相关性的收益常在 5\% 到 20\% 量级），
+        这会让你在提出假设时比别人的命中率高出一截。
+  \item \textbf{把失败写下来}。这是成本最低、收益最持久的一件事。
+        一个持续三年的失败库，抵得上一整套方法论教材。
+\end{itemize}
+
+技术会变：模型结构会变、平台规则会变、隐私政策会变、算法会换代。
+但\kw{用可证伪的假设、可信的度量与可复用的结论来运营一门生意}这件事不会变。
+把闭环修好，把转速提上去，剩下的交给复利。

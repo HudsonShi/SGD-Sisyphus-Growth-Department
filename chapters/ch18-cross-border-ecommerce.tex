@@ -345,7 +345,8 @@ CCC 越小，同样的资本可以支撑越大的销售规模：
 ]
 % timeline axis at the top
 \draw[RuleGray, thick] (0,12) -- (170,12);
-\foreach \xx/\dd in {0/0, 31/30, 62/60, 99/95, 135/130, 170/160}
+% 注意：循环变量不要用 \dd（会覆盖 notesstyle 里的微分算子宏）
+\foreach \xx/\dy in {0/0, 31/30, 62/60, 99/95, 135/130, 170/160}
   \draw[RuleGray] (\xx,11) -- (\xx,13);
 \node[lbl] at (0,14.6) {第 0 天};
 \node[lbl] at (31,14.6) {第 30 天};

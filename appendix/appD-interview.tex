@@ -9,7 +9,7 @@
 (4) 那些反复出现的「八股」数字与公式（AUC 与 GAUC、MMoE 与 PLE、BM25 参数、eCPM 换算、LTV/CAC、安全库存），
     能不能在一张表里查完？
 本附录把 \cref{ch:overview,ch:math,ch:recall,ch:ranking,ch:sequence,ch:receng,ch:search,ch:nlp,ch:ad,ch:admodel,ch:seo,ch:geo,ch:cbec,ch:supply,ch:growth}
-各章章末列出的面试题全部收录，并补充了同方向的常见追问，共 136 题。
+各章章末列出的面试题全部收录，并补充了同方向的常见追问，共 144 题。
 \end{insight}
 
 \begin{toolbox}[怎么用这一章]
@@ -311,13 +311,14 @@ LR/GBDT $\to$ Wide\&Deep 与 FM $\to$ DeepFM 与 DCN $\to$ DIN 与 DIEN $\to$
 
 \section{推荐算法题库}
 
-本节的 30 题覆盖召回、排序、序列建模与工程四个方面，与 \cref{ch:recall,ch:ranking,ch:sequence,ch:receng} 一一对应。
+本节的 36 题覆盖召回、排序、序列建模与工程四个方面，与 \cref{ch:recall,ch:ranking,ch:sequence,ch:receng} 一一对应。
 每题先给问题，再给答题要点。
 
 \subsection{召回与表征}
 
-\begin{enumerate}[label=]
 \begin{interview}[题库与答题要点]
+
+\begin{enumerate}[label=]
 
   \item[\textcolor{VioletDeep}{\textbf{Q1.}}] \textbf{推荐系统和搜索引擎在技术架构上有哪些异同？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
@@ -413,7 +414,16 @@ Swing 引入用户对之间的桥接惩罚：若共同点击物品 $i$ 与 $j$ �
 二是在物品塔里注入与用户无关的交叉统计（如类目级偏好）；
 三是让粗排承接轻量交叉特征，召回保持纯双塔（见 \cref{ch:recall}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q10.}}] \textbf{sampled softmax 的 logit 校正项解决什么问题？不校正会有什么后果？}
+  \item[\textcolor{VioletDeep}{\textbf{Q10.}}] \textbf{双塔模型为什么无法利用用户-物品交叉特征？有哪些改进思路？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+因为双塔的用户向量与物品向量必须解耦：物品向量要离线全量算好并建 ANN 索引，
+用户向量在线上只算一次再做最大内积搜索。
+一旦引入交叉特征，物品表示就依赖具体用户，索引无法预建，检索优势随之消失。
+改进思路有三类：用交叉精排模型蒸馏双塔（把精排排序结果当软标签）；
+在物品塔注入与用户无关的交叉统计（如类目级偏好）；
+或在粗排阶段承接轻量交叉特征，召回保持纯双塔（见 \cref{ch:recall}）。
+
+  \item[\textcolor{VioletDeep}{\textbf{Q11.}}] \textbf{sampled softmax 的 logit 校正项解决什么问题？不校正会有什么后果？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 全量 softmax 的分母要对全部物品求和，样本量 $10^8$ 时不可行；
 采样后只对子集归一化，得到的概率与真实分布在数学上不一致。
@@ -423,7 +433,7 @@ Swing 引入用户对之间的桥接惩罚：若共同点击物品 $i$ 与 $j$ �
 线上表现为曝光向热门物品过度倾斜、长尾覆盖下降；
 离线表现为 AUC 尚可但 GAUC 与覆盖率变差。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q11.}}] \textbf{双塔的向量归一化与否，对线上有什么影响？}
+  \item[\textcolor{VioletDeep}{\textbf{Q12.}}] \textbf{双塔的向量归一化与否，对线上有什么影响？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 不归一化时内积 $\inner{u}{v} = \norm{u}\norm{v}\cos\theta$，
 向量模长成为「活跃度」的代理变量，热门与高活跃物品天然占据高分，线上曝光更集中。
@@ -433,7 +443,7 @@ Swing 引入用户对之间的桥接惩罚：若共同点击物品 $i$ 与 $j$ �
 此时应把这些信号作为显式特征放到精排，而不是藏在向量模长里。
 实践中常见做法是检索用归一化向量，分数融合阶段再叠加外部热度分（见 \cref{ch:recall}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q12.}}] \textbf{多路召回如何做分数归一化与配额分配？如何监控每一路的贡献？}
+  \item[\textcolor{VioletDeep}{\textbf{Q13.}}] \textbf{多路召回如何做分数归一化与配额分配？如何监控每一路的贡献？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 不同召回路的分数量纲不同（i2i 余弦、热度分、向量内积），不能直接混排。
 做法是逐路做单调变换，常用分位数归一化、秩分数或 z-score，保证只改变量纲不改变路内相对顺序。
@@ -447,14 +457,13 @@ Swing 引入用户对之间的桥接惩罚：若共同点击物品 $i$ 与 $j$ �
 
 \end{interview}
 
-\begin{interview}[题库与答题要点]
-
-
 \subsection{排序与多任务}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q13.}}] \textbf{新用户和新物品分别怎么做冷启动？探索流量的指标该怎么看？}
+  \item[\textcolor{VioletDeep}{\textbf{Q14.}}] \textbf{新用户和新物品分别怎么做冷启动？探索流量的指标该怎么看？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 新用户先用上下文与热门兜底（地域、时段、设备、来源渠道），
 在首屏用少量坑位做兴趣探测，快速收敛到类目偏好。
@@ -465,7 +474,7 @@ Swing 引入用户对之间的桥接惩罚：若共同点击物品 $i$ 与 $j$ �
 以及探索对整体 GMV 的短期拖累是否在可接受区间内。
 常见的误判是把「用户点了但不满意」当作正反馈，所以要引入长点击与负反馈信号。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q14.}}] \textbf{DIN 相比 DeepFM 的改进是什么？Activation Unit 为什么不能用在召回阶段？}
+  \item[\textcolor{VioletDeep}{\textbf{Q15.}}] \textbf{DIN 相比 DeepFM 的改进是什么？Activation Unit 为什么不能用在召回阶段？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 DeepFM 把用户历史行为做固定权重求和（或平均池化），
 意味着无论候选是什么，用户兴趣表示都一样；
@@ -476,7 +485,7 @@ DIN 引入注意力单元，用候选物品作为 query 对历史行为加权，
 而注意力依赖候选物品，无法离线预计算。
 折中方案是召回仍用双塔、粗排用轻量交互（见 \cref{ch:ranking}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q15.}}] \textbf{MMoE 与 PLE 的区别是什么？PLE 如何从结构上保证任务隔离，代价是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q16.}}] \textbf{MMoE 与 PLE 的区别是什么？PLE 如何从结构上保证任务隔离，代价是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 MMoE 用「共享专家加每任务一个门控」实现软共享：底层专家全任务共用，
 门控为每个任务生成不同加权；但当任务相关性低时门控容易退化为独热，
@@ -486,7 +495,7 @@ PLE 把专家显式分成任务专属专家与共享专家两组，
 代价是参数量与训练成本上升（通常比 MMoE 高 20\% 到 40\%），
 专家数与任务数的组合需要调参，且任务数很多时共享专家的容量会成为新瓶颈。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q16.}}] \textbf{ESMM 为什么能解决样本选择偏差？它与 MMoE/PLE 是替代关系还是互补关系？}
+  \item[\textcolor{VioletDeep}{\textbf{Q17.}}] \textbf{ESMM 为什么能解决样本选择偏差？它与 MMoE/PLE 是替代关系还是互补关系？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 CTR 与 CVR 的常规做法是只在点击样本上训练 CVR，
 而线上要对全曝光样本排序，训练分布与推理分布不一致，这就是样本选择偏差。
@@ -498,7 +507,7 @@ CVR 塔虽只对点击样本产生有效梯度，但嵌入层由全空间样本�
 它与 MMoE/PLE 正交：ESMM 解决标签结构问题，MMoE/PLE 解决多任务参数共享问题，
 实践中常在 ESMM 的 CVR 塔内部再套 PLE。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q17.}}] \textbf{位置偏差如何处理？请写出 PAL 的分解形式，并解释为什么位置塔的输入必须只有位置特征。}
+  \item[\textcolor{VioletDeep}{\textbf{Q18.}}] \textbf{位置偏差如何处理？请写出 PAL 的分解形式，并解释为什么位置塔的输入必须只有位置特征。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 PAL 把曝光概率分解为 $\Prob(\text{曝光}\given u,i,p) =
   \Prob(\text{曝光}\given p)\cdot\Prob(\text{曝光}\given u,i)$，
@@ -509,7 +518,7 @@ PAL 把曝光概率分解为 $\Prob(\text{曝光}\given u,i,p) =
 落地做法是训练时两塔相乘，推理时把位置塔置为统一常量。
 验证手段是对比校正前后不同位置的分位数分布，或做小规模位置随机化实验。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q18.}}] \textbf{pCTR 预估偏高 20\% 会发生什么？你会怎么发现并修正？}
+  \item[\textcolor{VioletDeep}{\textbf{Q19.}}] \textbf{pCTR 预估偏高 20\% 会发生什么？你会怎么发现并修正？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 如果只用于自然排序，单调性不变，排序结果几乎不受影响；
 但如果用于广告出价或计费，$\text{eCPM} = \text{pCTR}\times\text{bid}\times 1000$
@@ -521,7 +530,7 @@ PAL 把曝光概率分解为 $\Prob(\text{曝光}\given u,i,p) =
 再用保序回归或分桶校准做后校准，并把校准层纳入发布流程，
 每次模型更新后重新拟合，同时把「预测均值比」纳入日常告警。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q19.}}] \textbf{多目标融合有哪些做法？为什么手工调权重长期不可维护？}
+  \item[\textcolor{VioletDeep}{\textbf{Q20.}}] \textbf{多目标融合有哪些做法？为什么手工调权重长期不可维护？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 常见做法有四类：线性加权 $s = \sum w_k s_k$；
 乘除形式（如 $\text{pCTR}\times\text{pCVR}^{\alpha}$）；PID 或反馈控制动态调权；
@@ -536,14 +545,13 @@ PAL 把曝光概率分解为 $\Prob(\text{曝光}\given u,i,p) =
 
 \end{interview}
 
-\begin{interview}[题库与答题要点]
-
-
 \subsection{序列建模与生成式}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q20.}}] \textbf{离线 AUC 与 GAUC 都涨了但线上不涨，你的排查顺序是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q21.}}] \textbf{离线 AUC 与 GAUC 都涨了但线上不涨，你的排查顺序是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 第一步查口径：离线样本的时间范围、人群、位置与线上是否一致，
 是否用了线上拿不到的特征（穿越），评估指标与线上主指标是否同源。
@@ -556,7 +564,7 @@ PAL 把曝光概率分解为 $\Prob(\text{曝光}\given u,i,p) =
 第五步查实验：分流是否均匀、样本量是否足够、是否因多重比较导致假阳性。
 最后给结论时要区分「模型无效」与「线上链路吃掉了收益」，两者的处理方式完全不同。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q21.}}] \textbf{SASRec 与 BERT4Rec 的核心区别是什么？为什么工业界的序列模型更偏向因果结构？}
+  \item[\textcolor{VioletDeep}{\textbf{Q22.}}] \textbf{SASRec 与 BERT4Rec 的核心区别是什么？为什么工业界的序列模型更偏向因果结构？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 SASRec 用单向（因果）自注意力，每个位置只看到左侧历史，目标是预测下一个物品；
 BERT4Rec 用双向注意力加随机掩码，做「完形填空」式的预测。
@@ -566,7 +574,7 @@ BERT4Rec 用双向注意力加随机掩码，做「完形填空」式的预测�
 自回归结构便于流式推理与增量更新，也便于与生成式解码统一。
 双向模型并非无用，它在离线打标、数据增强与训练辅助任务里仍有价值（见 \cref{ch:sequence}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q22.}}] \textbf{行为序列的样本构造中，你如何防止时间穿越与物品泄漏？}
+  \item[\textcolor{VioletDeep}{\textbf{Q23.}}] \textbf{行为序列的样本构造中，你如何防止时间穿越与物品泄漏？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 三条硬规则：第一，按时间戳切分训练、验证、测试集，禁止随机切分；
 第二，特征只取预测时刻之前的状态，序列截断位置必须严格早于标签时刻；
@@ -577,7 +585,7 @@ BERT4Rec 用双向注意力加随机掩码，做「完形填空」式的预测�
 另一个常见泄漏是把当次曝光后的会话行为聚合进特征，
 表现为离线指标异常高、上线后大幅回落（见 \cref{ch:sequence}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q23.}}] \textbf{序列长度从 200 加到 5000，你会怎么设计实验来判断收益是否真实？}
+  \item[\textcolor{VioletDeep}{\textbf{Q24.}}] \textbf{序列长度从 200 加到 5000，你会怎么设计实验来判断收益是否真实？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 先离线做分段消融：长度取 200、500、1000、2000、5000 五档，
 看 GAUC 与 Recall@k 的曲线拐点在哪里，通常长序列的收益集中在前 500 到 1000。
@@ -588,7 +596,7 @@ BERT4Rec 用双向注意力加随机掩码，做「完形填空」式的预测�
 如果离线有收益而线上没有，先查线上是否因延迟超时触发降级，
 导致长序列模型实际只在部分请求上生效。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q24.}}] \textbf{生成式推荐与双塔召回各自的优势和代价是什么？什么业务适合上生成式？}
+  \item[\textcolor{VioletDeep}{\textbf{Q25.}}] \textbf{生成式推荐与双塔召回各自的优势和代价是什么？什么业务适合上生成式？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 生成式推荐把推荐转化为序列生成或语义 ID 预测，
 优势是能建模物品之间的高阶组合关系、天然支持多目标与长尾泛化，
@@ -600,7 +608,7 @@ BERT4Rec 用双向注意力加随机掩码，做「完形填空」式的预测�
 电商的强约束场景（库存、价格、合规）仍以双塔加精排为主，
 生成式更适合做补充召回路（见 \cref{ch:sequence}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q25.}}] \textbf{RQ-VAE 与层次 K-means 构造语义 ID，各自的优缺点与适用条件是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q26.}}] \textbf{RQ-VAE 与层次 K-means 构造语义 ID，各自的优缺点与适用条件是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误差小，
 生成的 ID 具有语义连续性，适合物品向量质量好的场景；
@@ -611,7 +619,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 与热门前缀（某前缀下物品过多导致解码空间失衡）。
 典型解法是加冲突位、对热门前缀做二次分裂，或对码本做均衡正则。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q26.}}] \textbf{用 LLM 做推荐有哪三条路线？如果只有一个月工期，你会选哪一条，为什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q27.}}] \textbf{用 LLM 做推荐有哪三条路线？如果只有一个月工期，你会选哪一条，为什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 三条路线分别是：用 LLM 做特征与语义编码
 （把文本画像、评论、商品描述编码成向量或标签，喂给现有模型）；
@@ -627,14 +635,13 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 
 \end{interview}
 
-\begin{interview}[题库与答题要点]
-
-
 \subsection{推荐工程与系统}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q27.}}] \textbf{离线 RL 在推荐中难以落地的主要原因是什么？你会如何设计一个可控的长期价值实验？}
+  \item[\textcolor{VioletDeep}{\textbf{Q28.}}] \textbf{离线 RL 在推荐中难以落地的主要原因是什么？你会如何设计一个可控的长期价值实验？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 三个原因：一是缺少可交互的模拟器，
 日志数据来自历史策略，off-policy 评估对策略假设极其敏感；
@@ -646,7 +653,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 并预先规定最大探索预算与熔断条件。
 评估时用双重稳健估计降低方差（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q28.}}] \textbf{一屏推荐的端到端延迟预算是 200\,ms，你会如何在召回、粗排、精排、重排、策略之间分配？依据是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q29.}}] \textbf{一屏推荐的端到端延迟预算是 200\,ms，你会如何在召回、粗排、精排、重排、策略之间分配？依据是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 示范分配：召回 30\,ms（多路并行取最慢一路）、粗排 20\,ms、精排 60\,ms、
 重排与策略 15\,ms、特征读取与网络 60\,ms，留 15\,ms 余量。
@@ -656,7 +663,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 要特别说明的是预算按 p99 而非均值制定，
 并且每一级都要有独立超时与熔断，避免单级抖动拖垮整条链路（见 \cref{ch:receng}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q29.}}] \textbf{如何保证离线特征与在线特征的一致性？如果发现线上效果比离线差很多，你的排查顺序是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q30.}}] \textbf{如何保证离线特征与在线特征的一致性？如果发现线上效果比离线差很多，你的排查顺序是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 一致性靠三点保障：同一份特征定义由特征平台统一下发；
 离线回填与在线实时计算共用同一段逻辑（同一份 SQL 或同一个 UDF）；
@@ -669,7 +676,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 最后查链路（召回配额是否变化、超时降级是否触发、分桶是否均匀）。
 经验上「线上差很多」最常见的原因是特征穿越导致离线虚高（见 \cref{ch:receng}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q30.}}] \textbf{增量训练或在线学习时，如何防止灾难性遗忘？如果必须回滚，回滚单元应该包含哪些东西？}
+  \item[\textcolor{VioletDeep}{\textbf{Q31.}}] \textbf{增量训练或在线学习时，如何防止灾难性遗忘？如果必须回滚，回滚单元应该包含哪些东西？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 防遗忘有四种手段：按比例混合新老样本（如 7:3）做复训；
 底层 Embedding 冻结或使用极小学习率，只更新上层；
@@ -682,7 +689,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 以及与之绑定的实验分流规则。
 少任何一项，回滚后都会出现新的不一致，甚至比不回滚更糟。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q31.}}] \textbf{动态 batching 的批量大小如何确定？批越大吞吐越高，为什么不能一直加大？}
+  \item[\textcolor{VioletDeep}{\textbf{Q32.}}] \textbf{动态 batching 的批量大小如何确定？批越大吞吐越高，为什么不能一直加大？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 批大小由三条约束共同确定：延迟（批越大，单批完成时间越长，
 尾请求等待越久）、显存（激活值与中间张量随批线性增长）、
@@ -693,7 +700,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 对在线学习反而不利；批过大让新模型上线的影响面一次性放大，
 事故半径变大（见 \cref{ch:receng}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q32.}}] \textbf{转化预估遇到延迟反馈（很多转化在几小时后才回传），有哪些处理方案？各自的代价是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q33.}}] \textbf{转化预估遇到延迟反馈（很多转化在几小时后才回传），有哪些处理方案？各自的代价是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 方案一，延迟窗口重训：只等固定窗口（如 1 小时）回传，
 窗口外的转化交给后续批次修正。代价是标签噪声大，且窗口长度与时效性直接冲突。
@@ -705,7 +712,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 代价是代理与真值存在偏差，需要在线上用校准层修正。
 工程上通常组合方案二与方案四，并用增量实验验证收益。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q33.}}] \textbf{如果让你设计一次推荐算法的 A/B 实验，你会怎么设计分流、指标与停止条件？}
+  \item[\textcolor{VioletDeep}{\textbf{Q34.}}] \textbf{如果让你设计一次推荐算法的 A/B 实验，你会怎么设计分流、指标与停止条件？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 分流：用户级哈希分流并做分层（按新老客、
 活跃度分层后再随机），
@@ -720,7 +727,7 @@ RQ-VAE 用残差量化逐层逼近物品向量，码本利用率高、重构误�
 达到样本量或触发护栏即停。
 最后必须做分群分析与 SRM 检验，确认效果来源与分流健康（见 \cref{ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q34.}}] \textbf{什么是 CUPED？它在什么条件下有效、什么条件下无效甚至有害？}
+  \item[\textcolor{VioletDeep}{\textbf{Q35.}}] \textbf{什么是 CUPED？它在什么条件下有效、什么条件下无效甚至有害？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 CUPED 用实验前的协变量 $X$（如实验前 7 日的同一指标）
 构造调整后的指标 $Y' = Y - \theta(X - \E X)$，
@@ -733,35 +740,32 @@ CUPED 用实验前的协变量 $X$（如实验前 7 日的同一指标）
 以及分流单元与指标层级不匹配，
 使协变量与结果不在同一层级上（见 \cref{ch:growth}）。
 
+  \item[\textcolor{VioletDeep}{\textbf{Q36.}}] \textbf{双塔召回的训练目标为什么常用负采样而不是全量 softmax？批内负样本有什么问题？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+全量 softmax 的分母要对百万到亿级物品求和，单步梯度代价不可接受；
+负采样把目标改成「正样本对比若干负样本」，复杂度降到与批大小同阶。
+批内负样本（in-batch negative）的优点是零额外采样成本，
+但它的分布等于「该批内物品的频率分布」，与真实曝光分布不一致，
+热门物品会被反复当作负样本，导致模型对热门物品的分数被过度压低，
+线上表现为长尾曝光上升但整体转化下降。
+常见修正有三条：用 logQ 校正权重、把批内采样分布显式记录下来做重要性加权、
+以及混合一定比例的全局随机负样本与难负样本（配假负过滤）（见 \cref{ch:recall}）。
+
 \end{enumerate}
 
 \end{interview}
 
 \section{搜索与 NLP 题库}
 
-本节 21 题对应 \cref{ch:search,ch:rag,ch:nlp}，覆盖检索链路、学习排序、语言模型与推理优化。
+本节 22 题对应 \cref{ch:search,ch:rag,ch:nlp}，覆盖检索链路、学习排序、语言模型与推理优化。
 
 \subsection{信息检索与搜索系统}
 
+\begin{interview}[题库与答题要点]
+
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q35.}}] \textbf{如何度量推荐系统的信息茧房与生态健康度？哪些指标可以进护栏？}
-\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
-可以从三个层面度量：内容侧看类目熵、
-作者或品牌集中度（Top 1\% 物品的曝光占比）、
-新物品曝光占比与长尾覆盖率；
-用户侧看兴趣广度（近 30 日交互过的类目数）、
-重复曝光占比、会话内多样性；
-生态侧看新用户的首次成功体验率、
-创作者的收入分布（基尼系数）与流失率。
-进护栏的指标应该满足「可自动计算、对短期实验敏感、
-且恶化时能立刻止损」三个条件，
-推荐选类目熵的下限、新物品曝光占比的下限、
-重复曝光占比的上限、以及长期留存。
-注意护栏是约束不是目标，不要把它们加权进排序，
-否则又会重新出现短期指标被操纵的问题（见 \cref{ch:growth}）。
-
-  \item[\textcolor{VioletDeep}{\textbf{Q36.}}] \textbf{BM25 的 $k_1$ 与 $b$ 分别控制什么？为什么电商搜索里 $b$ 常常要调小？如果某个字段的文档长度方差极大，你会怎么处理？}
+  \item[\textcolor{VioletDeep}{\textbf{Q37.}}] \textbf{BM25 的 $k_1$ 与 $b$ 分别控制什么？为什么电商搜索里 $b$ 常常要调小？如果某个字段的文档长度方差极大，你会怎么处理？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 $k_1$ 控制词频饱和速度：$k_1$ 越大，高频词继续加分的空间越大；
 $b$ 控制文档长度归一化强度：$b=0$ 完全不归一化，$b=1$ 完全归一化。
@@ -772,7 +776,7 @@ $b$ 控制文档长度归一化强度：$b=0$ 完全不归一化，$b=1$ 完全�
 调参必须用相关性标注集或线上 A/B 验证，
 不能只看离线 nDCG 的小数点（见 \cref{ch:search}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q37.}}] \textbf{请从零描述一次「中文 query 进、十个结果出」的完整链路，并指出你会把延迟预算花在哪一级、为什么。}
+  \item[\textcolor{VioletDeep}{\textbf{Q38.}}] \textbf{请从零描述一次「中文 query 进、十个结果出」的完整链路，并指出你会把延迟预算花在哪一级、为什么。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 链路：query 归一化（全半角、大小写、繁简）$\to$ 分词与纠错 $\to$
 同义词与品牌词扩展 $\to$ 意图与类目预测 $\to$
@@ -784,7 +788,7 @@ $b$ 控制文档长度归一化强度：$b=0$ 完全不归一化，$b=1$ 完全�
 预算主要花在召回与精排：召回决定候选质量上限，
 精排决定最终排序精度，两者都是收益最敏感的环节（见 \cref{ch:search}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q38.}}] \textbf{LTR 的 pointwise / pairwise / listwise 三种范式有什么区别？LambdaMART 里的 lambda 到底是什么？为什么它能让模型优先修正头部排序错误？}
+  \item[\textcolor{VioletDeep}{\textbf{Q39.}}] \textbf{LTR 的 pointwise / pairwise / listwise 三种范式有什么区别？LambdaMART 里的 lambda 到底是什么？为什么它能让模型优先修正头部排序错误？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 pointwise 把每个文档当独立样本做回归或分类，
 优化目标与排序指标不直接相关；
@@ -797,7 +801,7 @@ LambdaMART 的 lambda 是「梯度形式的排序增益」：
 由于 $\abs{\Delta \NDCG}$ 在头部位置更大，
 模型自然优先修正顶部的排序错误（见 \cref{ch:search}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q39.}}] \textbf{上线一个 LTR 模型后离线 nDCG 涨了 3\% 但线上 CTR 不涨，你会按什么顺序排查？位置偏差与特征穿越分别怎么发现、怎么修？}
+  \item[\textcolor{VioletDeep}{\textbf{Q40.}}] \textbf{上线一个 LTR 模型后离线 nDCG 涨了 3\% 但线上 CTR 不涨，你会按什么顺序排查？位置偏差与特征穿越分别怎么发现、怎么修？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 排查顺序：训练数据与线上分布是否一致（时间范围、人群、query 类型）$\to$
 相关性标注是否与用户偏好脱节（标注员认为相关但用户不点）$\to$
@@ -809,7 +813,7 @@ LambdaMART 的 lambda 是「梯度形式的排序增益」：
 特征穿越的发现：把特征按时间倒推重算，看离线指标是否大幅下降；
 修正靠时间切分、特征时间戳对账与滞后统计快照（见 \cref{ch:search}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q40.}}] \textbf{如何设计一个中文查询纠错系统？编辑距离、噪声信道、拼音混淆各自扮演什么角色？怎么控制「过度纠错」的风险？}
+  \item[\textcolor{VioletDeep}{\textbf{Q41.}}] \textbf{如何设计一个中文查询纠错系统？编辑距离、噪声信道、拼音混淆各自扮演什么角色？怎么控制「过度纠错」的风险？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 编辑距离负责生成候选（与词典或用户历史 query 做 1 到 2 编辑距离匹配），
 是召回层；噪声信道负责打分，用 $\argmax_q \Prob(q_{\text{typo}}\given q)\Prob(q)$
@@ -822,7 +826,7 @@ LambdaMART 的 lambda 是「梯度形式的排序增益」：
 品牌词与型号做白名单保护，
 上线后监控「纠错后被点击率下降」的比例并设置自动回滚阈值。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q41.}}] \textbf{查询似然模型里的 Dirichlet 平滑参数 $\mu$ 起什么作用？它和 BM25 里的 $b$ 有什么功能上的重叠与区别？}
+  \item[\textcolor{VioletDeep}{\textbf{Q42.}}] \textbf{查询似然模型里的 Dirichlet 平滑参数 $\mu$ 起什么作用？它和 BM25 里的 $b$ 有什么功能上的重叠与区别？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 $\mu$ 控制文档语言模型与集合背景模型的插值强度：
 $\Prob(w\given d) = \frac{tf + \mu \cdot \Prob(w\given C)}{\abs{d} + \mu}$。
@@ -835,7 +839,7 @@ $\mu$ 越小越依赖文档自身统计，罕见词得分被放大。
 实践中 $\mu$ 常取 1000 到 2500、$b$ 取 0.3 到 0.75（示范量级），
 两者都要用标注集调（见 \cref{ch:search}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q42.}}] \textbf{电商搜索里「同款比价」怎么落地？同款判定容易出哪类错误？类目预测、属性抽取、同款聚合三者失效时分别有什么表征？}
+  \item[\textcolor{VioletDeep}{\textbf{Q43.}}] \textbf{电商搜索里「同款比价」怎么落地？同款判定容易出哪类错误？类目预测、属性抽取、同款聚合三者失效时分别有什么表征？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 落地链路：先用图像向量与标题属性召回候选同款，
 再用属性对齐（品牌、型号、容量、规格）做精确匹配，
@@ -851,11 +855,15 @@ $\mu$ 越小越依赖文档自身统计，罕见词得分被放大。
 
 \end{enumerate}
 
+\end{interview}
+
 \subsection{检索增强与向量检索}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q43.}}] \textbf{只优化 CTR 会带来什么后果？长点击、无结果率、会话级指标各自捕捉了什么信号？你会怎么设计一个多目标的搜索排序目标函数？}
+  \item[\textcolor{VioletDeep}{\textbf{Q44.}}] \textbf{只优化 CTR 会带来什么后果？长点击、无结果率、会话级指标各自捕捉了什么信号？你会怎么设计一个多目标的搜索排序目标函数？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 只优化 CTR 会导致标题党、夸大主图、牺牲长文与深度内容，
 因为用户可能在点击后立刻返回，短期 CTR 上升而长期信任下降。
@@ -868,7 +876,23 @@ $\mu$ 越小越依赖文档自身统计，罕见词得分被放大。
   \cdot f(\text{长点击}) - \lambda\cdot\text{无结果惩罚}$，
 用多任务模型分别预估再融合，并用约束保证无结果率不恶化（见 \cref{ch:search}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q44.}}] \textbf{RAG 的完整链路是什么？哪些环节最容易成为效果瓶颈？}
+  \item[\textcolor{VioletDeep}{\textbf{Q45.}}] \textbf{如何度量推荐系统的信息茧房与生态健康度？哪些指标可以进护栏？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+可以从三个层面度量：内容侧看类目熵、
+作者或品牌集中度（Top 1\% 物品的曝光占比）、
+新物品曝光占比与长尾覆盖率；
+用户侧看兴趣广度（近 30 日交互过的类目数）、
+重复曝光占比、会话内多样性；
+生态侧看新用户的首次成功体验率、
+创作者的收入分布（基尼系数）与流失率。
+进护栏的指标应该满足「可自动计算、对短期实验敏感、
+且恶化时能立刻止损」三个条件，
+推荐选类目熵的下限、新物品曝光占比的下限、
+重复曝光占比的上限、以及长期留存。
+注意护栏是约束不是目标，不要把它们加权进排序，
+否则又会重新出现短期指标被操纵的问题（见 \cref{ch:growth}）。
+
+  \item[\textcolor{VioletDeep}{\textbf{Q46.}}] \textbf{RAG 的完整链路是什么？哪些环节最容易成为效果瓶颈？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 链路：文档解析与切分 $\to$ 向量化与索引 $\to$ 查询改写与扩展 $\to$
 召回（向量加关键词混合）$\to$ 重排 $\to$ 上下文拼装 $\to$ 生成 $\to$ 引用与校验。
@@ -879,7 +903,7 @@ $\mu$ 越小越依赖文档自身统计，罕见词得分被放大。
 （答案正确率、引用准确率、幻觉率），
 否则无法判断是检索问题还是生成问题（见 \cref{ch:rag}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q45.}}] \textbf{双塔稠密检索与 BM25 相比，优势和劣势分别是什么？工业界为什么普遍用混合检索？}
+  \item[\textcolor{VioletDeep}{\textbf{Q47.}}] \textbf{双塔稠密检索与 BM25 相比，优势和劣势分别是什么？工业界为什么普遍用混合检索？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 双塔的优势是语义泛化：能匹配「同义不同词」的查询，
 对口语化长句更鲁棒，且向量可用 ANN 快速检索。
@@ -891,7 +915,7 @@ $\mu$ 越小越依赖文档自身统计，罕见词得分被放大。
 工程上还要注意两路的延迟预算与索引更新节奏，
 以及融合权重按查询类型自适应（见 \cref{ch:rag}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q46.}}] \textbf{负采样对双塔召回的训练质量有什么影响？难负样本怎么挖才不会训崩？}
+  \item[\textcolor{VioletDeep}{\textbf{Q48.}}] \textbf{负采样对双塔召回的训练质量有什么影响？难负样本怎么挖才不会训崩？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 负样本太简单（纯随机采样）时，模型只学会把热门与冷门分开，
 决策边界粗糙，线上表现为召回结果同质化；
@@ -903,7 +927,7 @@ $\mu$ 越小越依赖文档自身统计，罕见词得分被放大。
 同时做假负过滤（用交互日志、同类目或高相似度规则剔除）；
 并通过离线 Recall@k 与线上覆盖率的双指标监控来判断是否训崩（见 \cref{ch:rag}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q47.}}] \textbf{向量索引 IVF、HNSW、PQ 各自适合什么规模与内存约束？召回率与延迟怎么权衡？}
+  \item[\textcolor{VioletDeep}{\textbf{Q49.}}] \textbf{向量索引 IVF、HNSW、PQ 各自适合什么规模与内存约束？召回率与延迟怎么权衡？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 IVF 用聚类把空间分桶，查询只扫部分桶，内存等于原始向量，
 适合千万到亿级、可接受略低召回的场景；
@@ -917,11 +941,15 @@ PQ 把向量切段量化成码字，能把内存压缩到原来的 1/8 到 1/32�
 
 \end{enumerate}
 
+\end{interview}
+
 \subsection{预训练与推理优化}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q48.}}] \textbf{切分粒度、重叠窗口与元数据过滤，分别怎么影响 RAG 的效果？}
+  \item[\textcolor{VioletDeep}{\textbf{Q50.}}] \textbf{切分粒度、重叠窗口与元数据过滤，分别怎么影响 RAG 的效果？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 切分粒度决定语义完整性：太碎会让单块缺少主谓宾与条件，
 检索命中却无法回答问题；太大则一块里混入多个主题，
@@ -934,7 +962,21 @@ PQ 把向量切段量化成码字，能把内存压缩到原来的 1/8 到 1/32�
 能在召回前把过期或无权访问的内容排除，
 但要小心过滤后候选不足导致的空结果，需要设置降级策略（放宽过滤或走关键词兜底）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q49.}}] \textbf{自注意力的时间和空间复杂度各是多少？为什么除以 $\sqrt{d_k}$？多头注意力为什么不增加总计算量？}
+  \item[\textcolor{VioletDeep}{\textbf{Q51.}}] \textbf{如何判断一个模型在 MMLU 上的高分是真实能力还是评测集污染？你会怎么设计验证实验？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+先做数据层面的检查：用 n-gram 或嵌入相似度检索训练语料与评测题的重复，
+看污染比例；再检查题目是否可以从题面直接推出答案（格式泄漏）。
+实验层面设计三个对照：第一，把选项顺序打乱，
+如果准确率大幅下降，说明模型依赖位置或记忆而非推理；
+第二，把题干改写成语义等价但表述不同的版本，
+真实能力应当保持，记忆型会出现明显掉点；
+第三，改数字或实体做「扰动题」，
+如果原题对而扰动题错，说明是记住了答案。
+还要看难度分层与错误分布：真实能力的错误通常集中在难题，
+记忆型会在简单题上出现不合逻辑的错误。
+结论要给出置信区间，避免用单个数据集的分数下断言。
+
+  \item[\textcolor{VioletDeep}{\textbf{Q52.}}] \textbf{自注意力的时间和空间复杂度各是多少？为什么除以 $\sqrt{d_k}$？多头注意力为什么不增加总计算量？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 序列长度 $n$、维度 $d$ 时，$QK\T$ 的复杂度是 $O(n^2d)$，
 注意力矩阵的内存也是 $O(n^2)$，这是长上下文的主要瓶颈。
@@ -947,7 +989,7 @@ PQ 把向量切段量化成码字，能把内存压缩到原来的 1/8 到 1/32�
 真实开销来自额外的投影矩阵与多头张量重排，
 长序列优化手段包括 FlashAttention 分块、稀疏或线性注意力与 KV Cache 压缩（见 \cref{ch:nlp}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q50.}}] \textbf{BERT 和 GPT 的区别是什么？各自的预训练目标、注意力掩码和适用任务有何不同？}
+  \item[\textcolor{VioletDeep}{\textbf{Q53.}}] \textbf{BERT 和 GPT 的区别是什么？各自的预训练目标、注意力掩码和适用任务有何不同？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 BERT 用双向编码器加掩码语言建模（MLM），
 以及下一句预测（NSP，后续工作多已弃用），
@@ -959,7 +1001,7 @@ GPT 类模型推理是自回归逐 token，延迟随输出长度线性增长，
 需要 KV Cache 与批调度优化。
 选择标准是任务形态而非模型新旧（见 \cref{ch:nlp}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q51.}}] \textbf{Word2Vec 的负采样为什么能把 $O(\abs{V})$ 降到 $O(K)$？负样本分布为什么要用 $0.75$ 次幂？}
+  \item[\textcolor{VioletDeep}{\textbf{Q54.}}] \textbf{Word2Vec 的负采样为什么能把 $O(\abs{V})$ 降到 $O(K)$？负样本分布为什么要用 $0.75$ 次幂？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 softmax 的分母需要对全词表求归一化，
 负采样把「多分类」改成 $K+1$ 个二分类，
@@ -971,7 +1013,7 @@ softmax 的分母需要对全词表求归一化，
 （这是 Word2Vec 论文报告的经验结果）。
 代价是采样分布与真实分布不一致，理论上需要做重要性校正才能得到无偏估计。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q52.}}] \textbf{KV Cache 的显存怎么估算？MQA 和 GQA 分别省在哪里、代价是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q55.}}] \textbf{KV Cache 的显存怎么估算？MQA 和 GQA 分别省在哪里、代价是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 估算公式：$\text{显存} = 2 \times L \times b \times n \times h \times d_h \times \text{字节数}$，
 其中 $2$ 表示 key 与 value，$L$ 为层数、$b$ 为批大小、
@@ -983,7 +1025,7 @@ MQA 让所有查询头共享一组 K/V，把 KV 显存降到约 $1/h$；
 GQA 折中为若干组共享，通常能省 4 到 8 倍显存且质量损失很小。
 代价是表达能力下降，在需要精确长距离检索的任务上可能掉点（见 \cref{ch:nlp}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q53.}}] \textbf{推理成本和延迟由哪些项构成？如果你要在一个月内把线上 LLM 成本降一半，会按什么顺序做？}
+  \item[\textcolor{VioletDeep}{\textbf{Q56.}}] \textbf{推理成本和延迟由哪些项构成？如果你要在一个月内把线上 LLM 成本降一半，会按什么顺序做？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 成本与延迟的主要构成：输入 token 数（含检索上下文）、
 输出 token 数、批调度效率、KV Cache 显存占用带来的并发上限、
@@ -997,7 +1039,7 @@ GQA 折中为若干组共享，通常能省 4 到 8 倍显存且质量损失很�
 最后才考虑蒸馏与自研小模型。
 每一步都要配质量护栏与回滚开关（见 \cref{ch:nlp}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q54.}}] \textbf{LoRA 为什么有效？$\bm{A}$ 和 $\bm{B}$ 的初始化有什么讲究？rank 与 alpha 怎么选？}
+  \item[\textcolor{VioletDeep}{\textbf{Q57.}}] \textbf{LoRA 为什么有效？$\bm{A}$ 和 $\bm{B}$ 的初始化有什么讲究？rank 与 alpha 怎么选？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 微调时的权重更新通常具有低内在秩，
 因此用 $\Delta W = BA$（$B\in\R^{d\times r}$、$A\in\R^{r\times k}$）近似，
@@ -1011,7 +1053,7 @@ alpha 是缩放系数，实际生效的学习率与 $\alpha/r$ 成正比，
 因此调参时常固定 $\alpha$（如 16 或 32）再搜 $r$，
 或保持 $\alpha/r$ 不变来比较不同 rank。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q55.}}] \textbf{RLHF 的 PPO 和 DPO 在目标函数上有什么区别？DPO 为什么可以不需要奖励模型？}
+  \item[\textcolor{VioletDeep}{\textbf{Q58.}}] \textbf{RLHF 的 PPO 和 DPO 在目标函数上有什么区别？DPO 为什么可以不需要奖励模型？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 PPO 是两阶段：先用偏好数据训一个奖励模型，
 再用强化学习最大化「奖励减 KL 惩罚」，
@@ -1034,23 +1076,11 @@ $-\ln\sigma\big(\beta[\ln\frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \ln\fra
 
 \subsection{广告系统与机制设计}
 
+\begin{interview}[题库与答题要点]
+
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q56.}}] \textbf{如何判断一个模型在 MMLU 上的高分是真实能力还是评测集污染？你会怎么设计验证实验？}
-\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
-先做数据层面的检查：用 n-gram 或嵌入相似度检索训练语料与评测题的重复，
-看污染比例；再检查题目是否可以从题面直接推出答案（格式泄漏）。
-实验层面设计三个对照：第一，把选项顺序打乱，
-如果准确率大幅下降，说明模型依赖位置或记忆而非推理；
-第二，把题干改写成语义等价但表述不同的版本，
-真实能力应当保持，记忆型会出现明显掉点；
-第三，改数字或实体做「扰动题」，
-如果原题对而扰动题错，说明是记住了答案。
-还要看难度分层与错误分布：真实能力的错误通常集中在难题，
-记忆型会在简单题上出现不合逻辑的错误。
-结论要给出置信区间，避免用单个数据集的分数下断言。
-
-  \item[\textcolor{VioletDeep}{\textbf{Q57.}}] \textbf{描述一次广告请求从发起到计费的完整链路。哪些环节是收益的杠杆点？}
+  \item[\textcolor{VioletDeep}{\textbf{Q59.}}] \textbf{描述一次广告请求从发起到计费的完整链路。哪些环节是收益的杠杆点？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 链路：请求接入与频控 $\to$ 定向与候选召回 $\to$ 粗排 $\to$
 精排（pCTR 与 pCVR 预估）$\to$ 机制与出价（eCPM 排序、底价、预算与 pacing）$\to$
@@ -1061,7 +1091,7 @@ $-\ln\sigma\big(\beta[\ln\frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \ln\fra
 四是流量分配（把高价值流量给到真正出价高的广告主）。
 每个杠杆点都要有独立实验与护栏（见 \cref{ch:ad}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q58.}}] \textbf{推导 eCPM 公式，并说明为什么广告排序用 eCPM 而不是出价。}
+  \item[\textcolor{VioletDeep}{\textbf{Q60.}}] \textbf{推导 eCPM 公式，并说明为什么广告排序用 eCPM 而不是出价。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 按 CPM 计费时 $\text{eCPM} = \text{bid}$；
 按 CPC 计费时一次曝光带来的期望收入是 $\text{pCTR}\times\text{bid}$，
@@ -1074,7 +1104,7 @@ eCPM 把所有计费方式统一到「千次曝光期望收入」这一口径，
 使排序目标与平台收入一致。
 实操中还要注意 pCTR 的偏差会被放大 1000 倍，所以校准层不可省（见 \cref{ch:ad}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q59.}}] \textbf{第二价格拍卖中广告主的最优策略是什么？为什么现在很多平台改用第一价格加软底价？}
+  \item[\textcolor{VioletDeep}{\textbf{Q61.}}] \textbf{第二价格拍卖中广告主的最优策略是什么？为什么现在很多平台改用第一价格加软底价？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 在标准第二价格（Vickrey）单物品拍卖中，
 真实出价等于自己的估值是占优策略：
@@ -1087,7 +1117,7 @@ eCPM 把所有计费方式统一到「千次曝光期望收入」这一口径，
 代价是广告主必须自己做 bid shading（按赢标概率对估值打折），
 对中小广告主不友好，平台通常提供自动出价工具来补偿（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q60.}}] \textbf{保留价（reserve price）在广告拍卖中的作用是什么？设置过高或过低分别有什么后果？}
+  \item[\textcolor{VioletDeep}{\textbf{Q62.}}] \textbf{保留价（reserve price）在广告拍卖中的作用是什么？设置过高或过低分别有什么后果？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 保留价是平台可接受的最低成交价，
 作用是筛掉出价过低的广告，避免低质广告占用优质曝光，
@@ -1100,7 +1130,7 @@ eCPM 把所有计费方式统一到「千次曝光期望收入」这一口径，
 实践中用动态底价：按流量特征（时段、地域、用户价值分层）分别估计最优底价，
 并用 A/B 实验验证总收入与填充率的联合变化。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q61.}}] \textbf{预算平滑（pacing）怎么做？为什么不能简单按时间均分预算？}
+  \item[\textcolor{VioletDeep}{\textbf{Q63.}}] \textbf{预算平滑（pacing）怎么做？为什么不能简单按时间均分预算？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 常见做法有三类：按时间比例投放（把预算均分到全天）、
 按机会价值投放（优先买高价值曝光）、
@@ -1112,7 +1142,7 @@ eCPM 把所有计费方式统一到「千次曝光期望收入」这一口径，
 好的 pacing 目标是「在预算约束下最大化总价值」，
 而非「把预算花完」，因此在预算不足时要有优先级的取舍规则（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q62.}}] \textbf{出价中「底价、预算、频控、保量」四个约束同时存在时，你如何做优先级排序？}
+  \item[\textcolor{VioletDeep}{\textbf{Q64.}}] \textbf{出价中「底价、预算、频控、保量」四个约束同时存在时，你如何做优先级排序？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 排序原则是：先硬约束后软约束，先平台承诺后优化目标。
 保量合约是商业承诺，违反会触发赔付与信任损失，
@@ -1127,11 +1157,15 @@ eCPM 把所有计费方式统一到「千次曝光期望收入」这一口径，
 
 \end{enumerate}
 
+\end{interview}
+
 \subsection{广告预估与效果度量}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q63.}}] \textbf{oCPC 的两阶段训练是什么？冷启动期成本超支怎么处理？}
+  \item[\textcolor{VioletDeep}{\textbf{Q65.}}] \textbf{oCPC 的两阶段训练是什么？冷启动期成本超支怎么处理？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 oCPC 的两阶段：第一阶段用广告主的转化数据（或平台通用转化模型）训练 pCVR，
 第二阶段把目标从点击优化切换到转化成本约束下的出价优化，
@@ -1144,7 +1178,7 @@ oCPC 的两阶段：第一阶段用广告主的转化数据（或平台通用转
 对探索期流量做配额限制，避免全量放开；
 用「成本达标率」作为护栏指标并设置自动降速或暂停。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q64.}}] \textbf{广告 CTR 预估模型与推荐 CTR 模型有什么关键差异？}
+  \item[\textcolor{VioletDeep}{\textbf{Q66.}}] \textbf{广告 CTR 预估模型与推荐 CTR 模型有什么关键差异？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 目标不同：广告优化的是收入与转化成本，推荐优化的是用户效用，
 因此广告模型通常是多目标（pCTR 与 pCVR 联合），并且需要与出价耦合。
@@ -1157,7 +1191,7 @@ oCPC 的两阶段：第一阶段用广告主的转化数据（或平台通用转
 工程上广告对延迟更敏感（RTB 通常要求 100\,ms 内响应），
 模型规模通常比推荐精排更小但校准要求更高（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q65.}}] \textbf{广告冷启动怎么解决？为什么冷启动期更需要探索？}
+  \item[\textcolor{VioletDeep}{\textbf{Q67.}}] \textbf{广告冷启动怎么解决？为什么冷启动期更需要探索？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 冷启动的困难在于新广告没有历史点击数据，
 pCTR 的不确定性极高，贸然全量投放会浪费预算并伤害用户体验。
@@ -1170,7 +1204,7 @@ pCTR 的不确定性极高，贸然全量投放会浪费预算并伤害用户体
 用 Thompson 采样或 UCB 做动态分配，并设置成本护栏，
 一旦超支就自动降速（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q66.}}] \textbf{广告点击率预估偏高或偏低，对各方分别有什么影响？如何做校准？}
+  \item[\textcolor{VioletDeep}{\textbf{Q68.}}] \textbf{广告点击率预估偏高或偏低，对各方分别有什么影响？如何做校准？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 偏高：eCPM 虚高，广告主实际成本上升、ROI 恶化；
 平台侧若采用 oCPC 保成本承诺，会产生赔付；
@@ -1184,7 +1218,7 @@ pCTR 的不确定性极高，贸然全量投放会浪费预算并伤害用户体
 校准层要定期重拟合，并纳入监控：
 每天对比预测均值与真实点击率的比值，超出阈值就告警（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q67.}}] \textbf{如何度量广告的增量效果？为什么不能直接用「看过广告的人转化率减没看过的人」？}
+  \item[\textcolor{VioletDeep}{\textbf{Q69.}}] \textbf{如何度量广告的增量效果？为什么不能直接用「看过广告的人转化率减没看过的人」？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 直接相减混淆了选择效应：看广告的人本身购买意图更强，
 其中包含大量「即使不看广告也会买」的自然转化，因此会高估广告效果。
@@ -1197,7 +1231,7 @@ pCTR 的不确定性极高，贸然全量投放会浪费预算并伤害用户体
 把转化贡献分摊到各触点，避免「最后一次点击」吞掉全部功劳。
 结果要给置信区间与增量 ROI，而不是只给总体转化率（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q68.}}] \textbf{负反馈信号在广告系统里怎么用？会不会伤害收入？}
+  \item[\textcolor{VioletDeep}{\textbf{Q70.}}] \textbf{负反馈信号在广告系统里怎么用？会不会伤害收入？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 负反馈包括关闭广告、举报、拉黑广告主、
 快速划走、跳过率、以及卸载与投诉。
@@ -1211,7 +1245,7 @@ pCTR 的不确定性极高，贸然全量投放会浪费预算并伤害用户体
 谨慎的做法是把负反馈做成约束而不是大权重惩罚，
 并用较长的观察窗口（如 7 日、14 日）同时监控收入与留存（见 \cref{ch:ad}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q69.}}] \textbf{同一条广告重复曝光对效果有什么影响？如何做疲劳度控制？}
+  \item[\textcolor{VioletDeep}{\textbf{Q71.}}] \textbf{同一条广告重复曝光对效果有什么影响？如何做疲劳度控制？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 重复曝光存在收益递减与翻转：前 1 到 2 次曝光可能提升记忆与转化，
 超过一定次数后点击率与转化率下降，
@@ -1224,7 +1258,7 @@ pCTR 的不确定性极高，贸然全量投放会浪费预算并伤害用户体
 因为再营销的边际效应曲线与拉新不同，
 通常需要单独设定阈值，并用实验分别验证（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q70.}}] \textbf{广告主侧的 ROI、ROAS、LTV/CAC 分别怎么算？它们对平台侧的优化目标有什么反作用？}
+  \item[\textcolor{VioletDeep}{\textbf{Q72.}}] \textbf{广告主侧的 ROI、ROAS、LTV/CAC 分别怎么算？它们对平台侧的优化目标有什么反作用？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 $\ROAS = \text{广告带来的收入} / \text{广告花费}$；
 $\ROI = (\text{收入} - \text{成本}) / \text{成本}$，成本包含货品、履约、广告等；
@@ -1238,7 +1272,7 @@ $\CAC = \text{总获客成本} / \text{新增用户数}$，
 自身收入被压缩且会吸引低质量广告主。
 平衡点通常通过「成本达标率加平台收入的联合指标」来监控（见 \cref{ch:admodel,ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q71.}}] \textbf{广告反作弊你会看哪些特征？误杀与漏杀怎么权衡？}
+  \item[\textcolor{VioletDeep}{\textbf{Q73.}}] \textbf{广告反作弊你会看哪些特征？误杀与漏杀怎么权衡？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 特征分四类：设备与网络（设备指纹复用、IP 聚集、
 代理与数据中心网段、模拟器与 ROOT 特征）；
@@ -1253,7 +1287,7 @@ $\CAC = \text{总获客成本} / \text{新增用户数}$，
 中风险延迟结算并人工复核，高风险直接拦截。
 所有处置都要留申诉通道，避免误杀优质渠道（见 \cref{ch:ad}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q72.}}] \textbf{多目标广告优化中，「平台收入」与「广告主转化成本」冲突时怎么办？}
+  \item[\textcolor{VioletDeep}{\textbf{Q74.}}] \textbf{多目标广告优化中，「平台收入」与「广告主转化成本」冲突时怎么办？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 冲突的本质是短期与长期的取舍。
 短期提高底价或放宽低质广告可以增加收入，
@@ -1267,23 +1301,64 @@ $\CAC = \text{总获客成本} / \text{新增用户数}$，
 沟通层面，平台应把成本达标率作为对外承诺的一部分，
 用产品化的「保成本」选项来交换更高的预算份额（见 \cref{ch:admodel}）。
 
+  \item[\textcolor{VioletDeep}{\textbf{Q75.}}] \textbf{投放预算应该怎么分配？你如何判断该加码还是收手？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+分配原则是按边际 ROI 而非平均 ROI：
+把预算从边际回报低的渠道挪到边际回报高的渠道，
+直到各渠道的边际回报接近。
+判断加码的信号：CPA 在目标区间内、预算消耗速度正常、
+增量实验显示有正 lift、以及放量后成本没有明显恶化。
+判断收手的信号：边际 CPA 持续上升，
+放量后 ROAS 掉到阈值以下，转化量增长停滞但花费增长，
+或者出现增量实验「无 lift」的情况（说明这部分转化本来就会发生）。
+注意季节性、竞品动作与平台算法学习期都会造成短期波动，
+所以决策要用滚动窗口而不是单日数据（见 \cref{ch:meta,ch:cro}）。
+
+  \item[\textcolor{VioletDeep}{\textbf{Q76.}}] \textbf{平台侧如何设计广告预算分配算法？为什么新广告主常常「花不出去钱」？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+把预算分配写成约束优化：在总预算与各广告主预算上限下最大化期望收益，
+通常用拉格朗日乘子或 PID 控制器求出「每消耗一元预算的边际价值」，按边际价值排序投放。
+新广告主花不出去钱的原因有三：pCTR 冷启动先验过于保守，导致 eCPM 长期低于竞争线；
+账户历史权重让老广告主在同等出价下排序更靠前；
+以及预算平滑的初始速度参数偏小，前几小时消耗过慢后又被系统判定为「无潜力」。
+解法是给新广告主设保底探索配额、用类目先验加速校准、
+并在冷启动期放宽 pacing 的消耗曲线，同时用成本护栏兜底（见 \cref{ch:ad}）。
+  \item[\textcolor{VioletDeep}{\textbf{Q77.}}] \textbf{频次控制与负反馈如何联合优化？你会怎么设置频控阈值？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+频控是硬约束（每用户每日或每周上限），负反馈是软信号（关闭、举报、快速划走）。
+联合优化的做法是把负反馈建成「随曝光次数单调递增的抑制曲线」，
+以乘性衰减的形式作用在排序分上，而不是简单设一个阈值。
+阈值设定要用实验确定而不是拍脑袋：按行业与素材类型分别扫 1/2/3/5 次上限，
+观察 CTR、CVR、负反馈率、7 日留存的联合变化，取「净收入加留存」最优的点。
+常见的坑是频控过紧压制再营销（老客本就有购买意图，第 3 到 5 次曝光仍有正收益），
+因此在再营销人群上单独放宽，并用增量实验验证（见 \cref{ch:admodel}）。
+  \item[\textcolor{VioletDeep}{\textbf{Q78.}}] \textbf{转化是多触点的，Shapley 值归因与「最后一次点击」归因的差异是什么？}
+\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
+最后一次点击归因把全部功劳给最终触点，会系统性高估效果广告、低估品牌与内容渠道，
+并且会诱导团队把预算集中到「关闭转化」的渠道上。
+Shapley 值把每个触点视为合作博弈中的一个玩家，按「该触点加入任意子集时带来的边际增益的平均」分配功劳，
+优点是满足效率性、对称性与零贡献零分配等公理，能公平分摊多触点贡献。
+代价是计算量随触点数指数增长，实践上用采样近似或马尔可夫链归因替代。
+更关键的一点：归因只能解决「分摊」，不能回答「增量」，
+判断某渠道是否真的带来新增转化仍然要靠随机对照实验或双重稳健估计（见 \cref{ch:admodel}）。
+
 \end{enumerate}
 
 \end{interview}
 
 \section{SEO / GEO / 投放题库}
 
-本节 25 题对应 \cref{ch:seo,ch:geo,ch:google,ch:meta,ch:cro}，
-
+本节 23 题对应 \cref{ch:seo,ch:geo,ch:google,ch:meta,ch:cro}，
 覆盖站点技术优化、生成式引擎优化、平台投放与合规。
-
 平台规则与费率类问题均须以官方最新文档为准。
 
 \subsection{SEO 与站点优化}
 
+\begin{interview}[题库与答题要点]
+
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q73.}}] \textbf{pCTR 模型的样本选择偏差在广告场景有哪几种？分别怎么处理？}
+  \item[\textcolor{VioletDeep}{\textbf{Q79.}}] \textbf{pCTR 模型的样本选择偏差在广告场景有哪几种？分别怎么处理？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 三种典型偏差：一是赢标偏差，
 只有竞价胜出的广告被曝光，训练样本来自「上一版模型的选择」；
@@ -1297,7 +1372,7 @@ $\CAC = \text{总获客成本} / \text{新增用户数}$，
 共同原则是：先明确偏差的作用机制，
 再选择能处理该机制的因果工具，而不是一律加权重（见 \cref{ch:admodel}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q74.}}] \textbf{新站上线后 3 个月没有自然流量，你会从哪几个方向排查？}
+  \item[\textcolor{VioletDeep}{\textbf{Q80.}}] \textbf{新站上线后 3 个月没有自然流量，你会从哪几个方向排查？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 五个方向：抓取（robots.txt 是否误屏蔽、
 服务器是否稳定返回 200、站点地图是否提交、内链是否能让爬虫发现所有页面）；
@@ -1311,7 +1386,7 @@ $\CAC = \text{总获客成本} / \text{新增用户数}$，
 排查顺序建议从「抓取与索引」开始，
 因为这一层不通，内容做得再好也不会被展示（见 \cref{ch:seo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q75.}}] \textbf{robots.txt、sitemap、canonical 三者的职责分别是什么？常见配置错误有哪些？}
+  \item[\textcolor{VioletDeep}{\textbf{Q81.}}] \textbf{robots.txt、sitemap、canonical 三者的职责分别是什么？常见配置错误有哪些？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 robots.txt 声明抓取许可，控制爬虫能访问哪些路径；
 sitemap 提交页面清单，帮助爬虫发现新页面与更新；
@@ -1325,7 +1400,7 @@ canonical 指向 404 或重定向链；
 建议把这三项纳入上线检查清单，
 每次改版后自动化验证，避免模板改动引入批量问题（见 \cref{ch:seo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q76.}}] \textbf{结构化数据（Schema）怎么写才有用？只加 JSON-LD 不看内容质量行不行？}
+  \item[\textcolor{VioletDeep}{\textbf{Q82.}}] \textbf{结构化数据（Schema）怎么写才有用？只加 JSON-LD 不看内容质量行不行？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 结构化数据的价值在于让搜索引擎与 AI 系统准确理解页面实体，
 并在富媒体结果（评分、价格、库存、FAQ、面包屑）中获得展示优势。
@@ -1338,7 +1413,7 @@ canonical 指向 404 或重定向链；
 正确顺序是先做内容与结构（可读的小标题、要点、表格），
 再用 Schema 把已有结构显式化，两者是互补而非替代（见 \cref{ch:seo,ch:geo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q77.}}] \textbf{Core Web Vitals 三个指标的优化手段分别是什么？它们对排名的影响有多大？}
+  \item[\textcolor{VioletDeep}{\textbf{Q83.}}] \textbf{Core Web Vitals 三个指标的优化手段分别是什么？它们对排名的影响有多大？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 三个指标是 LCP（最大内容绘制，衡量加载）、
 INP（交互到下次绘制，衡量响应）、
@@ -1354,7 +1429,7 @@ CLS 优化：为图片与广告位预留尺寸、
 通常在同等内容质量下起到区分作用，
 不要指望靠它从第十名冲到第一名（见 \cref{ch:seo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q78.}}] \textbf{内容型站点如何做关键词布局？主题集群（topic cluster）为什么有效？}
+  \item[\textcolor{VioletDeep}{\textbf{Q84.}}] \textbf{内容型站点如何做关键词布局？主题集群（topic cluster）为什么有效？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 布局方法是「一页一意图」：先按搜索意图把关键词分组
 （信息型、导航型、交易型），每组对应一个页面，
@@ -1368,7 +1443,7 @@ CLS 优化：为图片与广告位预留尺寸、
 落地时要注意子页不能是「同义改写」，
 每页都要有独有信息（数据、案例、对比表）（见 \cref{ch:seo,ch:geo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q79.}}] \textbf{外链建设在 2025 年还有多大作用？哪些做法已经失效甚至有害？}
+  \item[\textcolor{VioletDeep}{\textbf{Q85.}}] \textbf{外链建设在 2025 年还有多大作用？哪些做法已经失效甚至有害？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 外链仍然是重要的信任信号之一，
 但权重已经明显向内容质量、实体权威与用户行为倾斜，
@@ -1383,7 +1458,7 @@ CLS 优化：为图片与广告位预留尺寸、
 原创调研数据、工具、行业报告、权威教程，
 配合数字公关与社区分发，让引用自然发生（见 \cref{ch:seo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q80.}}] \textbf{移动优先索引对站点架构有什么影响？响应式、动态服务、独立移动站怎么选？}
+  \item[\textcolor{VioletDeep}{\textbf{Q86.}}] \textbf{移动优先索引对站点架构有什么影响？响应式、动态服务、独立移动站怎么选？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 移动优先意味着爬虫以移动端渲染与内容为准来评估页面，
 因此移动端不能有更少的内容、更差的可用性或更慢的加载。
@@ -1396,7 +1471,7 @@ CLS 优化：为图片与广告位预留尺寸、
 无论选哪种，都要做移动端的真实渲染测试
 （用爬虫视角检查 DOM、内链、图片与结构化数据），并确保首屏可用（见 \cref{ch:seo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q81.}}] \textbf{本地 SEO 与 Google Business Profile 的优化重点是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q87.}}] \textbf{本地 SEO 与 Google Business Profile 的优化重点是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 优化重点有四块：一是资料完整度
 （营业时间、地址、电话、类目、属性、照片、服务范围），
@@ -1412,11 +1487,15 @@ CLS 优化：为图片与广告位预留尺寸、
 
 \end{enumerate}
 
+\end{interview}
+
 \subsection{GEO 与生成式搜索}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q82.}}] \textbf{YouTube 搜索优化与 Web SEO 有什么区别？}
+  \item[\textcolor{VioletDeep}{\textbf{Q88.}}] \textbf{YouTube 搜索优化与 Web SEO 有什么区别？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 平台逻辑不同：YouTube 是推荐与搜索并重的平台，
 观看时长与完播率是核心信号，而 Web 更依赖内容与链接。
@@ -1431,7 +1510,7 @@ CLS 优化：为图片与广告位预留尺寸、
 用带参数链接与独立落地页衡量视频带来的转化，
 否则无法判断内容投入的 ROI（见 \cref{ch:google}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q83.}}] \textbf{什么是 GEO？它与传统 SEO 的核心差异在哪里？}
+  \item[\textcolor{VioletDeep}{\textbf{Q89.}}] \textbf{什么是 GEO？它与传统 SEO 的核心差异在哪里？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 GEO（生成式引擎优化）的目标是让内容被 AI 搜索与对话式助手
 \textbf{采用并引用}，而不只是被搜索引擎排名。
@@ -1443,7 +1522,7 @@ GEO（生成式引擎优化）的目标是让内容被 AI 搜索与对话式助�
 但底层依赖没变：能被引用的前提仍是被抓取、被索引、内容可信且结构清晰。
 所以 GEO 是 SEO 的延伸而非替代（见 \cref{ch:geo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q84.}}] \textbf{如何提高内容被 AI 概览与生成式答案引用的概率？}
+  \item[\textcolor{VioletDeep}{\textbf{Q90.}}] \textbf{如何提高内容被 AI 概览与生成式答案引用的概率？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 六条可执行手段：一是把答案前置，
 每个小节开头用一两句话给出直接结论；
@@ -1456,7 +1535,7 @@ GEO（生成式引擎优化）的目标是让内容被 AI 搜索与对话式助�
 衡量上用品牌提及监测、引用追踪以及「AI 渠道来的会话与转化」，
 而不是只看传统排名（见 \cref{ch:geo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q85.}}] \textbf{AI 搜索带来的流量下降，怎么区分是渠道转移还是内容失效？}
+  \item[\textcolor{VioletDeep}{\textbf{Q91.}}] \textbf{AI 搜索带来的流量下降，怎么区分是渠道转移还是内容失效？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 先做分解：把自然搜索流量按查询类型拆分，
 信息型查询（容易被 AI 概览截流）与交易型查询（用户仍需点击进入）分开看。
@@ -1470,7 +1549,7 @@ GEO（生成式引擎优化）的目标是让内容被 AI 搜索与对话式助�
 结论要落到动作：信息型内容转向「可被引用加转化承接」，
 交易型页面继续做 SEO 深耕（见 \cref{ch:geo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q86.}}] \textbf{E-E-A-T 怎么落地成可执行的检查清单？}
+  \item[\textcolor{VioletDeep}{\textbf{Q92.}}] \textbf{E-E-A-T 怎么落地成可执行的检查清单？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 把四个抽象维度翻译成可以逐项检查的清单。
 经验：作者页含真实履历与作品、文章署名、
@@ -1482,7 +1561,7 @@ GEO（生成式引擎优化）的目标是让内容被 AI 搜索与对话式助�
 检查时对每一条给出「有 / 部分 / 无」，
 优先补「可信」与「经验」两块，因为它们最难被竞争对手快速复制（见 \cref{ch:geo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q87.}}] \textbf{多语言 / 多地区站点如何做 hreflang 与内容本地化？}
+  \item[\textcolor{VioletDeep}{\textbf{Q93.}}] \textbf{多语言 / 多地区站点如何做 hreflang 与内容本地化？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 结构选择：国家顶级域名区分度最高但成本大；
 子目录权重集中、维护成本低，最常用；子域名折中。
@@ -1498,11 +1577,15 @@ hreflang 规则：每个语言版本都要有一组完整的
 
 \end{enumerate}
 
+\end{interview}
+
 \subsection{投放、落地页与合规}
+
+\begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q88.}}] \textbf{如何做一次完整的站点 SEO 审计？给出检查清单。}
+  \item[\textcolor{VioletDeep}{\textbf{Q94.}}] \textbf{如何做一次完整的站点 SEO 审计？给出检查清单。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 分五层清单。抓取层：robots.txt、XML 站点地图、
 爬虫预算（大站的参数页与筛选页是否浪费抓取）、服务器返回码与重定向链。
@@ -1514,7 +1597,7 @@ hreflang 规则：每个语言版本都要有一组完整的
 最后按「影响面 $\times$ 修复成本」排优先级，
 先做能立刻解锁大量页面的技术项（见 \cref{ch:seo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q89.}}] \textbf{投放账户应该怎么搭结构？为什么结构会影响优化效果？}
+  \item[\textcolor{VioletDeep}{\textbf{Q95.}}] \textbf{投放账户应该怎么搭结构？为什么结构会影响优化效果？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 推荐四层结构：品牌词（守住自有流量）、
 竞品词（抢份额，注意合规与品牌词政策）、
@@ -1527,7 +1610,7 @@ hreflang 规则：每个语言版本都要有一组完整的
 结构不是一次性的，每两周按搜索词报告做迁移与切分，
 把跑出来的高转化词升级到独立广告组（见 \cref{ch:google}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q90.}}] \textbf{素材测试怎么做？CTR、CVR、ROAS 三个指标在素材决策中怎么分工？}
+  \item[\textcolor{VioletDeep}{\textbf{Q96.}}] \textbf{素材测试怎么做？CTR、CVR、ROAS 三个指标在素材决策中怎么分工？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 测试方法：同广告组内多素材轮播或分组对照，
 每个素材积累到足够展示量再比较，避免小样本噪声；
@@ -1540,7 +1623,7 @@ ROAS 或 CPA 反映综合效率，是最终决策依据。
 结果买来的是「爱点但不买」的人群，最终 CPA 反而更高。
 素材生命周期通常按周计，要建立素材库与固定的迭代节奏（见 \cref{ch:meta}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q91.}}] \textbf{质量分（Quality Score）和相关性如何影响实际出价成本？}
+  \item[\textcolor{VioletDeep}{\textbf{Q97.}}] \textbf{质量分（Quality Score）和相关性如何影响实际出价成本？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 主流平台的广告排序通常不是单纯比出价，
 而是综合出价与质量信号（预期点击率、广告相关性、落地页体验）计算一个排序分，
@@ -1551,7 +1634,7 @@ ROAS 或 CPA 反映综合效率，是最终决策依据。
 但要注意质量分是平台内部指标，
 不应作为唯一目标，最终仍要看 CPA、ROAS 与增量转化（见 \cref{ch:google}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q92.}}] \textbf{落地页优化的优先级怎么排？给一个可执行的 CRO 清单。}
+  \item[\textcolor{VioletDeep}{\textbf{Q98.}}] \textbf{落地页优化的优先级怎么排？给一个可执行的 CRO 清单。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 优先级按「影响面 $\times$ 修复成本」排：
 第一是加载性能（首屏时间、图片拖慢），它是所有转化的前提；
@@ -1564,7 +1647,7 @@ ROAS 或 CPA 反映综合效率，是最终决策依据。
 常见错误是同时改五处导致无法归因，
 以及只看点击率不看最终转化（见 \cref{ch:cro}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q93.}}] \textbf{广告合规审查要查哪些点？跨境投放有哪些额外的合规风险？}
+  \item[\textcolor{VioletDeep}{\textbf{Q99.}}] \textbf{广告合规审查要查哪些点？跨境投放有哪些额外的合规风险？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 通用审查点：敏感行业限制（医疗、金融、博彩、成人内容）、
 绝对化用语与虚假承诺、未经证实的功效宣称、
@@ -1577,20 +1660,7 @@ ROAS 或 CPA 反映综合效率，是最终决策依据。
 处理原则是保留审查记录、建立素材预审流程与拒稿复盘机制，
 并且所有规则表述以官方最新文档为准（见 \cref{ch:google,ch:meta}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q94.}}] \textbf{投放预算应该怎么分配？你如何判断该加码还是收手？}
-\par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
-分配原则是按边际 ROI 而非平均 ROI：
-把预算从边际回报低的渠道挪到边际回报高的渠道，
-直到各渠道的边际回报接近。
-判断加码的信号：CPA 在目标区间内、预算消耗速度正常、
-增量实验显示有正 lift、以及放量后成本没有明显恶化。
-判断收手的信号：边际 CPA 持续上升，
-放量后 ROAS 掉到阈值以下，转化量增长停滞但花费增长，
-或者出现增量实验「无 lift」的情况（说明这部分转化本来就会发生）。
-注意季节性、竞品动作与平台算法学习期都会造成短期波动，
-所以决策要用滚动窗口而不是单日数据（见 \cref{ch:meta,ch:cro}）。
-
-  \item[\textcolor{VioletDeep}{\textbf{Q95.}}] \textbf{自然流量和付费流量，什么时候该加大投入哪一边？}
+  \item[\textcolor{VioletDeep}{\textbf{Q100.}}] \textbf{自然流量和付费流量，什么时候该加大投入哪一边？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 先做两件事：一是算边际 ROAS 与自然流量的弹性，
 二是验证付费对自然是否存在溢出效应
@@ -1604,7 +1674,7 @@ SEO 侧还有大量未覆盖的长尾意图。
 付费买到时间与数据，自然沉淀资产与品牌，
 并用统一的 LTV/CAC 口径评估总投入产出（见 \cref{ch:seo,ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q96.}}] \textbf{全域投放（Google / Meta / TikTok）的差异化策略是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q101.}}] \textbf{全域投放（Google / Meta / TikTok）的差异化策略是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 三个平台的心智不同：Google 承接主动意图
 （搜索与购物，转化意图明确，宜做品牌词、竞品词、长尾词与购物广告）；
@@ -1623,13 +1693,13 @@ Meta 做规模化与精准再营销，TikTok 做声量与增量人群。
 
 \section{跨境与供应链题库}
 
-本节 16 题对应 \cref{ch:cbec,ch:platform,ch:supply}，覆盖物流履约、库存与选品、合规与风险。
+本节 15 题对应 \cref{ch:cbec,ch:platform,ch:supply}，覆盖物流履约、库存与选品、合规与风险。
 
 \begin{interview}[题库与答题要点]
 
 \begin{enumerate}[label=]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q97.}}] \textbf{跨境电商如何做海外仓布局决策？}
+  \item[\textcolor{VioletDeep}{\textbf{Q102.}}] \textbf{跨境电商如何做海外仓布局决策？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 决策变量有四组：需求分布（各市场的订单密度与增长）、
 履约时效要求（平台对发货与妥投的考核）、
@@ -1643,7 +1713,7 @@ Meta 做规模化与精准再营销，TikTok 做声量与增量人群。
 每一步都要重新计算盈亏平衡点。
 先跑通一个国家的履约闭环再复制，而不是一上线就铺多国仓（见 \cref{ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q98.}}] \textbf{安全库存怎么算？服务水平怎么选？}
+  \item[\textcolor{VioletDeep}{\textbf{Q103.}}] \textbf{安全库存怎么算？服务水平怎么选？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 基础公式：$\text{SS} = z \times \sqrt{L\,\sigma_d^2 + d^2\sigma_L^2}$，
 其中 $z$ 是服务水平对应的标准正态分位数，
@@ -1656,7 +1726,7 @@ $d$ 是日均需求，$\sigma_L$ 是提前期标准差。
 对高波动品类用更高的 $z$ 或改为按周补货；
 长尾 SKU 可以用「少量多次加预售」替代高安全库存（见 \cref{ch:supply}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q99.}}] \textbf{需求预测怎么做？预测精度用什么指标？}
+  \item[\textcolor{VioletDeep}{\textbf{Q104.}}] \textbf{需求预测怎么做？预测精度用什么指标？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 分层做预测：品类级用宏观趋势与季节因子
 （可用 SARIMA 或指数平滑），SKU 级用机器学习模型
@@ -1670,7 +1740,7 @@ $d$ 是日均需求，$\sigma_L$ 是提前期标准差。
 落地时要建立「预测-补货-复盘」的闭环，
 每周对账预测与实际的差异并修正参数（见 \cref{ch:supply}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q100.}}] \textbf{供应商评估体系怎么设计？}
+  \item[\textcolor{VioletDeep}{\textbf{Q105.}}] \textbf{供应商评估体系怎么设计？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 用 QCDS 四维加合规维度：质量（不良率、验货通过率、客诉率）、
 成本（单价、付款条件、总拥有成本）、
@@ -1683,7 +1753,7 @@ $d$ 是日均需求，$\sigma_L$ 是提前期标准差。
 每个关键品类至少两家备选供应商，
 并定期做双盲比价与产能审计，避免单一供应商依赖（见 \cref{ch:supply}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q101.}}] \textbf{Incoterms 怎么选？FOB 与 DDP 的差异对成本和风险意味着什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q106.}}] \textbf{Incoterms 怎么选？FOB 与 DDP 的差异对成本和风险意味着什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 Incoterms 规定的是交货点、风险转移点与费用划分，不涉及所有权与付款。
 FOB（装运港船上交货）：卖方负责到装船为止，
@@ -1695,7 +1765,7 @@ DDP（完税后交货）：卖方承担全程运输、进口关税与清关，
 新市场建议先用 DDP 验证需求，跑通后再切到 FOB 或 DAP 降低成本。
 所有术语都要在合同里写明版本年份（见 \cref{ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q102.}}] \textbf{库存周转率与现金周期怎么算？如何改善？}
+  \item[\textcolor{VioletDeep}{\textbf{Q107.}}] \textbf{库存周转率与现金周期怎么算？如何改善？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 $\text{库存周转率} = \text{销货成本} / \text{平均库存}$；
 $\text{现金周期} = \text{存货天数} + \text{应收天数} - \text{应付天数}$。
@@ -1707,7 +1777,7 @@ $\text{现金周期} = \text{存货天数} + \text{应收天数} - \text{应付�
 因此在途库存与平台待结算资金都要计入现金周期核算，
 否则会低估资金压力（见 \cref{ch:supply,ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q103.}}] \textbf{跨境退换货与逆向物流怎么设计？成本怎么控制？}
+  \item[\textcolor{VioletDeep}{\textbf{Q108.}}] \textbf{跨境退换货与逆向物流怎么设计？成本怎么控制？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 设计要点：按品类设不同政策
 （服装鞋类退货率高，需重点设计尺码引导与试穿信息；
@@ -1720,7 +1790,7 @@ $\text{现金周期} = \text{存货天数} + \text{应收天数} - \text{应付�
 对高频退货用户做政策约束；用退货率作为选品的筛选指标之一。
 计算上要把退货成本计入单位经济模型，否则会高估毛利率（见 \cref{ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q104.}}] \textbf{跨境合规有哪些必须提前处理的？}
+  \item[\textcolor{VioletDeep}{\textbf{Q109.}}] \textbf{跨境合规有哪些必须提前处理的？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 五类必须提前处理：税务（VAT 与 GST 注册与申报、
 关税与贸易条款、发票合规，部分市场要求平台代扣代缴）；
@@ -1732,7 +1802,7 @@ $\text{现金周期} = \text{存货天数} + \text{应收天数} - \text{应付�
 而不是等收到处罚再补，
 并且所有规则以官方最新文档与当地法律意见为准（见 \cref{ch:cbec,ch:platform}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q105.}}] \textbf{选品的方法论是什么？怎么用数据判断一个品能不能做？}
+  \item[\textcolor{VioletDeep}{\textbf{Q110.}}] \textbf{选品的方法论是什么？怎么用数据判断一个品能不能做？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 四步漏斗：第一步用需求验证
 （搜索量趋势、平台榜单、社媒话题热度）确认有真实需求；
@@ -1744,7 +1814,7 @@ $\text{现金周期} = \text{存货天数} + \text{应收天数} - \text{应付�
 数据上要警惕「榜单上的销量是历史积累」与「季节性爆发」两类陷阱，
 新品的成功率通常远低于直觉，因此要小批量试销再放量（见 \cref{ch:supply,ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q106.}}] \textbf{汇率波动与海运价格波动怎么对冲？}
+  \item[\textcolor{VioletDeep}{\textbf{Q111.}}] \textbf{汇率波动与海运价格波动怎么对冲？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 汇率方面：定价上留出汇率缓冲（比如按保守汇率定售价），
 自然对冲（收入与成本币种匹配，
@@ -1758,7 +1828,7 @@ $\text{现金周期} = \text{存货天数} + \text{应收天数} - \text{应付�
 以及把交期缓冲写进平台承诺，
 避免因延误导致的绩效处罚（见 \cref{ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q107.}}] \textbf{多平台（Amazon / 独立站 / TikTok Shop / Temu / SHEIN）运营的核心差异是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q112.}}] \textbf{多平台（Amazon / 独立站 / TikTok Shop / Temu / SHEIN）运营的核心差异是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 差异在流量来源、成本结构与控制权三方面。
 Amazon：站内搜索流量为主，重商品页优化、评价与广告，
@@ -1772,7 +1842,7 @@ Temu 与 SHEIN 类全托管或半托管平台：
 比拼成本与交付稳定性，利润薄但量稳定。
 多平台并用时要解决库存共享与价格冲突问题（见 \cref{ch:platform}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q108.}}] \textbf{多平台库存同步与超卖问题怎么解决？}
+  \item[\textcolor{VioletDeep}{\textbf{Q113.}}] \textbf{多平台库存同步与超卖问题怎么解决？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 核心是分配策略而非同步技术。
 三种策略：硬分配（各平台预留固定库存，
@@ -1785,7 +1855,7 @@ Temu 与 SHEIN 类全托管或半托管平台：
 建立库存预警（低于安全水位、动销异常、在途延迟），让运营提前介入。
 对跨境电商还要叠加在途库存与清关时间（见 \cref{ch:supply,ch:platform}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q109.}}] \textbf{尾程配送时效怎么优化？}
+  \item[\textcolor{VioletDeep}{\textbf{Q114.}}] \textbf{尾程配送时效怎么优化？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 优化抓手有五个：一是仓网布局（把仓放在离客户更近的地方，
 时效提升最直接但成本最高）；
@@ -1797,7 +1867,7 @@ Temu 与 SHEIN 类全托管或半托管平台：
 因为平台考核通常看达标率。
 优化顺序建议先做路由与承运商组合，投入小见效快（见 \cref{ch:cbec}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q110.}}] \textbf{滞销库存怎么处理？}
+  \item[\textcolor{VioletDeep}{\textbf{Q115.}}] \textbf{滞销库存怎么处理？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 先分类再处置：按在库天数与动销率分成
 「轻度滞销（仍在售但周转慢）」、
@@ -1811,7 +1881,7 @@ Temu 与 SHEIN 类全托管或半托管平台：
 预防比处置更重要：设置新品首单上限与补货观察期、
 用动销率作为补货闸门、把滞销率纳入选品与采购的考核（见 \cref{ch:supply}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q111.}}] \textbf{供应链的牛鞭效应是什么？怎么抑制？}
+  \item[\textcolor{VioletDeep}{\textbf{Q116.}}] \textbf{供应链的牛鞭效应是什么？怎么抑制？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 牛鞭效应指需求的小波动沿供应链向上游逐级放大，
 末端的需求波动到了工厂可能变成剧烈震荡，
@@ -1832,11 +1902,11 @@ Temu 与 SHEIN 类全托管或半托管平台：
 
 本节 15 题对应 \cref{ch:growth,ch:receng}，覆盖实验设计、因果推断与数据质量。
 
-\begin{enumerate}[label=]
-
 \begin{interview}[题库与答题要点]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q112.}}] \textbf{如果用 AI 做供应链预测与选品，你会怎么做？风险在哪里？}
+\begin{enumerate}[label=]
+
+  \item[\textcolor{VioletDeep}{\textbf{Q117.}}] \textbf{如果用 AI 做供应链预测与选品，你会怎么做？风险在哪里？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 可落地的三个切入点：需求预测
 （多模型集成加促销与价格特征，
@@ -1851,7 +1921,7 @@ Temu 与 SHEIN 类全托管或半托管平台：
 以及把预测误差当成决策误差，
 实际上安全库存参数与服务水平的选择对结果的影响往往大于模型本身（见 \cref{ch:supply}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q113.}}] \textbf{如何设计一次严谨的 A/B 实验？}
+  \item[\textcolor{VioletDeep}{\textbf{Q118.}}] \textbf{如何设计一次严谨的 A/B 实验？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 七步：写清假设与预期机制；
 选分流单元（用户级还是会话级，
@@ -1863,7 +1933,7 @@ Temu 与 SHEIN 类全托管或半托管平台：
 结束后做异质性分析（分群效果）与显著性检验，并给出置信区间。
 必须提前决定的是主指标与成功标准，否则事后总有无数种解释方式（见 \cref{ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q114.}}] \textbf{GMV 下降 20\%，你会如何排查？}
+  \item[\textcolor{VioletDeep}{\textbf{Q119.}}] \textbf{GMV 下降 20\%，你会如何排查？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 分五步：第一，确认口径与数据链路，
 检查埋点版本、时区、去重逻辑、
@@ -1879,7 +1949,7 @@ $\text{UV}\times\text{转化率}\times\AOV$ 逐项算贡献，
 第五，给出主因、次因与动作，并明确哪些需要进一步验证。
 经验上「口径问题」占比很高，不要先怀疑模型。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q115.}}] \textbf{一个 A/B 实验显示核心指标提升 1\%，p 值 0.03，但你也看了 20 个指标，你会怎么下结论？}
+  \item[\textcolor{VioletDeep}{\textbf{Q120.}}] \textbf{一个 A/B 实验显示核心指标提升 1\%，p 值 0.03，但你也看了 20 个指标，你会怎么下结论？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 首先要说明多重比较问题：看 20 个指标时，
 即使全部无效，出现至少一个 p 小于 0.05 的概率约为
@@ -1891,49 +1961,7 @@ $1-0.95^{20}\approx 64\%$，所以单个 0.03 的证据强度很弱。
 检查是否有护栏指标恶化；最后在独立样本上复现一次再决策。
 如果只是探索性发现，应记为「待验证假设」而不是结论。
 
-\end{enumerate}
-
-\begin{lstlisting}[style=growth, language=Python, caption={A/B 实验样本量与最小可检测效应的快速估算（示意代码）}]
-
-import math
-
-def z_two_sided(alpha=0.05):
-
-    # normal quantile via Abramowitz-Stegun 26.2.23 approximation
-
-    p = 1 - alpha / 2
-
-    t = math.sqrt(-2 * math.log(1 - p))
-
-    return t - (2.30753 + 0.27061 * t) / (1 + 0.99229 * t + 0.04481 * t * t)
-
-def sample_size_per_arm(baseline, mde_rel, alpha=0.05, power=0.8):
-
-    # baseline: current conversion rate; mde_rel: relative lift to detect
-
-    delta = baseline * mde_rel
-
-    sigma2 = baseline * (1 - baseline)
-
-    z_a = z_two_sided(alpha)
-
-    z_b = z_two_sided(2 * (1 - power))  # one-sided quantile for power
-
-    return 2 * (z_a + z_b) ** 2 * sigma2 / (delta ** 2)
-
-if __name__ == "__main__":
-
-    for mde in (0.02, 0.05, 0.10):
-
-        n = sample_size_per_arm(0.03, mde)
-
-        print("MDE %.0f%%  ->  %d users per arm" % (mde * 100, math.ceil(n)))
-
-\end{lstlisting}
-
-\begin{enumerate}[label=]
-
-  \item[\textcolor{VioletDeep}{\textbf{Q116.}}] \textbf{A/B 实验的样本量怎么算？请给出公式与实现。}
+  \item[\textcolor{VioletDeep}{\textbf{Q121.}}] \textbf{A/B 实验的样本量怎么算？请给出公式与实现。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 对均值类指标，两组比较的每组样本量近似为
 $n = \frac{2(z_{1-\alpha/2}+z_{1-\beta})^2\sigma^2}{\Delta^2}$，
@@ -1945,7 +1973,30 @@ $n = \frac{2(z_{1-\alpha/2}+z_{1-\beta})^2\sigma^2}{\Delta^2}$，
 （至少覆盖一个完整周周期）。
 下面的脚本给出可直接运行的估算实现。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q117.}}] \textbf{CUPED 的原理是什么？什么时候无效甚至有害？}
+\begin{lstlisting}[style=growth, language=Python, caption={A/B 实验样本量与最小可检测效应的快速估算（示意代码）}]
+import math
+
+def z_two_sided(alpha=0.05):
+    # normal quantile via Abramowitz-Stegun 26.2.23 approximation
+    p = 1 - alpha / 2
+    t = math.sqrt(-2 * math.log(1 - p))
+    return t - (2.30753 + 0.27061 * t) / (1 + 0.99229 * t + 0.04481 * t * t)
+
+def sample_size_per_arm(baseline, mde_rel, alpha=0.05, power=0.8):
+    # baseline: current conversion rate; mde_rel: relative lift to detect
+    delta = baseline * mde_rel
+    sigma2 = baseline * (1 - baseline)
+    z_a = z_two_sided(alpha)
+    z_b = z_two_sided(2 * (1 - power))  # one-sided quantile for power
+    return 2 * (z_a + z_b) ** 2 * sigma2 / (delta ** 2)
+
+if __name__ == "__main__":
+    for mde in (0.02, 0.05, 0.10):
+        n = sample_size_per_arm(0.03, mde)
+        print("MDE %.0f%%  ->  %d users per arm" % (mde * 100, math.ceil(n)))
+\end{lstlisting}
+
+  \item[\textcolor{VioletDeep}{\textbf{Q122.}}] \textbf{CUPED 的原理是什么？什么时候无效甚至有害？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 CUPED 用实验前的协变量 $X$（如实验前 7 日的同一指标）
 构造调整后的指标 $Y' = Y - \theta(X - \E X)$，
@@ -1959,7 +2010,7 @@ CUPED 用实验前的协变量 $X$（如实验前 7 日的同一指标）
 指标重尾且线性假设严重破坏（此时用分位数或分层调整更稳）；
 以及分流单元与指标层级不匹配，使协变量与结果不在同一层级上。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q118.}}] \textbf{序贯检验有什么风险？怎么控制假阳性？}
+  \item[\textcolor{VioletDeep}{\textbf{Q123.}}] \textbf{序贯检验有什么风险？怎么控制假阳性？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 风险是「偷看数据」：每看一次就做一次检验，
 等于做了多次假设检验，整体第一类错误率远高于名义 $\alpha$，
@@ -1971,7 +2022,7 @@ CUPED 用实验前的协变量 $X$（如实验前 7 日的同一指标）
 工程上要把「允许查看的时间点」写进实验平台的流程，
 并对样本比（SRM）做自动告警。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q119.}}] \textbf{指标冲突怎么办？}
+  \item[\textcolor{VioletDeep}{\textbf{Q124.}}] \textbf{指标冲突怎么办？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 冲突通常有三种形态：短期与长期冲突（CTR 上升但留存下降）、
 规模与质量冲突（GMV 上升但退款率上升）、
@@ -1985,7 +2036,7 @@ CUPED 用实验前的协变量 $X$（如实验前 7 日的同一指标）
 如果只伤害小部分高风险用户，可以考虑分层策略而非全局取舍；
 第四，把判断依据写下来并复盘，形成团队的决策惯例。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q120.}}] \textbf{辛普森悖论在增长数据分析里的表现是什么？怎么避免？}
+  \item[\textcolor{VioletDeep}{\textbf{Q125.}}] \textbf{辛普森悖论在增长数据分析里的表现是什么？怎么避免？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 表现是：分组内每一组都显示 A 优于 B，合并后却显示 B 优于 A，
 原因是分组这个混杂变量与分组规模和结果都相关。
@@ -1998,7 +2049,7 @@ iOS 转化率高但流量占比在两组间不同；
 可视化时画出分层结果而不是只看汇总；
 以及在实验设计阶段就做分层随机化（按端、地区分桶后再随机）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q121.}}] \textbf{实验分流怎么会出问题？你有哪些检查手段？}
+  \item[\textcolor{VioletDeep}{\textbf{Q126.}}] \textbf{实验分流怎么会出问题？你有哪些检查手段？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 常见问题：哈希函数或分流键选错导致组间不独立；
 同一用户在不同端或未登录与登录状态被分到不同组；
@@ -2012,7 +2063,7 @@ iOS 转化率高但流量占比在两组间不同；
 上线前用固定的分桶测试用例验证哈希稳定性；
 对互斥层做冲突检测，避免同一模块被两个实验覆盖。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q122.}}] \textbf{数据质量怎么保证？你的埋点规范是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q127.}}] \textbf{数据质量怎么保证？你的埋点规范是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 规范分四部分：命名（模块\_对象\_动作，全小写加下划线，禁止同义不同名）；
 字段（事件时间用服务端时间戳加客户端时间戳，
@@ -2025,7 +2076,7 @@ iOS 转化率高但流量占比在两组间不同；
 质量上要区分「数据错误」与「业务变化」：
 前者靠对账与幂等保证，后者靠口径文档与变更记录保证（见 \cref{ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q123.}}] \textbf{北极星指标怎么选？为什么单一指标容易被操纵？}
+  \item[\textcolor{VioletDeep}{\textbf{Q128.}}] \textbf{北极星指标怎么选？为什么单一指标容易被操纵？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 好的北极星指标要满足三条：反映用户获得的核心价值、
 与长期商业价值同向、且团队可影响。
@@ -2038,7 +2089,7 @@ SaaS 常用留存与扩展收入。
 （留存、退款率、负反馈率、单位经济模型健康度），
 并且定期反思指标与价值是否仍然同向（见 \cref{ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q124.}}] \textbf{漏斗分析与留存分析常见陷阱有哪些？}
+  \item[\textcolor{VioletDeep}{\textbf{Q129.}}] \textbf{漏斗分析与留存分析常见陷阱有哪些？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 漏斗的陷阱：把不同意图的行为放进同一漏斗
 （浏览加购与直接加购是两类路径）；
@@ -2053,7 +2104,7 @@ SaaS 常用留存与扩展收入。
 正确做法是固定队列（cohort）后纵向对比，
 并对每条结论标注口径与样本量。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q125.}}] \textbf{线上指标和离线指标不一致时，怎么定位是哪一层出了问题？}
+  \item[\textcolor{VioletDeep}{\textbf{Q130.}}] \textbf{线上指标和离线指标不一致时，怎么定位是哪一层出了问题？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 按数据流分层定位：样本层（离线样本是否覆盖线上全量请求，
 负样本如何定义、是否做了下采样且未校正）；
@@ -2066,7 +2117,7 @@ AUC 高不必然带来转化提升）。
 固定一批请求 ID，逐层 dump 中间结果，
 比较离线复现与线上实际的差异，差异首次出现的那一层就是问题所在。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q126.}}] \textbf{特征穿越有哪些形态？怎么系统性地检测？}
+  \item[\textcolor{VioletDeep}{\textbf{Q131.}}] \textbf{特征穿越有哪些形态？怎么系统性地检测？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 三种形态：时间穿越（用标签时刻之后的行为或统计构造特征）；
 统计穿越（用全量数据算均值方差再应用到历史样本，等于使用了未来信息）；
@@ -2085,15 +2136,14 @@ AUC 高不必然带来转化提升）。
 
 \section{行为面与开放题题库}
 
-本节 12 题是技术面最后一轮与 HR 面的高频题。
-
+本节 13 题是技术面最后一轮与 HR 面的高频题。
 回答原则是：给具体例子而不是形容词，承认失败与局限，并展示你如何做取舍。
-
-\begin{enumerate}[label=]
 
 \begin{interview}[题库与答题要点]
 
-  \item[\textcolor{VioletDeep}{\textbf{Q127.}}] \textbf{无法做 A/B 时怎么做因果推断？要注意什么？}
+\begin{enumerate}[label=]
+
+  \item[\textcolor{VioletDeep}{\textbf{Q132.}}] \textbf{无法做 A/B 时怎么做因果推断？要注意什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 可用的设计有：双重差分（DID，利用处理组与对照组在干预前后的变化之差）、
 合成控制（用多个未处理单位构造处理单位的反事实）、
@@ -2109,7 +2159,7 @@ AUC 高不必然带来转化提升）。
 第三，报告效应时给区间与稳健性检验，
 不要给一个孤立的点估计（见 \cref{ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q128.}}] \textbf{如何从 0 搭建一个推荐系统？}
+  \item[\textcolor{VioletDeep}{\textbf{Q133.}}] \textbf{如何从 0 搭建一个推荐系统？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 按「先闭环、后精度」的顺序推进。
 第 1 到 2 周：统一事件埋点与 ID 体系，
@@ -2123,7 +2173,7 @@ AUC 高不必然带来转化提升）。
 最关键的不是模型，而是\textbf{样本、特征、实验}三件基础设施，
 没有它们，后续任何模型迭代都无法判断真假（见 \cref{ch:recall,ch:receng}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q129.}}] \textbf{如何从 0 搭建一个增长团队与数据体系？}
+  \item[\textcolor{VioletDeep}{\textbf{Q134.}}] \textbf{如何从 0 搭建一个增长团队与数据体系？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 顺序是「先度量、再实验、后规模化」。
 第一阶段（1 到 2 个月）：统一指标口径与埋点规范，
@@ -2138,7 +2188,7 @@ AUC 高不必然带来转化提升）。
 常见的失败是先招一堆算法工程师却没有度量体系，
 导致所有优化都无法证明价值（见 \cref{ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q130.}}] \textbf{指标跌了怎么排查？请给一个通用排查框架。}
+  \item[\textcolor{VioletDeep}{\textbf{Q135.}}] \textbf{指标跌了怎么排查？请给一个通用排查框架。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 用「先排除假跌、再分解真跌、最后归因变更」三段式。
 第一段排除假跌：口径与埋点、ETL 延迟、时区与去重、
@@ -2153,7 +2203,7 @@ AUC 高不必然带来转化提升）。
 这个框架对 GMV、DAU、广告收入都通用，
 差别只在于恒等式的形式（见 \cref{ch:overview,ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q131.}}] \textbf{如何做技术选型？请给一个决策框架。}
+  \item[\textcolor{VioletDeep}{\textbf{Q136.}}] \textbf{如何做技术选型？请给一个决策框架。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 五步框架：第一，明确要解决的\textbf{问题}
 与可接受的量化目标（延迟、精度、成本）；
@@ -2167,7 +2217,7 @@ AUC 高不必然带来转化提升）。
 对核心链路的组件要求可替换性；对次要环节直接用托管服务。
 最后要把决策记录写下来（含被否决的方案与理由），便于后续复盘（见 \cref{ch:receng}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q132.}}] \textbf{如何与产品 / 运营协作？遇到目标冲突怎么办？}
+  \item[\textcolor{VioletDeep}{\textbf{Q137.}}] \textbf{如何与产品 / 运营协作？遇到目标冲突怎么办？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 协作关键是三点：把业务目标翻译成可度量指标并共同确认口径；
 明确每个指标的护栏与优先级，避免「都要」；
@@ -2181,7 +2231,7 @@ AUC 高不必然带来转化提升）。
 上交到有决策权的人并给出选项与代价，而不是在下游互相消耗。
 技术侧要主动给出「代价清单」，让业务方在信息充分的情况下做选择（见 \cref{ch:growth}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q133.}}] \textbf{讲一个你主导的项目，用 STAR 结构（含失败与反思）。}
+  \item[\textcolor{VioletDeep}{\textbf{Q138.}}] \textbf{讲一个你主导的项目，用 STAR 结构（含失败与反思）。}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 按 STAR 组织，重点在「为什么这么做」。
 示例骨架：背景是某电商首页推荐 CTR 长期停滞
@@ -2196,7 +2246,7 @@ p99 延迟从 180\,ms 降到 165\,ms（R）。
 因为前期有两个星期浪费在排查假收益上。
 注意所有数字要真实且量级合理，被追问时能说清口径与统计显著性。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q134.}}] \textbf{你在技术方案上和上级或资深同事有分歧，怎么处理？}
+  \item[\textcolor{VioletDeep}{\textbf{Q139.}}] \textbf{你在技术方案上和上级或资深同事有分歧，怎么处理？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 先假定对方掌握你不知道的信息，
 主动问「你担心的是哪个具体风险」，把分歧从立场变为假设。
@@ -2211,7 +2261,7 @@ p99 延迟从 180\,ms 降到 165\,ms（R）。
 无论结果如何，复盘时把这次分歧的记录拿出来，
 让团队形成「用证据决策」的习惯。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q135.}}] \textbf{最失败的项目或最大的技术教训是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q140.}}] \textbf{最失败的项目或最大的技术教训是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 选一个真实、有技术含量、并且你现在能清楚解释根因的失败。
 推荐这几类：特征穿越导致离线虚高、上线后效果归零；
@@ -2224,7 +2274,7 @@ p99 延迟从 180\,ms 降到 165\,ms（R）。
 （比如特征时间戳校验脚本、实验预注册流程）。
 最后一点是最重要的加分项：失败带来了什么可复用的流程改进。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q136.}}] \textbf{你是怎么做竞品分析的？}
+  \item[\textcolor{VioletDeep}{\textbf{Q141.}}] \textbf{你是怎么做竞品分析的？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 分四层：第一层是功能与体验
 （列出核心路径逐步截图对比，关注首屏、搜索、详情、下单、售后）；
@@ -2238,7 +2288,7 @@ p99 延迟从 180\,ms 降到 165\,ms（R）。
 输出要落到「差异点与可行动作」，而不是功能清单；
 每个结论都要标注证据来源与置信度，并定期更新（见 \cref{ch:seo,ch:geo}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q137.}}] \textbf{为什么选择这个岗位？你的职业规划是什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q142.}}] \textbf{为什么选择这个岗位？你的职业规划是什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 回答要落在三件事上：你的能力与岗位需求的匹配点
 （用一两个具体项目证明，例如你既做过模型也做过实验平台，理解端到端链路）；
@@ -2251,7 +2301,7 @@ p99 延迟从 180\,ms 降到 165\,ms（R）。
 第三年在某个技术方向或业务方向上形成可对外的方法论输出。
 表达上要真诚、具体，避免套话。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q138.}}] \textbf{资源不足（人少、时间紧）时怎么推进项目？}
+  \item[\textcolor{VioletDeep}{\textbf{Q143.}}] \textbf{资源不足（人少、时间紧）时怎么推进项目？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 核心动作是「砍范围、保闭环」。
 先确认项目要回答的唯一问题是哪一个，
@@ -2265,7 +2315,7 @@ p99 延迟从 180\,ms 降到 165\,ms（R）。
 最后，短期用规则换时间的同时要把技术债记录下来，
 否则半年后会付出更大代价（见 \cref{ch:receng}）。
 
-  \item[\textcolor{VioletDeep}{\textbf{Q139.}}] \textbf{你怎么持续学习？最近在学什么？}
+  \item[\textcolor{VioletDeep}{\textbf{Q144.}}] \textbf{你怎么持续学习？最近在学什么？}
 \par\smallskip\noindent\textcolor{VioletDeep}{\textbf{答题要点：}}
 回答要给具体机制而不是态度：
 读论文（每周固定读 1 到 2 篇，只精读与自己业务相关的，其余看摘要与图表）；
@@ -2290,7 +2340,7 @@ p99 延迟从 180\,ms 降到 165\,ms（R）。
 
 平台政策与费率类内容以官方最新文档为准。
 
-\begin{longtable}{\textwidth}{L{3.0cm} L{4.8cm} L{7.4cm}}
+\begin{xltabular}{\textwidth}{L{2.5cm} L{4.4cm} L{7.2cm}}
 
 \caption{推荐与模型八股速答表}\label{tab:interview-recsys}\\
 
@@ -2354,9 +2404,9 @@ LoRA & $\Delta W=BA$，$A$ 随机、$B$ 置零；rank 常取 4 到 64 & 生效�
 
 DPO vs PPO & DPO 用策略与参考模型的对数比构造损失，无需奖励模型与在线采样 & 代价是失去在线探索；分布外样本泛化不如 PPO 灵活 \\
 
-\end{longtable}
+\end{xltabular}
 
-\begin{longtable}{\textwidth}{L{3.0cm} L{4.8cm} L{7.4cm}}
+\begin{xltabular}{\textwidth}{L{2.5cm} L{4.4cm} L{7.2cm}}
 
 \caption{广告、SEO、供应链与实验八股速答表}\label{tab:interview-ad}\\
 
@@ -2420,7 +2470,7 @@ CUPED & $Y'=Y-\theta(X-\E X)$，$\theta=\Cov(Y,X)/\Var(X)$，方差降低约 $\r
 
 古德哈特效应 & 指标一旦成为目标就会失去作为度量的有效性（\cite{goodhart1975}） & 对策是北极星指标配一组护栏指标，并定期反思同向性 \\
 
-\end{longtable}
+\end{xltabular}
 
 \begin{keypoint}[本章要点回顾]
 

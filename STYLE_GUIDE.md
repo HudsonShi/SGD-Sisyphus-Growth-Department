@@ -231,10 +231,10 @@ python3 tools/check.py --strict              # 有 ERROR 时返回非零退出�
 | 坑 | 现象 | 正确写法 |
 |---|---|---|
 | `\mathbb{1}` | macnew 字体无字形，`Missing character` | `\mathbf{1}` |
-| 数学算子用在正文里 | `\CTR \CVR \CPC \CPM \ROAS \ROI \LTV \CAC \GMV \AOV \CPA \eCPM \pCTR \AUC \GAUC \NDCG` 等是 `\DeclareMathOperator` 定义的，**只能在数学模式内用**，否则 `Missing $ inserted` 直接中断编译 | 写 `$\CTR$`，不要写 `\CTR{}`；TikZ 节点文本与表格单元格同理 |
+| 数学算子用在正文里 | `\CTR \CVR \CPC \CPM \ROAS \ROI \LTV \CAC \GMV \AOV \CPA \eCPM \pCTR \AUC \GAUC \NDCG` 等是 `\DeclareMathOperator` 定义的，**只能在数学模式内用**，否则 `Missing $ inserted` 直接中断编译 | 写 `$\CTR$`，不要写 `\CTR{}`；TikZ 节点文本与表格单元格同理。**正文/表头里想用非斜体缩写时，用 `\metric{CTR}`（无衬线，文本模式可用）** |
 | tcolorbox 内放浮动体 | `! LaTeX Error: Float(s) lost.` | 盒内不要用 `\begin{table}`；改用 `\begin{center} ... \captionof{table}{...} \label{...} \end{center}` |
 | tcolorbox 内 `tabularx{\textwidth}` | 盒子内容溢出 | 用 `\linewidth` |
-| TikZ 样式名 `in` / `out` | `Package pgfkeys Error: The key '/tikz/in' requires a value`，Emergency stop | 改名 `inflow` / `obox` 等 |
+| TikZ 样式名 `in` / `out` / `cap` | `Package pgfkeys Error: The key '/tikz/in' requires a value`，Emergency stop | 改名 `inflow` / `obox` / `capnode` 等。**凡是与 pgfkeys 内置键同名的短样式名都有风险**，建议统一加后缀 |
 | TikZ 图超出版心 | `Overfull \hbox` | 用 `\resizebox{\textwidth}{!}{...}` 包裹，或重排坐标 |
 | `\ifnum\i>=\j` | TeX 的 `\ifnum` 关系符只能是单 token，报 `Missing number` | 写成 `\ifnum\j>\i ... \else ... \fi` |
 | `language=yaml`（旧版 listings） | `Package Listings Error: language yaml undefined` | 本仓库已在 `notesstyle.sty` 中自定义 `yaml` 与 `json`；若仍报错就改用 `bash`/`Python` |

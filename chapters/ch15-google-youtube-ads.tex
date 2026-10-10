@@ -693,7 +693,7 @@ Feed 里每一个字段都在回答算法的一个问题，
 \addlinespace
 \code{price} 与 \code{availability} & 现在能不能买、多少钱 & 曝光资格与拒登 & 落地页价格与 Feed 不一致、缺货未同步，是最常见的政策违规 \\
 \addlinespace
-\code{google\_product\_category} & 它属于哪一类 & 分类匹配与竞价分组 & 留空或错填，导致被归入泛类目、错过品类对比场景 \\
+商品类目\newline\code{category} & 它属于哪一类 & 分类匹配与竞价分组 & 留空或错填，导致被归入泛类目、错过品类对比场景 \\
 \addlinespace
 \code{product\_type} & 你自己的分类体系 & 商品分组与报告 & 与类目字段混用；不统一会导致分组报表无法聚合 \\
 \bottomrule
@@ -778,11 +778,12 @@ Feed 优化对指标的影响是有路径的，不能用「优化 Feed 就能提
 
 \subsection{广告形态与计费方式}
 
-YouTube 广告与搜索广告的底层逻辑完全不同：
-搜索广告买的是\kw{已经表达出来的意图}，
-YouTube 买的是\kw{注意力与记忆}。
-这个差别决定了 YouTube 的评估周期更长、素材的作用更大、
-而「点击率」这个在搜索里最重要的指标在 YouTube 上往往不是主指标。
+YouTube 广告与搜索广告的底层逻辑完全不同。
+搜索广告买的是用户已经表达出来的意图，
+YouTube 买的则是注意力与记忆。
+这个差别带来两个直接后果：
+一是 YouTube 的评估周期更长、素材的作用更大；
+二是点击率这个在搜索广告里最重要的指标，在 YouTube 上往往不是主指标。
 
 \begin{table}[htbp]
 \centering
@@ -1338,22 +1339,20 @@ w_i^{\text{DDA}} = f(\text{位置}, \text{间隔}, \text{触点类型}) .
 两种限制的症状表面相似（都是「想多花但花不掉」或「花掉了但成本高」），
 但根因与修法完全相反。
 
-先从量上定义一个判据。设某段时间的
-曝光份额为 $\mathrm{IS}$、因预算丢失的曝光份额为
-$\mathrm{IS}_{\text{lost(budget)}}$、
-因排名（出价与质量）丢失的曝光份额为 $\mathrm{IS}_{\text{lost(rank)}}$，
+先从量上定义一个判据。设某段时间的曝光份额为 $\mathrm{IS}$，
+因预算丢失的曝光份额记为 $B_{\text{lost}}$，
+因排名（出价与质量）丢失的曝光份额记为 $R_{\text{lost}}$，
 则有近似分解
 
 \begin{equation}
-1 - \mathrm{IS} \;\approx\;
-\mathrm{IS}_{\text{lost(budget)}} + \mathrm{IS}_{\text{lost(rank)}} ,
+1 - \mathrm{IS} \;\approx\; B_{\text{lost}} + R_{\text{lost}} ,
 \label{eq:g-is-decomp}
 \end{equation}
 
 \begin{equation}
-\text{预算受限} \iff \mathrm{IS}_{\text{lost(budget)}} \gg \mathrm{IS}_{\text{lost(rank)}} ,
+\text{预算受限} \iff B_{\text{lost}} \gg R_{\text{lost}} ,
 \qquad
-\text{出价受限} \iff \mathrm{IS}_{\text{lost(rank)}} \gg \mathrm{IS}_{\text{lost(budget)}} .
+\text{出价受限} \iff R_{\text{lost}} \gg B_{\text{lost}} .
 \label{eq:g-budget-vs-bid}
 \end{equation}
 

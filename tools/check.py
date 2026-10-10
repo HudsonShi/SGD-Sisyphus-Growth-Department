@@ -85,11 +85,35 @@ MATH_ONLY_MACROS = [
     "Var", "Cov", "CTR", "CVR", "CPC", "CPM", "ROAS", "ROI", "LTV", "CAC",
     "GMV", "AOV", "ECE", "CPA", "CPT", "CPI", "eCPM", "oCPC", "oCPM", "oCPA",
     "iROAS", "pCTR", "pCVR", "ARPU", "DAU", "MAU", "CTCVR", "CPV", "CPE",
-    "CPS", "tCPA", "tROAS", "argmax", "argmin", "softmax", "sigmoid", "relu",
-    "concat", "MLP", "Attention", "Fone", "E", "Prob",
+    "CPS", "tCPA", "tROAS", "UV", "PV", "argmax", "argmin", "softmax",
+    "sigmoid", "relu", "concat", "MLP", "Attention", "Fone", "E", "Prob",
+    # \newcommand 定义的数学专用宏（同样不能出现在文本模式）
+    "R", "N", "T", "dd", "given", "norm", "abs", "inner",
 ]
-MACRO_USE = re.compile(r"\\(?:" + "|".join(sorted(MATH_ONLY_MACROS, key=len,
-                                                 reverse=True)) + r")(?![A-Za-z])")
+
+
+def load_math_only_macros() -> List[str]:
+    r"""合并「内置列表」与 notesstyle.sty 中实际定义的算子。
+
+    直接解析样式文件，避免有人在 sty 里新增 operator 宏之后 lint 漏检
+    （曾经发生过：UV / PV 就是漏网的）。
+    """
+    names = set(MATH_ONLY_MACROS)
+    sty = os.path.join(ROOT, "notesstyle.sty")
+    if os.path.exists(sty):
+        with open(sty, encoding="utf-8") as fh:
+            text = fh.read()
+        for m in re.finditer(r"\\DeclareMathOperator\*?\{\\([A-Za-z]+)\}", text):
+            names.add(m.group(1))
+    return sorted(names, key=len, reverse=True)
+
+
+MACRO_USE = re.compile(r"\\(?:" + "|".join(load_math_only_macros()) + r")(?![A-Za-z])")
+
+# lstlisting 选项里的 caption={...}：caption 在文本模式排版，
+# 裸下划线会触发 "Missing $ inserted"
+LST_OPTIONS = re.compile(r"\\begin\{lstlisting\}(\[[^\]]*\])?")
+CAPTION_OPT = re.compile(r"caption\s*=\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}")
 
 
 def blank_regions(body: str) -> str:
@@ -305,6 +329,18 @@ def check_file(path: str, bib_keys: Set[str],
             snippet = body[max(0, m.start() - 24):m.end() + 18].replace("\n", " ")
             errors.append(f"L{line}: math-only macro \\{m.group(0)[1:]} used outside "
                           f"math mode (missing $...$) | ...{snippet}...")
+
+    # 10 lstlisting caption 里的裸下划线（caption 在文本模式排版）
+    for m in LST_OPTIONS.finditer(body):
+        opts = m.group(1) or ""
+        cap = CAPTION_OPT.search(opts)
+        if not cap:
+            continue
+        text = cap.group(1)
+        for um in re.finditer(r"(?<!\\)_", text):
+            line = body[:m.start()].count("\n") + 1
+            errors.append(f"L{line}: bare '_' in lstlisting caption "
+                          f"(escape as \\_): ...{text[:60]}...")
 
     stats = {
         "cjk": len(re.findall(r"[\u4e00-\u9fff]", body)),

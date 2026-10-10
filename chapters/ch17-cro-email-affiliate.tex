@@ -33,8 +33,8 @@
 \end{equation}
 
 链上的每一段都可以独立优化，并且它们的\emph{边际收益}常常差异巨大：
-在 \CTR{} 上的投入要对抗拍卖与素材疲劳（见 \cref{ch:meta}、\cref{ch:google}），
-而在\CVR{} 上的投入只对抗自己团队的认知与工程能力。
+在 $\CTR$ 上的投入要对抗拍卖与素材疲劳（见 \cref{ch:meta}、\cref{ch:google}），
+而在 $\CVR$ 上的投入只对抗自己团队的认知与工程能力。
 本章的组织方式正是沿着这条链展开：落地页（\cref{sec:cro-lp}）解决「进来之后第一眼」，
 CRO 方法论（\cref{sec:cro-method}）解决「怎么科学地改」，
 漏斗诊断（\cref{sec:cro-funnel}）解决「该改哪一段」，
@@ -185,7 +185,7 @@ $\gamma_k \in [0,1]$ 是三类不一致造成的折损系数：人群不一致�
 $\mathrm{MM}$ 本身难以精确测量，但它把讨论从「文案好不好」转成了\emph{四个维度上的一致性检查}，
 这让它可以被写进上线前的验收清单。
 
-一个可操作的替代做法是把一致性拆成分项体检表，并在严重不一致时**暂停投放而不是继续优化**，
+一个可操作的替代做法是把一致性拆成分项体检表，并在严重不一致时\kw{暂停投放而不是继续优化}，
 因为在不一致的前提下优化页面，等于在错误的流量上求极小值。
 
 \begin{table}[htbp]
@@ -576,7 +576,7 @@ CRO 领域有一个公开的尴尬事实：大量被宣布为「已验证赢家�
 \toprule
 \tabhead{层} & \tabhead{示范量级} & \tabhead{口径} & \tabhead{异常信号} & \tabhead{最常见根因} \\
 \midrule
-曝光到点击 & \CTR{} 0.5\%--2\% & 广告展示为分母 & 某素材 \CTR{} 突然腰斩且持续 3 天以上 & 素材疲劳、受众重叠、出价结构变化 \\
+曝光到点击 & $\CTR$ 0.5\%--2\% & 广告展示为分母 & 某素材 $\CTR$ 突然腰斩且持续 3 天以上 & 素材疲劳、受众重叠、出价结构变化 \\
 \addlinespace
 点击到落地停留 & 有效会话 50\%--75\% & 停留 $\ge$ 10\,s 或滚动 $\ge$ 25\% & 落地即走比例上升 & 信息一致性断裂、页面白屏、跳转链路错误 \\
 \addlinespace
@@ -595,33 +595,33 @@ CRO 领域有一个公开的尴尬事实：大量被宣布为「已验证赢家�
 \centering
 \begin{tikzpicture}[
   every node/.style={font=\sffamily\scriptsize, align=center},
-  base/.style={draw, rounded corners=2pt, minimum height=10mm, inner sep=4pt},
-  fA/.style={base, draw=NavyMid, fill=BoxBG, minimum width=3.0cm},
-  fB/.style={base, draw=TealDeep, fill=BoxBGAlt, minimum width=2.6cm},
-  fC/.style={base, draw=AmberDeep, fill=BoxBG, minimum width=2.2cm},
-  fD/.style={base, draw=VioletDeep, fill=BoxBGAlt, minimum width=1.8cm},
-  fE/.style={base, draw=CrimsonDeep, fill=BoxBG, minimum width=1.4cm},
-  rate/.style={font=\sffamily\tiny, text width=2.5cm, align=left},
+  base/.style={draw, rounded corners=2pt, minimum height=9mm, inner sep=3pt},
+  fA/.style={base, draw=NavyMid, fill=BoxBG, minimum width=3.4cm},
+  fB/.style={base, draw=TealDeep, fill=BoxBGAlt, minimum width=2.9cm},
+  fC/.style={base, draw=AmberDeep, fill=BoxBG, minimum width=2.4cm},
+  fD/.style={base, draw=VioletDeep, fill=BoxBGAlt, minimum width=1.9cm},
+  fE/.style={base, draw=CrimsonDeep, fill=BoxBG, minimum width=1.5cm},
+  rate/.style={font=\sffamily\tiny, text width=2.9cm, align=left, inner sep=2pt},
   diag/.style={draw=RuleGray, fill=white, rounded corners=1pt, font=\sffamily\tiny,
-               text width=5.3cm, align=left, inner sep=2pt}
+               text width=7.2cm, align=left, inner sep=2pt}
 ]
-\node[fA] (a) at (0,7)   {\textbf{曝光}};
-\node[fA] (b) at (0,5)   {\textbf{点击}};
-\node[fB] (c) at (0,3)   {\textbf{落地}};
-\node[fC] (d) at (0,1)   {\textbf{加购}};
-\node[fD] (e) at (0,-1)  {\textbf{结账}};
-\node[fE] (f) at (0,-3)  {\textbf{支付}};
-\node[rate] at (2.0,6)   {$\CTR$：素材疲劳（受众 / 出价）};
-\node[rate] at (2.0,4)   {有效会话率：信息一致性 / 速度};
-\node[rate] at (2.0,2)   {加购率：价值主张 / 证据};
-\node[rate] at (2.0,0)   {结账完成率：运费 / 表单 / 注册};
-\node[rate] at (2.0,-2)  {支付成功率：通道 / 风控 / 3DS};
-\node[diag] at (9.3,6)   {先看分素材、分受众的 $\CTR$ 走势；素材疲劳与受众重叠是首要嫌疑。};
-\node[diag] at (9.3,4)   {落地即走升高时，先查广告与页面配对表，再查 LCP 与脚本阻塞。};
-\node[diag] at (9.3,2)   {把价格、运费门槛、时效在加购前讲清；证据型内容补在滚动中段。};
-\node[diag] at (9.3,0)   {运费税费突现、强制注册、字段过多吃掉大部分结账流失。};
-\node[diag] at (9.3,-2)  {支付失败率高于 5\% 属于工程事故，优先于任何页面优化。};
-\node[diag] at (9.3,-4.6) {\textbf{诊断顺序：自下而上}。先排除支付与履约事故，
+\node[fA] (a) at (0,7.0)   {\textbf{曝光}};
+\node[fA] (b) at (0,5.2)   {\textbf{点击}};
+\node[fB] (c) at (0,3.4)   {\textbf{落地}};
+\node[fC] (d) at (0,1.6)   {\textbf{加购}};
+\node[fD] (e) at (0,-0.2)  {\textbf{结账}};
+\node[fE] (f) at (0,-2.0)  {\textbf{支付}};
+\node[rate] at (2.6,6.1)   {\textbf{$\CTR$}：素材疲劳\\（受众 / 出价）};
+\node[rate] at (2.6,4.3)   {\textbf{有效会话率}：\\信息一致性 / 速度};
+\node[rate] at (2.6,2.5)   {\textbf{加购率}：\\价值主张 / 证据};
+\node[rate] at (2.6,0.7)   {\textbf{结账完成率}：\\运费 / 表单 / 注册};
+\node[rate] at (2.6,-1.1)  {\textbf{支付成功率}：\\通道 / 风控 / 3DS};
+\node[diag] at (9.5,6.1)   {先看分素材、分受众的 $\CTR$ 走势；素材疲劳与受众重叠是首要嫌疑。};
+\node[diag] at (9.5,4.3)   {落地即走升高时，先查广告与页面配对表，再查 LCP 与脚本阻塞。};
+\node[diag] at (9.5,2.5)   {把价格、运费门槛、时效在加购前讲清；证据型内容补在滚动中段。};
+\node[diag] at (9.5,0.7)   {运费税费突现、强制注册、字段过多吃掉大部分结账流失。};
+\node[diag] at (9.5,-1.1)  {支付失败率高于 5\% 属于工程事故，优先于任何页面优化。};
+\node[diag] at (9.5,-3.6)  {\textbf{诊断顺序：自下而上}。先排除支付与履约事故，
   再修结账规则，最后才做加购率与落地页的说服力实验。};
 \draw[-{Stealth}, SlateGray] (a) -- (b);
 \draw[-{Stealth}, SlateGray] (b) -- (c);
@@ -912,7 +912,7 @@ B_{\text{投诉}} = N_{\text{标记垃圾}} / N_{\text{送达}} .
 \caption{邮件身份认证三件套的分工与常见配置错误（具体要求以各服务商最新文档为准）}
 \label{tab:email-auth}
 \small
-\begin{tabularx}{\textwidth}{L{1.3cm} L{3.2cm} L{3.3cm} Y}
+\begin{tabularx}{\textwidth}{L{1.55cm} L{3.2cm} L{3.3cm} Y}
 \toprule
 \tabhead{机制} & \tabhead{解决的问题} & \tabhead{失效时的表现} & \tabhead{常见配置错误} \\
 \midrule
