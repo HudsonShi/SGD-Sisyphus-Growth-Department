@@ -502,7 +502,7 @@ $d_u$ 是页面在信息架构中的层级深度。分母惩罚「跨层乱链�
 \begin{equation}
 \text{KD}(k) = 100 \cdot \Bigg( \alpha \cdot \underbrace{\frac{1}{10}\sum_{j=1}^{10} \frac{\text{DA}_j}{100}}_{\text{竞争域名强度}}
 + \beta \cdot \underbrace{\frac{1}{10}\sum_{j=1}^{10} \frac{\abs{P_j}}{L^{*}}}_{\text{竞争内容深度}}
-+ \gamma \cdot \underbrace{\mathbb{1}[\text{SERP 含强特征}]}_{\text{强特征惩罚}} \Bigg) ,
++ \gamma \cdot \underbrace{\mathbf{1}[\text{SERP 含强特征}]}_{\text{强特征惩罚}} \Bigg) ,
 \label{eq:kwkd}
 \end{equation}
 
@@ -747,7 +747,7 @@ CLS & 视觉稳定性 & $\le 0.1$ & 0.1--0.25 & $> 0.25$ & 图片与广告位无
 \end{table}
 
 \begin{equation}
-\text{CWV}_{\text{pass}} = \mathbb{1}\Big[\, q_{75}(\text{LCP}) \le 2.5 \ \wedge\ q_{75}(\text{INP}) \le 200 \ \wedge\ q_{75}(\text{CLS}) \le 0.1 \,\Big] ,
+\text{CWV}_{\text{pass}} = \mathbf{1}\Big[\, q_{75}(\text{LCP}) \le 2.5 \ \wedge\ q_{75}(\text{INP}) \le 200 \ \wedge\ q_{75}(\text{CLS}) \le 0.1 \,\Big] ,
 \label{eq:cwvthreshold}
 \end{equation}
 
@@ -1449,7 +1449,7 @@ GSC & 查询、页面、国家、设备的展示/点击/CTR/平均排名 & 只�
 \end{itemize}
 
 \begin{equation}
-\text{SEO}_{\text{contribution}} = \sum_{\text{session } s} \sum_{j} \omega_j \cdot \mathbb{1}[\text{自然搜索是 } s \text{ 的第 } j \text{ 个触点}] \cdot \text{Revenue}(s) ,
+\text{SEO}_{\text{contribution}} = \sum_{\text{session } s} \sum_{j} \omega_j \cdot \mathbf{1}[\text{自然搜索是 } s \text{ 的第 } j \text{ 个触点}] \cdot \text{Revenue}(s) ,
 \label{eq:seoattrib}
 \end{equation}
 

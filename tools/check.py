@@ -14,7 +14,8 @@ Checks every chapter/appendix .tex file for the rules in STYLE_GUIDE.md:
   6. leftover \\todo markers
   7. non-ASCII characters inside lstlisting blocks
   8. known footguns: \\mathbb{1}, \\ifnum...>=..., tabularx{\\textwidth} in tcolorbox
-  9. statistics: CJK char count, box usage, table/formula/figure counts
+  9. \\DeclareMathOperator macros (\\CTR, \\AUC, ...) used outside math mode
+  10. statistics: CJK char count, box usage, table/formula/figure counts
 
 Usage:
     python3 tools/check.py              # check all files, print report
@@ -40,6 +41,10 @@ FORBIDDEN = {
     "check/cross/star": "✓✔✗✘★☆※⚠✅❌",
     "unicode arrows": "→←↑↓⇒⇔↔⟶⟵",
     "literal math symbols": "≤≥≠×÷±≈∞∑∏∈∀∃⊂⊆∪∩",
+    "fullwidth ASCII": "＝＋－＜＞０１２３４５６７８９"
+                       "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
+                       "ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ",
+    "zero width / NBSP": "\u00a0\u200b\u200c\u200d\ufeff\u3000",
     "emoji-ish": "🔥💡📈📉🚀⭐🎯💬📌",
 }
 FORBIDDEN_FLAT = "".join(FORBIDDEN.values())
@@ -65,6 +70,110 @@ SECTION = re.compile(r"\\(chapter|section|subsection|subsubsection)\*?\{")
 FORMULA_LABELED = re.compile(r"\\label\{(?:eq|formula):")
 TABLE_START = re.compile(r"\\begin\{(?:table|longtable|xltabular|sidewaystable)\}")
 FIG_START = re.compile(r"\\begin\{(?:figure|tikzpicture)\}")
+
+# 数学环境（\DeclareMathOperator 定义的宏只能在这些环境或 $...$ 内使用）
+MATH_ENVS = {
+    "equation", "equation*", "align", "align*", "alignat", "alignat*",
+    "gather", "gather*", "multline", "multline*", "eqnarray", "eqnarray*",
+    "displaymath", "math", "dmath", "dmath*", "flalign", "flalign*",
+    "split", "cases", "array", "matrix", "pmatrix", "bmatrix", "vmatrix",
+    "Vmatrix", "smallmatrix", "aligned", "gathered", "subequations",
+}
+# notesstyle.sty 中用 \DeclareMathOperator 定义的算子，只能在数学模式内使用
+MATH_ONLY_MACROS = [
+    "AUC", "GAUC", "NDCG", "HR", "Recall", "Precision", "MAP", "MRR", "KL",
+    "Var", "Cov", "CTR", "CVR", "CPC", "CPM", "ROAS", "ROI", "LTV", "CAC",
+    "GMV", "AOV", "ECE", "CPA", "CPT", "CPI", "eCPM", "oCPC", "oCPM", "oCPA",
+    "iROAS", "pCTR", "pCVR", "ARPU", "DAU", "MAU", "CTCVR", "CPV", "CPE",
+    "CPS", "tCPA", "tROAS", "argmax", "argmin", "softmax", "sigmoid", "relu",
+    "concat", "MLP", "Attention", "Fone", "E", "Prob",
+]
+MACRO_USE = re.compile(r"\\(?:" + "|".join(sorted(MATH_ONLY_MACROS, key=len,
+                                                 reverse=True)) + r")(?![A-Za-z])")
+
+
+def blank_regions(body: str) -> str:
+    """Return a copy of body with comments and verbatim regions replaced by
+    spaces, so position-based scanning stays aligned with the original."""
+    out = list(body)
+    # lstlisting / lstlisting-like verbatim environments
+    for m in re.finditer(r"\\begin\{(lstlisting|verbatim|Verbatim|minted)\}"
+                         r"(?:\[[^\]]*\])?.*?\\end\{\1\}", body, re.S):
+        for i in range(m.start(), m.end()):
+            if out[i] != "\n":
+                out[i] = " "
+    # comments (% not preceded by an odd number of backslashes)
+    for m in re.finditer(r"(?<!\\)((?:\\\\)*)%.*", body):
+        start = m.start() + len(m.group(1))
+        end = m.end()
+        for i in range(start, end):
+            if out[i] != "\n":
+                out[i] = " "
+    # \\[2pt] line-break-with-space: not a display-math opener
+    for m in re.finditer(r"\\\\\[[^\]]*\]", body):
+        for i in range(m.start(), m.end()):
+            out[i] = " "
+    # 单独的 \\ （换行控制符）：必须一起抹掉，否则 `\\AUC` 会被误读成宏 \AUC
+    for m in re.finditer(r"\\\\", body):
+        for i in range(m.start(), m.end()):
+            out[i] = " "
+    return "".join(out)
+
+
+def math_mode_mask(body: str) -> List[bool]:
+    """Boolean mask: mask[i] is True when body[i] sits inside math mode."""
+    padded = blank_regions(body)
+    n = len(padded)
+    mask = [False] * n
+    env_stack: List[str] = []
+    inline = False
+    i = 0
+    while i < n:
+        ch = padded[i]
+        if ch == "\\":
+            m = re.match(r"\\(begin|end)\{([^}]+)\}", padded[i:])
+            if m:
+                env = m.group(2)
+                if env in MATH_ENVS:
+                    if m.group(1) == "begin":
+                        env_stack.append(env)
+                    elif env_stack and env_stack[-1] == env:
+                        env_stack.pop()
+                i += m.end()
+                continue
+            if padded.startswith(r"\[", i) or padded.startswith(r"\]", i):
+                if inline or env_stack:
+                    mask[i] = mask[i + 1] = True
+                inline = not inline
+                i += 2
+                continue
+            if padded.startswith(r"\(", i) or padded.startswith(r"\)", i):
+                if inline or env_stack:
+                    mask[i] = mask[i + 1] = True
+                inline = not inline
+                i += 2
+                continue
+            m = re.match(r"\\[A-Za-z]+|\\.", padded[i:])
+            if m:
+                # 控制序列本身也要按当前模式标记，否则 \CTR 这类宏
+                # 所在位置永远读到 False，产生误报
+                if inline or env_stack:
+                    for k in range(i, min(i + m.end(), n)):
+                        mask[k] = True
+                i += m.end()
+                continue
+        if ch == "$":
+            if padded.startswith("$$", i):
+                inline = not inline
+                i += 2
+                continue
+            inline = not inline
+            i += 1
+            continue
+        if inline or env_stack:
+            mask[i] = True
+        i += 1
+    return mask
 
 
 def rel(path: str) -> str:
@@ -177,6 +286,25 @@ def check_file(path: str, bib_keys: Set[str],
                 line = body[:m.start()].count("\n") + 1
                 warns.append(f"L{line}: tabularx{{\\textwidth}} inside {box} box "
                              f"(use \\linewidth)")
+
+    # 9 math-only macros (\DeclareMathOperator) used outside math mode
+    mask = math_mode_mask(body)
+    for m in MACRO_USE.finditer(body):
+        # 跳过 `\\AUC` 这种「换行符 + 普通文本 AUC」的误判：
+        # 统计紧邻该反斜杠的连续反斜杠个数，偶数说明它是 \\ 的第二个字符
+        j = m.start()
+        run = 1
+        k = j - 1
+        while k >= 0 and body[k] == "\\":
+            run += 1
+            k -= 1
+        if run % 2 == 0:
+            continue
+        if j < len(mask) and not mask[j]:
+            line = body[:m.start()].count("\n") + 1
+            snippet = body[max(0, m.start() - 24):m.end() + 18].replace("\n", " ")
+            errors.append(f"L{line}: math-only macro \\{m.group(0)[1:]} used outside "
+                          f"math mode (missing $...$) | ...{snippet}...")
 
     stats = {
         "cjk": len(re.findall(r"[\u4e00-\u9fff]", body)),

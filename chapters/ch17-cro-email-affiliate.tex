@@ -1,4 +1,1440 @@
 \chapter{落地页、CRO、邮件与联盟营销}
 \label{ch:cro}
 
-\todo{本章正在撰写中。}
+\begin{insight}[本章要解决的问题]
+\begin{enumerate}
+  \item 流量成本只会越来越贵，而\kw{转化率是唯一完全由自己控制的杠杆}。
+        那么「把转化率提高 30\%」这句话，在落地页、邮件、联盟三条路径上分别要动哪些具体的零件？
+  \item 用户在你的落地页上停留的前 5 秒决定了后面 50 秒的命运。
+        首屏到底应该放什么、按什么顺序放？为什么「加文案」经常比「减文案」更危险？
+  \item 一个转化率测试要跑多久才算数？样本量、最小可检测效应（MDE）、星期效应三者的关系是什么？
+        为什么大量「已验证的赢家」在下一次实验中被推翻，这不是运气问题而是方法问题？
+  \item 从曝光到支付，漏斗每一层的流失率分别是多少量级？哪些流失是「拉新质量问题」，哪些是「页面问题」，
+        哪些其实是「支付通道问题」？诊断顺序错了会浪费多少钱？
+  \item 邮件是唯一一个\emph{你不付租金就能触达}的渠道，但它同时受制于送达率这个隐形天花板。
+        SPF/DKIM/DMARC、域名预热、互动度管理的工程含义是什么？
+  \item 联盟与红人的「佣金率」应该定多少？追踪与归因冲突如何避免重复发钱？
+        纯佣金、坑位费加佣金、买断、白名单投放四种模式分别在什么阶段用？
+  \item 复购与 LTV 不是一个财务指标，而是一套运营机制。RFM 分层、订阅制、捆绑销售怎么和 CAC 回本周期对齐？
+\end{enumerate}
+\end{insight}
+
+增长的技术栈里，「投放」解决\emph{把多少人带进来}，「转化」解决\emph{带进来的人有多少变成钱}。
+前者的成本由市场竞争决定——同一个关键词、同一个人群，你和竞品付的钱会越来越接近，因为拍卖机制天然会把价格推到边际价值附近
+（参见 \cref{ch:ad} 与 \cref{ch:admodel} 对出价与拍卖的讨论）。
+后者却完全不同：竞品无法阻止你把落地页改得更清楚、把表单字段砍掉一半、把弃购邮件从 1 封加到 3 封。
+这就是本章的立足点。
+
+一个可以随时用来定位问题的乘法链是：
+
+\begin{equation}
+\GMV \;=\; \text{流量} \;\times\; \CTR \;\times\; \CVR_{\text{落地}} \;\times\; \CVR_{\text{加购}} \;\times\; \CVR_{\text{结账}} \;\times\; \CVR_{\text{支付}} \;\times\; \AOV .
+\label{eq:growth-chain-cro}
+\end{equation}
+
+链上的每一段都可以独立优化，并且它们的\emph{边际收益}常常差异巨大：
+在 \CTR{} 上的投入要对抗拍卖与素材疲劳（见 \cref{ch:meta}、\cref{ch:google}），
+而在\CVR{} 上的投入只对抗自己团队的认知与工程能力。
+本章的组织方式正是沿着这条链展开：落地页（\cref{sec:cro-lp}）解决「进来之后第一眼」，
+CRO 方法论（\cref{sec:cro-method}）解决「怎么科学地改」，
+漏斗诊断（\cref{sec:cro-funnel}）解决「该改哪一段」，
+邮件与私域（\cref{sec:cro-email}）与短信社群（\cref{sec:cro-owned}）解决「人走了以后怎么回来」，
+联盟与红人（\cref{sec:cro-affiliate}）解决「用别人的流量做交易」，
+复购与 LTV（\cref{sec:cro-ltv}）解决「一次交易怎么变成长期资产」。
+
+技术性约定：本章涉及的所有数值——转化率基准、送达率阈值、佣金率、回本周期——都是
+\kw{示范量级}或\kw{行业经验区间}，用途是建立数量级直觉，不是可以直接写进预算表的承诺。
+平台政策、费率结构、邮箱服务商的技术要求一律\emph{以官方最新文档为准}。
+凡引用公开研究的地方都给出出处；凡是经验判断都会标出「经验值」三个字。
+
+\section{落地页设计：把 5 秒变成 5 分钟}
+\label{sec:cro-lp}
+
+\subsection{信息层级与 5 秒法则}
+
+\term{落地页}{Landing Page} 与首页的根本区别在于：首页要服务「不知道自己要什么」的浏览者，
+落地页要服务「刚刚被一条广告说动、但还没做决定」的访问者。
+后者带着一个具体的问题进来，注意力窗口极短。行业内把这种现象概括为\textbf{5 秒法则}：
+如果访客在 5 秒内无法回答「这是什么、给我什么好处、下一步点哪里」这三个问题，绝大多数人会离开。
+把它写成可检验的形式：
+
+\begin{equation}
+\text{首屏胜出} \;=\; \mathbf{1}\Big[\, \underbrace{T_{\text{理解}} \le T_{5}}_{\text{认知速度}} \;\wedge\; \underbrace{\text{价值主张与承诺一致}}_{\text{相关性}} \;\wedge\; \underbrace{\exists\, \text{可见 CTA}}_{\text{可行动}} \,\Big] .
+\label{eq:five-second}
+\end{equation}
+
+其中 $T_{\text{理解}}$ 是访客从看到首屏到能用一句自己的话复述价值主张所需的时间。
+这个式子看起来是同义反复，但它把一个模糊的「页面好不好」拆成了三个\emph{可以分别测量}的对象：
+(1) $T_{\text{理解}}$ 用 5 秒测试或首屏录屏测；
+(2) 相关性用广告文案与首屏文案的对照表测；
+(3) CTA 可见性用「首屏折叠线以上是否存在可点击且视觉权重最高的按钮」来测。
+三者中任何一项失败，其余两项的优化都会被抵消——这是落地页优化最重要的结构性认识。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  hdr/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=8mm,
+              text width=3.1cm, inner sep=3pt, font=\sffamily\scriptsize\bfseries},
+  it/.style={draw=RuleGray, fill=white, rounded corners=1pt, minimum height=6mm,
+             text width=3.1cm, inner sep=2pt, font=\sffamily\tiny},
+  outbox/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=8mm,
+                 text width=4.6cm, inner sep=3pt, font=\sffamily\tiny},
+  q/.style={draw=CrimsonDeep, fill=white, rounded corners=2pt, minimum height=8mm,
+            text width=4.6cm, inner sep=3pt, font=\sffamily\tiny},
+  arrow/.style={-{Stealth}, thick, SlateGray}
+]
+\node[hdr] (l1) at (0,0) {第 1 层：价值主张};
+\node[it, below=1mm of l1] (l1a) {为谁解决什么问题\\一句话说清，不用形容词};
+\node[hdr, below=4mm of l1a] (l2) {第 2 层：视觉证据};
+\node[it, below=1mm of l2] (l2a) {产品实拍 / 使用场景 / 前后对比\\不要库存图与拼贴渲染};
+\node[hdr, below=4mm of l2a] (l3) {第 3 层：社会证明};
+\node[it, below=1mm of l3] (l3a) {评分、销量、UGC、媒体引用\\带可核验的细节};
+\node[hdr, below=4mm of l3a] (l4) {第 4 层：CTA 与减风险};
+\node[it, below=1mm of l4] (l4a) {主按钮 + 退换货 / 免运费 / 保障};
+\node[hdr, below=4mm of l4a] (l5) {第 5 层：细节与 FAQ};
+\node[it, below=1mm of l5] (l5a) {规格参数、对比表、物流时效\\决策后期才被阅读};
+
+\node[outbox] (up) at (6.3,0.0) {\textbf{首屏（折叠线以上）}\\
+  只放前三层。第四层的 CTA 必须同时在首屏出现一次。\\
+  \emph{目标}：5 秒内完成「这是什么 / 给我什么 / 点哪里」。};
+\node[outbox] (mid) at (6.3,-4.1) {\textbf{滚动中段}\\
+  放证据的\emph{细节}：参数对比、真实评价、使用步骤。\\
+  \emph{目标}：把「有点兴趣」推进到「想加购」。};
+\node[q] (down) at (6.3,-7.6) {\textbf{常见反模式}\\
+  首屏放轮播图（三张图各说一件事）、放公司历史、\\
+  放自动播放视频盖住 CTA、把 CTA 做成与背景同色的按钮。};
+\draw[arrow] (l1.east) -- (up.west);
+\draw[arrow] (l3.east) -- (mid.west);
+\draw[arrow] (l5.east) -- (down.west);
+\end{tikzpicture}
+\caption{落地页的信息层级：五层结构、首屏取舍与常见反模式}
+\label{fig:lp-hierarchy}
+\end{figure}
+
+\begin{keypoint}[信息层级的唯一判据是「决策阶段」]
+落地页的排序不应该按「公司觉得什么最重要」，而应该按\kw{访客的决策阶段}排：
+还没被说服的人需要价值主张与视觉证据，已经被说服的人需要风险消除与参数细节。
+把参数放进首屏，等于对一个刚进门的陌生人大谈质保条款；
+把价值主张埋到第三屏，等于让陌生人自己去猜你在卖什么。
+\textbf{每一次改版都应该能回答：这次改动影响的是哪一层的信息缺失？}
+如果一个改动说不清它修正了哪一层的缺失，它更可能是在做审美而不是在做 CRO。
+\end{keypoint}
+
+\subsection{首屏四要素：价值主张、视觉证据、CTA、信任元素}
+
+把首屏拆成四个可独立测试的槽位，是让 CRO 从「感觉」变成「排期」的关键。
+四个槽位各自有明确的产出物和常见的失败形态。
+
+\begin{table}[htbp]
+\centering
+\caption{首屏四要素的可测形式与常见失败形态}
+\label{tab:hero-four}
+\small
+\begin{tabularx}{\textwidth}{L{1.9cm} L{3.4cm} L{3.6cm} Y}
+\toprule
+\tabhead{槽位} & \tabhead{合格标准} & \tabhead{常见失败形态} & \tabhead{常用度量} \\
+\midrule
+价值主张 & 一句话包含「对象 + 收益 + 差异化」；不含未定义的行业术语 & 写成品牌口号（无法证伪）；写成功能列表（用户要翻译）；把差异化写成「高品质」 & 5 秒测试复述准确率、滚动深度分布、跳出率 \\
+视觉证据 & 产品在真实场景中的样子；首图加载不影响 LCP & 用供应商提供的白底图；用拼贴渲染图；首图是 2\,MB 以上未压缩大图 & LCP、图片字节数、图片点击率（放大查看） \\
+CTA & 首屏至少 1 个高对比按钮；文案是动词短语；点击区高度不小于 44\,px & 多个同级按钮争夺注意力；按钮写成「提交」；移动端按钮被浮动客服挡住 & 首屏 CTA 点击率、点击热图密度、误触率 \\
+信任元素 & 可核验的具体事实（退换货天数、免运费门槛、真人评价数） & 空洞的「100\% 满意保证」；伪造的倒计时；无法点击的评分图标 & 首屏到加购的转化率、客服咨询中「是否可靠」类问题占比 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+值得专门强调\kw{视觉证据}这一项，因为它是跨境电商最容易做错、也最容易补上的一项。
+供应商给的图是「产品」，转化需要的图是「产品在用户生活里的结果」。
+一双鞋的供应商图告诉你鞋长什么样；一张用户穿着它走完 10 公里、鞋底磨损对比的实拍图，告诉你\emph{买了会怎样}。
+后者才是购买的真正理由。行业经验值是（示范量级）：把首图从白底供应商图换成场景实拍加局部放大图，
+加购率的变化通常在相对 $\pm 10\%$ 到 $+30\%$ 的区间内，具体幅度取决于品类——
+服饰、家居、户外等「效果需要想象」的品类收益最大，标品（数据线、电池）收益最小。
+
+\begin{pitfall}[首屏堆得越满，转化越差——「加法陷阱」]
+\textbf{现象}：某团队为了「把卖点讲全」，把首屏塞进 7 个卖点图标、3 段文案、2 个按钮和 1 个自动播放视频。
+一周后转化率下降，团队的第一反应是「再换个更好的标题」。\\
+\textbf{根因}：首屏是\kw{注意力预算}的分配问题，不是信息量问题。
+每一份额外的信息都在稀释主信息的视觉权重；当页面上有 7 个卖点时，用户无法判断哪个是重点，
+于是既不记住也不点击。这个现象在认知心理学里对应「选择过载」与「视觉层级缺失」，
+在数据上表现为：会话时长\emph{增加}（用户在找）、跳出率\emph{不降}（用户以为下面是更多信息）、
+而 CTA 点击率与加购率\emph{下降}。\\
+\textbf{排查方法}：(1) 把首屏截图缩小到 25\% 并灰度化，看哪个元素最突出——
+如果突出的是 banner 而不是 CTA，先修这个；(2) 用热图检查首屏点击是否分散在 5 个以上区域，
+分散即意味着没有主行动；(3) 用「首屏元素数」做一次减法实验：逐项移除而不是逐项添加，
+记录移除到第几项时转化率开始下降，那个位置就是你真正的信息上限。
+\end{pitfall}
+
+\subsection{Message match：广告承诺与页面承诺的一致性}
+
+\term{信息一致性}{Message Match} 指的是广告素材（标题、主图、视频前 3 秒、落地页首屏）
+之间在\emph{承诺}层面的连续性。它与「关键词匹配」不是同一件事：
+关键词匹配保证你出现在对的搜索里，信息一致性保证用户点进来之后不会觉得「走错了」。
+用户点进落地页后的第一反应是确认「这里能给我刚才看到的那个东西」，
+如果首屏说的是另一件事，用户会立刻返回——这个返回在数据上表现为高跳出率与高「返回搜索结果页」比例。
+
+\begin{equation}
+\mathrm{MM} \;=\; \underbrace{\frac{\langle \mathbf{a}, \mathbf{p} \rangle}{\norm{\mathbf{a}}\,\norm{\mathbf{p}}}}_{\text{语义相关度}} \;\times\; \underbrace{\prod_{k \in \{\text{人群},\text{价格},\text{创意}\}} \Big(1 - \gamma_k\Big)}_{\text{连续性折损}} ,
+\label{eq:mm}
+\end{equation}
+
+其中 $\mathbf{a}$ 与 $\mathbf{p}$ 分别是广告与落地页首屏的\emph{承诺向量}
+（可以用「对象/收益/证据/价格条件」四个维度各取 0 或 1 来构造），
+$\gamma_k \in [0,1]$ 是三类不一致造成的折损系数：人群不一致（广告投给新手、页面假设是专家）、
+价格不一致（广告写「立减 30\%」、页面只写「限时优惠」）、创意不一致（视频讲 A 场景、页面讲 B 场景）。
+$\mathrm{MM}$ 本身难以精确测量，但它把讨论从「文案好不好」转成了\emph{四个维度上的一致性检查}，
+这让它可以被写进上线前的验收清单。
+
+一个可操作的替代做法是把一致性拆成分项体检表，并在严重不一致时**暂停投放而不是继续优化**，
+因为在不一致的前提下优化页面，等于在错误的流量上求极小值。
+
+\begin{table}[htbp]
+\centering
+\caption{信息一致性的四类断裂、成因与量级影响}
+\label{tab:msgmatch}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{3.6cm} L{3.2cm} Y}
+\toprule
+\tabhead{断裂类型} & \tabhead{典型表现} & \tabhead{根因} & \tabhead{量级影响（示范量级）} \\
+\midrule
+人群断裂 & 广告投「新手入门」，页面默认用户懂行话 & 投放与页面归不同人负责 & 跳出率明显升高，落地到加购转化率可能腰斩 \\
+利益点断裂 & 广告强调「省时间」，页面强调「更便宜」 & 素材批量生产后未做配对 & 首屏 CTA 点击率下降三成到一半 \\
+价格条件断裂 & 广告「首单 5 折」，页面「新客券需注册」 & 优惠规则页面未同步 & 结账前流失集中，退款与投诉上升 \\
+创意风格断裂 & 视频是生活化 UGC，页面是精修大片 & 素材与页面调性各自为政 & 首屏停留时间下降，二次访问率下降 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[一致性是乘法项，不是加法项]
+把 $\mathrm{MM}$ 写成乘法形式（\cref{eq:mm}）不是数学上的讲究，而是为了纠正一个普遍的错误顺序：
+团队常常先花大力气优化页面的「说服力」，再回头检查一致性。
+但一致性是\kw{乘性因子}：当人群断裂时，页面再漂亮也是在向错误的人说话，
+此时提高说服力只会让\emph{不该买的人}买得更多，随后以更高的退货率把收益还回去。
+正确的顺序是\emph{先对齐，再优化}：先用一致性检查清单把 $\gamma_k$ 压到接近 0，
+再在剩下的流量上做转化率实验。
+\end{insight}
+
+实操上最有效的做法是建立「素材--页面」配对表：每条广告素材都要有一个唯一的落地页变体对应，
+不允许「所有素材统一跳首页」。当素材数量超过页面团队的处理能力时，
+宁可减少素材数量，也不要让素材与页面失配——后者会同时浪费点击预算和测试样本。
+
+\subsection{移动端优先：排版、表单与字段数}
+
+跨境电商的现实是（示范量级）：移动端会话占比常在 60\% 到 80\% 之间，
+而移动端转化率通常只有桌面端的 50\% 到 70\%。
+这意味着\kw{整体转化率的天花板由移动端决定}：即使桌面端做到极致，整体数字也被移动端拖住。
+因此「移动端优先」不是一句设计口号，而是一条\emph{投入优先级规则}：
+任何在桌面端和移动端都生效的改动，要按移动端的收益来评估。
+
+移动端排版的核心矛盾是\kw{垂直空间极度稀缺}。几个高杠杆的具体动作：
+
+\begin{itemize}
+  \item \textbf{折叠线以上的元素数量控制在 4 个以内}（标题、主图、价格、CTA），并保证 CTA 首屏可见。
+  \item \textbf{表单字段一次只问一个屏幕能装下的量}，多步表单优于单页长表单——
+        因为分段可以给出进度反馈，且失败时的重填成本更低。
+  \item \textbf{输入类型要匹配语义}：邮箱用 \code{type=email}、电话用 \code{type=tel}、
+        验证码用 \code{inputmode=numeric}。仅这一项就能显著降低移动端输入错误率。
+  \item \textbf{地址与支付信息要支持自动填充与第三方快捷支付}。
+        在移动端手打一长串收货地址是弃购的首要摩擦源之一。
+  \item \textbf{键盘弹出后 CTA 不能被遮挡}，这是最廉价也最常被忽略的移动端 bug。
+\end{itemize}
+
+\term{表单字段数}{Form Field Count} 与转化率的关系是 CRO 里被引用最多、也最容易被误解的经验规律之一。
+正确理解的版本是：\textbf{每增加一个\emph{非必要}字段，转化率就会下降；下降幅度取决于字段的敏感度与填写成本}。
+敏感字段（身份证、公司名、传真）的边际伤害远大于低摩擦字段（邮编）。
+
+\begin{table}[htbp]
+\centering
+\caption{表单字段的摩擦分级与处理策略（量级为经验值）}
+\label{tab:formfields}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.6cm} L{2.6cm} L{2.3cm} Y}
+\toprule
+\tabhead{字段类别} & \tabhead{典型例子} & \tabhead{对移动端转化的相对影响} & \tabhead{可否延后} & \tabhead{策略} \\
+\midrule
+必要低摩擦 & 邮箱、手机号 & 基准 & 否 & 保留，做输入校验与自动填充 \\
+必要高摩擦 & 收货地址、支付信息 & 明显下降 & 否 & 拆成多步 + 地址联想 + 快捷支付 \\
+可延后 & 生日、性别、偏好 & 中等下降 & 是 & 移到下单后或账户中心 \\
+非必要 & 公司名、传真、推荐码 & 显著下降 & 是 & 默认删除；确需时放到可选区 \\
+事后可问 & 满意度、来源调研 & 高下降 & 是 & 用订单完成页或邮件问卷 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+一个被反复验证的实务原则是：\textbf{先删字段，再测字段}。
+删除字段的实验几乎不会失败，除非这个字段确实是履行订单所必需的。
+反过来说，如果一个字段无法说清「它被用来做什么」，那么它的默认状态应该是「不存在」。
+
+\begin{toolbox}[落地页 30 项上线前检查清单（节选 12 项高频项）]
+\begin{enumerate}
+  \item 5 秒测试：让 5 个不了解业务的人看首屏 5 秒，问「这是什么、给谁、下一步点哪里」，至少 4 人答对。
+  \item 广告--页面配对表已更新：每条素材都有唯一对应的页面变体，无「统一跳首页」。
+  \item 首屏只有一个\emph{视觉权重最高}的 CTA，其余 CTA 降级为文字链接。
+  \item 首屏 CTA 在 360\,px 宽度的视口内可见，且不被浮动组件遮挡。
+  \item 主图已压缩并转换为现代格式，首图字节数与 LCP 目标对齐（见 \cref{sec:cro-speed}）。
+  \item 第三方脚本逐个复查：营销像素、A/B 工具、聊天组件、热图工具，任何无法说明用途的脚本先下线。
+  \item 表单字段已按 \cref{tab:formfields} 分级，非必要字段已删除。
+  \item 输入类型与 \code{inputmode} 已按语义设置，支持浏览器自动填充。
+  \item 信任元素可核验：退换货天数、运费门槛、发货时效、评价数量都是真实值。
+  \item 结账流程是否展示了运费与税费（见 \cref{sec:cro-funnel}），无「最后一刻加价」。
+  \item 弃购邮件与浏览放弃邮件已在页面事件层正确打点，事件名与埋点文档一致。
+  \item 页面有明确的\emph{失败态}：库存不足、优惠失效、支付失败时都有可操作的提示文案。
+\end{enumerate}
+完整的 30 项清单把上面每一项再拆成「设计、文案、技术、数据」四组，建议作为上线卡的必填字段。
+\end{toolbox}
+
+\subsection{速度优化与 Core Web Vitals 的商业影响}
+\label{sec:cro-speed}
+
+页面速度与转化的关系有一个稳定的定性结论：\kw{更快的页面转化更好}，而且这条关系在移动端、在慢网络环境下更陡。
+量级上，行业公开案例报告的经验值通常是（示范量级）：LCP 从 4 秒级优化到 2 秒级，
+转化率提升幅度在个位数百分点到十几个百分点之间；首屏加载每减少 1 秒，
+移动端转化率的变化量级在百分之几到两位数百分比之间，具体取决于原本有多慢以及品类。
+真正重要的不是记住一个具体系数，而是理解\textbf{速度收益是非线性的}：
+从 6 秒降到 4 秒的收益，通常小于从 4 秒降到 2 秒；
+而当一个页面已经稳定在 1.5 秒以内时，继续优化速度的边际收益往往低于优化文案。
+
+Core Web Vitals 的三个指标（LCP、INP、CLS）由 Google 公开定义并持续调整，
+其口径与阈值\emph{以 web.dev 与 Google Search Central 的最新文档为准} \cite{google2024corewebvitals}。
+从\emph{商业}角度理解它们，比从\emph{排名}角度理解更有用：
+
+\begin{table}[htbp]
+\centering
+\caption{Core Web Vitals 的商业含义与常见治理动作（阈值以官方最新文档为准）}
+\label{tab:cwv-biz}
+\small
+\begin{tabularx}{\textwidth}{L{1.5cm} L{3.0cm} L{3.4cm} Y}
+\toprule
+\tabhead{指标} & \tabhead{度量的用户体验} & \tabhead{商业后果} & \tabhead{高频治理动作} \\
+\midrule
+LCP & 主要内容什么时候出现 & 首屏空白造成的跳出；广告点击后「白屏」投诉 & 首图预加载与压缩、字体 \code{font-display}、减少首屏 CSS 阻塞、服务端渲染关键内容 \\
+\addlinespace
+INP & 交互后多久有响应 & 加购、切换规格、输入优惠码时的挫败感；重复点击造成重复下单 & 长任务拆解、第三方脚本延后、事件处理节流、避免同步布局读取 \\
+\addlinespace
+CLS & 内容是否突然位移 & 误点击（想点 CTA 点到了广告）；表单填错位置 & 为图片与广告位预留尺寸、避免在首屏动态插入 banner、字体尺寸回退 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{casebox}[案例：把一个 4.8 秒的移动端落地页改到 2.1 秒（示范计算）]
+某独立站服饰品类，投放 Meta 与搜索广告导流到同一批商品落地页。
+优化前的移动端诊断发现三个主要问题：首图是 2.4\,MB 的未压缩 PNG、
+四个营销像素脚本在首屏同步加载、字体文件未做子集化且阻塞渲染。
+优化动作分别是：首图改为现代格式并按视口尺寸提供多套资源、像素脚本全部改为延后加载、
+字体做子集化并启用 \code{font-display: swap}。
+
+下面用\kw{示范量级}说明这类改动的经济意义（数字为便于口算设定的示例，不代表真实平台数据）：
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{L{2.6cm} R{1.9cm} R{1.9cm} L{3.0cm} Y}
+\toprule
+\tabhead{项} & \tabhead{优化前} & \tabhead{优化后} & \tabhead{口径} & \tabhead{说明} \\
+\midrule
+移动端 LCP & 4.8\,s & 2.1\,s & 第 75 百分位 & 达标阈值以官方文档为准 \\
+移动端落地到加购 & 6.0\% & 7.2\% & 会话口径 & 相对提升 20\% \\
+单次广告点击成本 & 3.0 元 & 3.0 元 & 同一投放结构 & 速度不改变 CPL \\
+加购获客成本 & 50.0 元 & 41.7 元 & $\CPC / \CVR_{\text{加购}}$ & $3.0/0.06$ 对比 $3.0/0.072$ \\
+\bottomrule
+\end{tabularx}
+\captionof{table}{落地页速度优化的经济意义（示范计算，量级仅作示意）}
+\label{tab:speed-demo}
+\end{center}
+
+结论是：\textbf{速度优化的收益不需要通过「排名提升」来兑现，它直接落在获客成本上}。
+在 \cref{tab:speed-demo} 的例子里，同样的点击价格下加购成本下降了约 17\%。
+需要提醒的是：\emph{速度不是万能药}。当页面已经很快、但价值主张与广告不一致时，
+继续压速度不会带来收益，因为瓶颈已经转移到信息一致性上了。
+\end{casebox}
+
+\section{CRO 方法论：从假设到可信结论}
+\label{sec:cro-method}
+
+\subsection{假设生成：数据、用户研究、启发式三源合一}
+
+CRO 最常见的失败不是「测试做错了」，而是「测试了不值得测的东西」。
+假设的质量决定了整个流程的上限。可靠的假设有三个来源，三者缺一不可：
+
+\begin{equation}
+\mathcal{H} \;=\; f\Big(\underbrace{\mathcal{D}_{\text{定量}}}_{\text{漏斗与热图}},\;\;
+\underbrace{\mathcal{U}_{\text{定性}}}_{\text{访谈与录屏}},\;\;
+\underbrace{\mathcal{K}_{\text{启发式}}}_{\text{原则与经验}}\Big) ,
+\label{eq:hypothesis-sources}
+\end{equation}
+
+\textbf{定量数据}告诉你\emph{哪里漏}（例如移动端结账页流失异常高），
+\textbf{定性研究}告诉你\emph{为什么漏}（例如用户以为要注册才能下单），
+\textbf{启发式}告诉你\emph{可能怎么修}（例如提供访客结账）。
+只有定量数据时，团队会反复猜原因；只有定性研究时，团队会把少数用户的声音当成全量真相；
+只有启发式时，团队会一次性上线 20 个改动，然后无法归因。
+
+一个规范化的假设必须包含四个成分，缺一不可：
+
+\begin{keypoint}[假设的四要素模板：因为--所以--度量--护栏]
+\textbf{「因为」}观察到的证据（数据 + 用户原话），例如「移动端结账页流失 68\%，
+录屏显示用户在地址栏反复切换 3 次后退出」；\\
+\textbf{「所以」}改动方案，例如「引入地址自动补全并支持一键粘贴」；\\
+\textbf{「度量」}主指标与预期方向，例如「结账完成率相对提升 $\ge 5\%$」；\\
+\textbf{「护栏」}不允许恶化的指标，例如「客单价不低于当前的 98\%、支付失败率不上升」。
+没有护栏的假设会在赢下主指标的同时输掉利润，这是 CRO 最昂贵的隐蔽失败。
+\end{keypoint}
+
+\subsection{ICE 与 PXL 优先级打分}
+
+假设池一旦超过十几个，就需要一个排序机制。两种常用框架：
+
+\begin{equation}
+\mathrm{ICE} \;=\; \frac{\underbrace{I}_{\text{Impact 影响力}} \times \underbrace{C}_{\text{Confidence 置信度}}}{\underbrace{E}_{\text{Ease 易实施}}}
+\qquad\text{或}\qquad
+\mathrm{PXL} \;=\; \underbrace{P}_{\text{Potential}} \times \underbrace{X}_{\text{优先级修正}} \times \underbrace{L}_{\text{可学习性}} .
+\label{eq:ice-pxl}
+\end{equation}
+
+注意 ICE 有两种常见写法：一种把 Ease 放在分母（越容易做分数越高），
+另一种三项都放分子（越容易做分数越高）。\textbf{团队内部必须统一口径}，
+否则同一个假设在不同人算出来的分数会相差数倍，排序就失去意义。
+PXL 的巧妙之处在于第三项 $L$（可学习性）：它奖励那些\emph{即使输了也能带来认知}的实验。
+在一个假设池质量不确定的早期团队里，$L$ 比 $P$ 更值得重视——
+因为早期真正的瓶颈是「不知道用户在什么地方犹豫」，而不是「不确定某个按钮颜色」。
+
+\begin{table}[htbp]
+\centering
+\caption{ICE/PXL 打分表模板（1--5 分，分数为示例）}
+\label{tab:ice}
+\small
+\begin{tabularx}{\textwidth}{L{3.4cm} C{0.9cm} C{0.9cm} C{0.9cm} C{1.0cm} C{1.5cm} Y}
+\toprule
+\tabhead{假设} & \tabhead{I/P} & \tabhead{C/X} & \tabhead{E/L} & \tabhead{ICE} & \tabhead{归属漏斗层} & \tabhead{备注} \\
+\midrule
+地址自动补全降低结账摩擦 & 5 & 4 & 4 & 5.0 & 结账 & 录屏证据充分，工程成本中等 \\
+首屏价值主张与素材对齐 & 4 & 4 & 5 & 3.2 & 落地 & 主要成本是文案与素材配对 \\
+访客结账（免注册下单） & 5 & 3 & 2 & 7.5 & 结账 & 工程改造成本高，需支付与风控配合 \\
+商品页加 UGC 实拍图 & 4 & 3 & 3 & 4.0 & 加购 & 依赖内容生产，需要授权 \\
+运费门槛提示前置 & 4 & 5 & 5 & 4.0 & 加购 & 改动小、风险低，适合先做 \\
+支付方式增加本地钱包 & 5 & 3 & 2 & 7.5 & 支付 & 需与支付服务商对接，周期以月计 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[优先级打分变成「谁嗓门大谁分高」]
+\textbf{现象}：ICE 表填了三轮，每次都是老板关心的那个假设得分最高；打分逐渐沦为形式。\\
+\textbf{根因}：三个因子都是主观量，如果没有\kw{先定锚点再打分}的纪律，
+分数就会向「提出者希望的结果」收敛。另一个隐蔽原因是 $E$（易实施）被当成「谁做」的函数：
+工程资源紧张的团队会系统性低估工程类假设，于是永远在做文案微调，
+而真正的大杠杆（访客结账、支付方式）从未被排上。\\
+\textbf{排查方法}：(1) 为 1--5 分写明确的锚点描述（例如 $C=5$ 要求「有直接录屏证据 + 有同类站点先例」），
+打分前先读锚点；(2) 把 $E$ 的定义从「容易做」改成「本周可上线的最小版本」，
+迫使团队把大改动拆成可实验的切片；(3) 每季度统计各漏斗层的实验数量分布，
+如果某一层长期为 0，说明打分机制有系统性偏差。
+\end{pitfall}
+
+\subsection{测试设计：样本量、MDE 与测试时长}
+
+A/B 测试最基本的数量关系是：\kw{能检测到的效应越小，需要的样本量越大，而且按平方增长}。
+对于两个比例的对比，每组的近似样本量为：
+
+\begin{equation}
+n_0 \;=\; \frac{\big(z_{1-\alpha/2} + z_{1-\beta}\big)^2 \;\bar p\,(1-\bar p)\,\Big(1 + \tfrac{1}{k}\Big)}{\Delta^2},
+\qquad n_1 = k\,n_0,
+\qquad \bar p = \frac{p_0 + k\,p_1}{1+k} ,
+\label{eq:samplesize}
+\end{equation}
+
+其中 $p_0$ 是对照组基线转化率，$p_1$ 是期望的实验组转化率，
+$\Delta = \abs{p_1 - p_0}$ 是\term{最小可检测效应}{Minimum Detectable Effect}（MDE），
+$\alpha$ 是显著性水平（常用 0.05），$1-\beta$ 是统计功效（常用 0.80，对应 $z_{1-\beta} \approx 0.84$），
+$k$ 是实验组与对照组的流量比例（等分流时 $k=1$）。
+把它写成相对 MDE 的形式更有用：令 $p_1 = p_0(1+\delta)$，则样本量近似与 $1/\delta^2$ 成正比——
+\emph{想检测的效应减半，样本量要翻四倍}。这是绝大多数「小改动测不出来」的根本原因。
+
+一个常用的口算近似（等分流、$\alpha=0.05$、功效 0.80）是：
+
+\begin{equation}
+n \;\approx\; \frac{16\,\bar p\,(1-\bar p)}{\Delta^2} .
+\label{eq:samplesize-rule}
+\end{equation}
+
+用 \cref{eq:samplesize-rule} 算几组（示范量级）：
+
+\begin{itemize}
+  \item 基线转化率 $3\%$，希望检测相对提升 $10\%$（即 $\Delta = 0.3\%$）：每组约需 3.9 万访客。
+  \item 基线转化率 $3\%$，希望检测相对提升 $20\%$（即 $\Delta = 0.6\%$）：每组约需 1 万访客。
+  \item 基线转化率 $1\%$，希望检测相对提升 $20\%$：每组约需 3.2 万访客。
+  \item 基线转化率 $10\%$，希望检测相对提升 $20\%$：每组约需 2900 访客。
+\end{itemize}
+
+\begin{pitfall}[样本不足就下结论：CRO 最昂贵也最常见的错误]
+\textbf{现象}：上线三天，实验组转化率高 25\%，团队宣布胜利并全量发布；
+两周后整体转化率回到实验前水平甚至更低，复盘时发现「赢家」站不住。\\
+\textbf{根因}：至少四类机制在起作用。
+(1) \textbf{偷看数据}（peeking）：在预定样本量之前反复检验显著性，会让假阳性率远高于名义的 5\%；
+随机游走在某个时刻「显著」是必然事件。公开研究对可信在线实验的系统性讨论可参见 \cite{kohavi2020trustworthy}。
+(2) \textbf{功效不足}：真实效应 $+2\%$ 的实验，用只能检测 $+20\%$ 的样本量去跑，
+结论几乎一定是「无显著差异」，或者更糟——把噪声当成效应。
+(3) \textbf{星期效应}：周末与工作日的转化率结构差异很大（周末移动端占比高、客单价结构不同），
+只跑三天恰好落在一个星期的某一段，样本的组成与长期分布不同。
+(4) \textbf{多重比较}：一次性看 15 个指标，总有一个「显著」；把它当成结论就是选择性报告。
+同类问题在学术界的系统性讨论（「为什么大多数已发表的研究发现是假的」）见 \cite{ioannidis2005why}，
+它给出的教训对 CRO 完全适用：\emph{小样本、小效应、大灵活性、多假设}组合在一起时，
+结论的可复现性会崩塌。\\
+\textbf{排查方法}：(1) 实验前写好样本量与最短周期，并用\emph{序贯检验}或\emph{固定样本设计}约束偷看；
+(2) 最短周期覆盖至少 1 个完整自然周，跨月或促销期要覆盖 2 周；
+(3) 主指标只有一个，其余为护栏指标与诊断指标，并对多指标做校正（例如按错误发现率控制）；
+(4) 上线前做一次 A/A 校验，确认分流与漏斗埋点本身不引入偏差。
+\end{pitfall}
+
+\begin{formulacard}[A/B 样本量与实验时长的速算]
+\textbf{每组样本量}（等分流、$\alpha=0.05$、功效 $0.80$）：
+$n \approx 16\,\bar p (1-\bar p)/\Delta^2$，其中 $\bar p \approx p_0$、$\Delta$ 为绝对效应
+（见 \cref{eq:samplesize-rule}）。\\
+\textbf{实验时长}：$T \approx \max\big\{\,2n / (\text{日均可分流 UV}),\;\; 1\ \text{个完整自然周}\,\big\}$。\\
+\textbf{相对 MDE 与样本量}：$n \propto 1/\delta^2$。想把可检测的相对提升从 $20\%$ 缩小到 $10\%$，
+样本量要 $\times 4$。\\
+\textbf{换算直觉}：日分流 1 万 UV、基线 $3\%$、想检测 $+10\%$ 时，
+单靠「多跑几天」要跑约 8 天；若只有 2000 UV/天，则需要约 39 天——这通常意味着\emph{该换一个更大的改动，而不是等}。
+\end{formulacard}
+
+关于测试工具，选择标准不是功能多，而是\kw{分流是否稳定、事件口径是否可控、能否导出原始数据}：
+\metric{GA4} 适合作为分析与归因的基线（注意它的模型化转化与阈值化会改变口径，
+跨工具对账时必须以一端为准则）；\metric{Hotjar} 与 \metric{Microsoft Clarity} 属于行为洞察工具
+（录屏、热图、滚动深度），它们回答「为什么」，不回答「提升了多少」；
+\metric{VWO}、\metric{Optimizely} 等实验平台负责分流与统计。
+一个常见误区是用行为洞察工具的数据论证收益（「热图显示 CTA 被点了很多」），
+点击热图不能替代转化率实验，因为点击意图与购买行为之间隔着好几层。
+
+\subsection{「赢家被推翻」与复现性危机}
+
+CRO 领域有一个公开的尴尬事实：大量被宣布为「已验证赢家」的测试，
+在后续的独立复现中无法再现同样幅度的效果，有时甚至方向相反。
+这不是行业不专业，而是统计与流程共同作用的结果。可复现性差的五个主要来源：
+
+\begin{table}[htbp]
+\centering
+\caption{「赢家被推翻」的五类来源与对应工程对策}
+\label{tab:replication}
+\small
+\begin{tabularx}{\textwidth}{L{2.3cm} L{4.0cm} L{3.4cm} Y}
+\toprule
+\tabhead{来源} & \tabhead{机制} & \tabhead{典型现象} & \tabhead{对策} \\
+\midrule
+偷看与多重比较 & 在预定样本量前反复检验、多指标择优报告 & 上线前「显著」，上线后消失 & 固定样本设计或序贯检验；主指标唯一 \\
+新奇效应 & 老用户对变化本身产生短期反应 & 新版本头三天涨、之后回落 & 只对新访客分析；延长观察期；分新老用户看 \\
+季节与结构漂移 & 促销、大促、天气、投放结构变化 & 复现时结论反向 & 同期对照；记录并存档实验期间的外部事件 \\
+实现差异 & 「同一个想法」在不同页面实现方式不同 & 复现效果只有一半 & 写清改动的最小可复现描述与截图存档 \\
+受众差异 & 流量来源、地域、设备结构不同 & 在 A 站赢、在 B 站输 & 做异质性分析，明确结论的适用边界 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{insight}[一个测试的产出有两种：决策与知识]
+把实验只当成「选版本」的工具，就会在赢家被推翻时认为努力白费。
+更稳健的做法是同时沉淀\kw{知识}：这次改动\emph{为什么}会/不会有效、在什么条件下有效、在哪些人群上无效。
+工程实现上，这意味着实验记录必须包含四样东西：假设原文、改动的最小可复现描述、分流与指标的准确口径、
+以及当时的流量结构（来源、设备、地域、是否促销）。
+只有这四样齐备，下一次实验才能站在上一次的肩膀上，而不是重新掷骰子。
+年复一年地只积累「赢家清单」而不积累「边界条件」的团队，会在同一个坑里反复摔倒。
+\end{insight}
+
+\section{转化漏斗诊断：搞清楚钱漏在哪一层}
+\label{sec:cro-funnel}
+
+\subsection{逐层流失的乘法分解与基准量级}
+
+漏斗诊断的第一步是承认一件事：\kw{整体转化率是各层转化率的乘积，而不是和}。
+这意味着只要有一层接近 0，其他层再优秀也无济于事；
+也意味着\emph{在最小的一层上做相对改进，收益可能最大}（因为它的绝对空间最大）。
+
+\begin{equation}
+\CVR_{\text{总}} \;=\; \prod_{j=1}^{m} r_j ,
+\qquad r_j = \frac{N_j}{N_{j-1}} ,
+\qquad
+\frac{\partial \ln \CVR_{\text{总}}}{\partial \ln r_j} = 1 .
+\label{eq:funnel-mult}
+\end{equation}
+
+最后那个等式有一个非常实用的推论：在对数尺度上，\textbf{每一层的影响力是等权的}。
+把某层的转化率相对提升 10\%，整体转化率的相对提升也是 10\%，
+\emph{无论这一层原本是 50\% 还是 5\%}。所以「哪一层更值得优化」不能只看提升幅度，
+还要看\emph{改进这一层的难度与成本}，以及这一层的流失是否由别处的问题造成（例如落地流量质量）。
+
+\begin{equation}
+\GMV \;=\; S_{\text{广告点击}} \;\times\; r_{\text{落地}} \;\times\; r_{\text{加购}} \;\times\; r_{\text{结账}} \;\times\; r_{\text{支付}} \;\times\; \AOV ,
+\label{eq:funnel-gmv}
+\end{equation}
+
+其中 $S_{\text{广告点击}}$ 是进入落地页的会话数。下面给出一张诊断用基准表。
+必须强调：\textbf{这些数字是示范量级，作用是判断「哪一层明显异常」，不能当作目标值}。
+不同品类、不同流量结构、不同客单价下的真实分布差异极大，
+任何基准都必须用自己站点近 8--12 周的分位数建立，并用同期竞品公开的行业报告做交叉验证 \cite{statista_ecommerce}。
+
+\begin{table}[htbp]
+\centering
+\caption{转化漏斗各层的示范量级基准与诊断优先级（经验值，仅供参考）}
+\label{tab:funnel-baseline}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{1.9cm} L{1.8cm} L{3.4cm} Y}
+\toprule
+\tabhead{层} & \tabhead{示范量级} & \tabhead{口径} & \tabhead{异常信号} & \tabhead{最常见根因} \\
+\midrule
+曝光到点击 & \CTR{} 0.5\%--2\% & 广告展示为分母 & 某素材 \CTR{} 突然腰斩且持续 3 天以上 & 素材疲劳、受众重叠、出价结构变化 \\
+\addlinespace
+点击到落地停留 & 有效会话 50\%--75\% & 停留 $\ge$ 10\,s 或滚动 $\ge$ 25\% & 落地即走比例上升 & 信息一致性断裂、页面白屏、跳转链路错误 \\
+\addlinespace
+落地到加购 & 3\%--12\% & 会话口径 & 与同品类差距大，且热图集中在价格区 & 价值主张弱、证据不足、价格或运费预期落差 \\
+\addlinespace
+加购到结账完成 & 25\%--50\% & 加购会话为分母 & 结账页流失集中在前两步 & 运费税费突现、强制注册、字段过多 \\
+\addlinespace
+结账到支付成功 & 85\%--95\% & 支付发起为分母 & 支付失败率 $>5\%$ & 支付通道不稳、风控误杀、3DS 跳出 \\
+\addlinespace
+支付到履约完成 & 95\%--99\% & 支付成功为分母 & 取消率与退款率异常升高 & 库存不准、时效承诺过高、货不对板 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  base/.style={draw, rounded corners=2pt, minimum height=10mm, inner sep=4pt},
+  fA/.style={base, draw=NavyMid, fill=BoxBG, minimum width=3.0cm},
+  fB/.style={base, draw=TealDeep, fill=BoxBGAlt, minimum width=2.6cm},
+  fC/.style={base, draw=AmberDeep, fill=BoxBG, minimum width=2.2cm},
+  fD/.style={base, draw=VioletDeep, fill=BoxBGAlt, minimum width=1.8cm},
+  fE/.style={base, draw=CrimsonDeep, fill=BoxBG, minimum width=1.4cm},
+  rate/.style={font=\sffamily\tiny, text width=2.5cm, align=left},
+  diag/.style={draw=RuleGray, fill=white, rounded corners=1pt, font=\sffamily\tiny,
+               text width=5.3cm, align=left, inner sep=2pt}
+]
+\node[fA] (a) at (0,7)   {\textbf{曝光}};
+\node[fA] (b) at (0,5)   {\textbf{点击}};
+\node[fB] (c) at (0,3)   {\textbf{落地}};
+\node[fC] (d) at (0,1)   {\textbf{加购}};
+\node[fD] (e) at (0,-1)  {\textbf{结账}};
+\node[fE] (f) at (0,-3)  {\textbf{支付}};
+\node[rate] at (2.0,6)   {$\CTR$：素材疲劳（受众 / 出价）};
+\node[rate] at (2.0,4)   {有效会话率：信息一致性 / 速度};
+\node[rate] at (2.0,2)   {加购率：价值主张 / 证据};
+\node[rate] at (2.0,0)   {结账完成率：运费 / 表单 / 注册};
+\node[rate] at (2.0,-2)  {支付成功率：通道 / 风控 / 3DS};
+\node[diag] at (9.3,6)   {先看分素材、分受众的 $\CTR$ 走势；素材疲劳与受众重叠是首要嫌疑。};
+\node[diag] at (9.3,4)   {落地即走升高时，先查广告与页面配对表，再查 LCP 与脚本阻塞。};
+\node[diag] at (9.3,2)   {把价格、运费门槛、时效在加购前讲清；证据型内容补在滚动中段。};
+\node[diag] at (9.3,0)   {运费税费突现、强制注册、字段过多吃掉大部分结账流失。};
+\node[diag] at (9.3,-2)  {支付失败率高于 5\% 属于工程事故，优先于任何页面优化。};
+\node[diag] at (9.3,-4.6) {\textbf{诊断顺序：自下而上}。先排除支付与履约事故，
+  再修结账规则，最后才做加购率与落地页的说服力实验。};
+\draw[-{Stealth}, SlateGray] (a) -- (b);
+\draw[-{Stealth}, SlateGray] (b) -- (c);
+\draw[-{Stealth}, SlateGray] (c) -- (d);
+\draw[-{Stealth}, SlateGray] (d) -- (e);
+\draw[-{Stealth}, SlateGray] (e) -- (f);
+\end{tikzpicture}
+\caption{转化漏斗的逐层流失与诊断提示：每层都有自己的根因，诊断顺序必须自下而上排除事故}
+\label{fig:funnel-diag}
+\end{figure}
+
+\begin{keypoint}[漏斗诊断的正确顺序：先排除事故，再优化体验]
+诊断顺序应当是：\textbf{(1) 支付成功率与履约取消率}——这是工程与通道问题，一场事故能抹掉所有页面优化的收益；
+\textbf{(2) 结账完成率}——运费税费与注册门槛属于规则设计问题，修复成本低、收益大；
+\textbf{(3) 加购率}——这才轮到价值主张、视觉证据、评价体系；
+\textbf{(4) 落地有效会话率}——多数情况下这是投放与页面对齐问题，属于投放侧；
+\textbf{(5) 点击率}——对抗的是拍卖与素材疲劳，属于投放侧且成本最高。
+从下往上排，是因为越靠下的问题越可能是「本可以避免的损失」，
+而越靠上的问题越接近「市场定价」，可努力的空间更小。
+\end{keypoint}
+
+\subsection{支付失败与弃购挽回}
+
+\term{弃购}{Cart Abandonment} 的量级是被严重低估的：行业公开统计的示范量级是，
+加购用户中最终完成支付的比例常在三成上下，
+也就是说\kw{大约七成的加购最终没有成交}——其中一部分是「先放着、比价、再回来」，
+一部分是「运费太贵/支付失败/流程太烦」，还有一部分是纯粹的浏览行为。
+区分这三类人是弃购挽回能否有效的前提：
+对第一类人发折扣只会\emph{白白牺牲毛利}，对第二类人修复摩擦比给折扣有效得多，
+对第三类人任何动作都是浪费。
+
+把弃购挽回写成期望增量收益的形式：
+
+\begin{equation}
+\Delta R_{\text{弃购}} \;=\; \sum_{t=1}^{T} \underbrace{V_{\text{cart}}}_{\text{购物车价值}}
+\;\times\; \underbrace{\rho_t}_{\text{送达率}} \;\times\; \underbrace{c_t}_{\text{点击率}}
+\;\times\; \underbrace{q_t}_{\text{挽回概率}} \;\times\; \underbrace{(1 - \mu_t)}_{\text{折扣与让利后的留存}}
+\;\times\; \underbrace{(1 - \lambda)}_{\text{退货折损}} ,
+\label{eq:abandon-incremental}
+\end{equation}
+
+其中 $\rho_t$ 是第 $t$ 封邮件的送达率，$c_t$ 是点击率，$q_t$ 是点击后完成购买的概率，
+$\mu_t$ 是让利比例（折扣、免运费、赠品），$\lambda$ 是退货率。
+这个式子有几个直接的管理含义：
+
+\begin{itemize}
+  \item \textbf{增量不等于总量。} 会自己回来的人本来就会回来，
+        因此衡量弃购邮件的正确口径是\emph{增量实验}（保留一个不发送的对照组），
+        而不是「弃购邮件带来了多少收入」这种总量口径。
+  \item \textbf{折扣不是免费的增长。} $\mu_t$ 直接吃掉毛利，
+        而且对\emph{本来就会买}的人发折扣，是纯粹的利润损失。
+        行业经验做法是（示范量级）：第 1 封不发折扣（只提醒 + 提供帮助），
+        第 2--3 封才引入小额度让利或免运费，且优先给「高购物车价值 + 高历史价值」的人群。
+  \item \textbf{越早越值钱。} $\rho_t$、$c_t$、$q_t$ 都随 $t$ 递减，
+        第 1 封邮件（加购后 1--4 小时）的贡献通常占整条序列的一半以上。
+\end{itemize}
+
+\begin{casebox}[案例：把弃购邮件从 1 封增加到 3 封（示范计算）]
+某独立站（客单价约 60 元、毛利润率约 65\%、退货率约 8\%）把弃购自动化序列
+从「1 封、加购后 24 小时、含 10\% 折扣」改为三封：
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{L{1.6cm} L{2.0cm} L{1.6cm} L{1.6cm} L{1.6cm} Y}
+\toprule
+\tabhead{次序} & \tabhead{时间} & \tabhead{送达率} & \tabhead{点击率} & \tabhead{挽回率} & \tabhead{让利} \\
+\midrule
+第 1 封 & 加购后 1 小时 & 97\% & 28\% & 4.0\% & 0（仅提醒） \\
+第 2 封 & 加购后 24 小时 & 96\% & 18\% & 2.0\% & 免运费（约折 5\%） \\
+第 3 封 & 加购后 72 小时 & 95\% & 12\% & 1.2\% & 10\% 折扣 \\
+\bottomrule
+\end{tabularx}
+\captionof{table}{三封弃购序列的示范参数（数值为便于计算的示例，不代表真实平台数据）}
+\label{tab:abandon-sequence}
+\end{center}
+
+按 \cref{eq:abandon-incremental} 逐封计算（每 1000 个弃购用户、$V_{\text{cart}} = 60$ 元、$\lambda = 0.08$）：
+第 1 封增量收入约 $1000 \times 0.97 \times 0.28 \times 0.04 \times 1 \times 0.92 \times 60 \approx 600$ 元；
+第 2 封约 $1000 \times 0.96 \times 0.18 \times 0.02 \times 0.95 \times 0.92 \times 60 \approx 181$ 元；
+第 3 封约 $1000 \times 0.95 \times 0.12 \times 0.012 \times 0.90 \times 0.92 \times 60 \approx 68$ 元。
+
+从这个示范计算可以得到三个结论，它们的相对关系比绝对数字更重要：
+\textbf{(1)} 第 1 封贡献了约七成的增量，说明「及时提醒」本身是最大的杠杆，折扣反而是其次；
+\textbf{(2)} 三封合计的增量约为单封的 1.4 倍，增加序列确实有增量，但收益递减非常明显；
+\textbf{(3)} 让利越晚出现，单位收入越贵——第 3 封的让利占收入比例远高于第 1 封。
+实务上的推论是：\kw{先把第一封做到极致（及时、清晰、无摩擦），再考虑增加序列长度}，
+并且删除「无差别发折扣」这条最贵也最常见的做法。
+\end{casebox}
+
+\subsection{运费与税费展示时机}
+
+运费与税费的展示时机是跨境电商转化的一个特殊变量，原因是它天然涉及\emph{心理落差}：
+用户在商品页形成的价格预期，如果在结账最后一步突然加上运费与关税，
+落差会被解读为「藏价」，其负面效应远大于金额本身。
+
+三种策略的取舍如下：
+
+\begin{itemize}
+  \item \textbf{商品页透明展示}（含运费估算与税费说明）：转化率受影响取决于运费高低，
+        但没有「最后一刻加价」的负面情绪，退款与投诉率更低。
+        国际物流场景下需要按国家/地区给出估算区间，并在结账前确认。
+  \item \textbf{运费门槛前置}（如「满 199 元免运费」）：这是最有效的做法之一，
+        因为它把运费从\emph{成本}变成了\emph{激励}，AOV 与转化率可以同时提升。
+        前提是门槛要在\emph{加购之前}可见，并在购物车中显示「还差多少」。
+  \item \textbf{结账才展示}（含关税到付或结账加收）：转化数据常常看起来更差、投诉也更多。
+        跨境电商要注意税务合规与目的地法规要求，具体展示义务\emph{以目标市场法规与平台规则的最新要求为准}
+        （可对照 \cref{ch:cbec} 对关税与合规的讨论）。
+\end{itemize}
+
+\begin{insight}[运费是一个「定价结构」问题，不是「信息展示」问题]
+把运费看成信息展示问题，团队会去争论「早点说还是晚点说」；
+把它看成定价结构问题，团队会先问「运费应该由谁承担、怎么承担」。
+后者能衍生出更有价值的动作：用免运费门槛拉高客单价、
+用会员权益把运费变成订阅理由、用合并发货与仓配优化真实成本
+（见 \cref{ch:supply} 对物流与库存的讨论）。
+\emph{展示时机只是定价结构的外在表现}；只调展示时机而不动定价结构，
+最多能减少投诉，很难带来持续的转化提升。
+\end{insight}
+
+\section{邮件与私域：唯一不付租金的渠道}
+\label{sec:cro-email}
+
+\subsection{列表获取：弹窗、内容磁铁与结账订阅}
+
+邮件资产的质量由\emph{列表质量}决定，而列表质量在\emph{获取的那一刻}就已经被决定了。
+三类主要入口的取舍：
+
+\begin{table}[htbp]
+\centering
+\caption{邮件列表的三类获取入口：机制、代价与适用阶段}
+\label{tab:listbuild}
+\small
+\begin{tabularx}{\textwidth}{L{2.0cm} L{3.2cm} L{3.4cm} Y}
+\toprule
+\tabhead{入口} & \tabhead{机制} & \tabhead{代价与风险} & \tabhead{适用与参数建议（经验值）} \\
+\midrule
+弹窗 / 浮层 & 进入时或滚动/退出意图时触发，用首单折扣或免运费换订阅 & 打断体验；移动端遮挡内容；触发过晚则浪费曝光，过早则惹人反感 & 延迟 15--30\,s 或滚动 40\% 后触发；同一次会话只弹一次；退出意图弹窗在移动端效果不稳定，慎用 \\
+\addlinespace
+内容磁铁 & 用尺寸表、搭配指南、选购清单等有独立价值的资料换邮箱 & 需要持续生产内容；资料与商品弱相关时留下的是「白拿用户」 & 适合客单价高、决策复杂的品类；要求资料在 30 秒内可用，且与商品强相关 \\
+\addlinespace
+结账订阅 & 在下单流程中以「接收订单更新」为理由自然获取 & 必须与交易邮件区分；若默认勾选营销订阅会遇到合规与体验问题 & 合规前提下明确区分事务性邮件与营销订阅；勾选框默认不勾选更稳妥 \\
+\addlinespace
+边栏 / 页脚 & 常驻入口，量小但打扰最小 & 转化率低，容易被用户忽略 & 作为兜底入口保留，不指望它贡献主要列表增长 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{pitfall}[用「买名单」或「导入历史客户」快速扩列表——域名信誉最脆弱的环节]
+\textbf{现象}：为了快速做大邮件渠道，团队购买第三方名单或把多年前的老客户一次性导入群发，
+第一封群发后打开率尚可，随后两周内进垃圾箱比例急剧上升，
+最终连\emph{订单通知邮件}都开始进垃圾箱，客服工单量暴涨。\\
+\textbf{根因}：邮件系统的准入判断依赖于\kw{发件域的长期互动率}。
+购买名单意味着收件人从未同意、从未互动，极其容易触发「标记垃圾邮件」，
+而投诉率、删除不读率、无效地址率是邮箱服务商评估发件人信誉的核心信号。
+一旦信誉受损，受损的是\emph{整个域}——包括事务性邮件。这属于典型的「用一个渠道的短期收益，
+抵押了公司所有对外邮件的可达性」的自毁型操作。\\
+\textbf{排查方法}：(1) 立刻停止对未同意名单的发送，不要用「再发一封道歉信」补救；
+(2) 对长期未互动的地址做\emph{再确认}（re-engagement）或直接停发，宁可缩小列表；
+(3) 把域名按用途分离：营销邮件用子域、事务性邮件用独立子域，避免互相污染；
+(4) 建立常态监控：投诉率、退信率、各主要邮箱服务商的进箱位置（见 \cref{eq:deliverability}）。
+\end{pitfall}
+
+\subsection{生命周期邮件：六类 Flow 与触发时点}
+
+\term{生命周期邮件}{Lifecycle Email} 的本质是\emph{把「合适的信息在合适的时刻发给合适的人」自动化}。
+它和「广播」（Campaign）的区别在于：Flow 由\emph{用户事件}触发，一人一时一封信；
+Campaign 由\emph{运营排期}触发，同一封信发给一大群人。
+这个区别决定了它们的度量口径完全不同——Flow 看\emph{每条序列的增量}，
+Campaign 看\emph{每次发送的 ROI 与对整体节奏的影响}。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\sffamily\scriptsize, align=center},
+  trg/.style={draw=NavyMid, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+              text width=1.9cm, inner sep=3pt, font=\sffamily\tiny},
+  seq/.style={draw=TealDeep, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm,
+              text width=2.3cm, inner sep=3pt, font=\sffamily\tiny},
+  cad/.style={draw=AmberDeep, fill=white, rounded corners=2pt, minimum height=7mm,
+              text width=2.5cm, inner sep=3pt, font=\sffamily\tiny},
+  mono/.style={draw=VioletDeep, fill=BoxBG, rounded corners=2pt, minimum height=7mm,
+               text width=2.7cm, inner sep=3pt, font=\sffamily\tiny},
+  arrow/.style={-{Stealth}, SlateGray},
+  head/.style={font=\sffamily\tiny\bfseries\color{NavyDeep}}
+]
+\node[head] at (-2.4,0.5)   {触发事件};
+\node[head] at (0.9,0.5)   {序列内容};
+\node[head] at (4.2,0.5)   {节奏与个性化};
+
+\node[trg] (e1) at (-2.4,-0.5)  {订阅成功};
+\node[seq] (s1) at (0.9,-0.5)   {欢迎 1--3 封\\品牌 + 首单};
+\node[cad] (c1) at (4.2,-0.5)   {即时、24\,h、72\,h\\按来源分段};
+
+\node[trg] (e2) at (-2.4,-1.8)  {浏览商品\\未加购};
+\node[seq] (s2) at (0.9,-1.8)   {浏览放弃\\1--2 封};
+\node[cad] (c2) at (4.2,-1.8)   {2--6\,h 内\\带替代推荐};
+
+\node[trg] (e3) at (-2.4,-3.1)  {加购未支付};
+\node[seq] (s3) at (0.9,-3.1)   {弃购挽回\\3 封};
+\node[cad] (c3) at (4.2,-3.1)   {1\,h / 24\,h / 72\,h\\第 3 封才让利};
+
+\node[trg] (e4) at (-2.4,-4.4)  {首单完成};
+\node[seq] (s4) at (0.9,-4.4)   {复购推荐\\2--3 封};
+\node[cad] (c4) at (4.2,-4.4)   {按品类耗用周期\\交叉销售};
+
+\node[trg] (e5) at (-2.4,-5.7)  {60--90 天\\无互动};
+\node[seq] (s5) at (0.9,-5.7)   {唤醒 / winback\\2 封};
+\node[cad] (c5) at (4.2,-5.7)   {再确认或停发\\避免污染信誉};
+
+\node[mono] (m) at (0.9,-6.9)   {所有序列共享：频次上限、全局退订、护栏指标};
+\draw[arrow] (e1) -- (s1); \draw[arrow] (s1) -- (c1);
+\draw[arrow] (e2) -- (s2); \draw[arrow] (s2) -- (c2);
+\draw[arrow] (e3) -- (s3); \draw[arrow] (s3) -- (c3);
+\draw[arrow] (e4) -- (s4); \draw[arrow] (s4) -- (c4);
+\draw[arrow] (e5) -- (s5); \draw[arrow] (s5) -- (c5);
+\draw[arrow, dashed, CrimsonDeep] (c5.south) -- (m.east);
+\end{tikzpicture}
+\caption{邮件生命周期 Flow 蓝图：五类触发事件、对应序列与节奏设计}
+\label{fig:email-flow}
+\end{figure}
+
+六类最常用的 Flow 及其设计要点：
+
+\begin{itemize}
+  \item \textbf{欢迎序列}（Welcome）：订阅后立即触发，1--3 封。
+        关键不是立刻打折，而是\emph{建立预期}：你是谁、能提供什么、多久发一次、怎么退订。
+        第一封的发件人名称与订阅入口处一致，是提升打开率的最低成本动作。
+  \item \textbf{弃购挽回}（Abandoned Cart）：节奏 1\,h / 24\,h / 72\,h 是常见配置，
+        让利放在最后（见 \cref{tab:abandon-sequence}）。
+  \item \textbf{浏览放弃}（Browse Abandonment）：触发条件是「看过商品详情但未加购」，
+        量最大、意向最弱，因此只适合 1--2 封，且必须带\emph{补充信息}（对比、搭配、评价），
+        不能只是「你还在看」。
+  \item \textbf{复购推荐}（Post-purchase）：按品类耗用周期触发（消耗品 30--60 天、
+        耐用品 90--180 天），配合交叉销售。注意\emph{不要在刚下单后立刻推销同类商品}——
+        用户还在等货，此时推销会被解读为「不关心我」。
+  \item \textbf{唤醒 / winback}（Re-engagement / Winback）：对 60--90 天未互动的人，
+        先用低门槛内容（新品类、新内容）测试兴趣，再进行「再确认」。
+        再确认未响应的地址应当停发——这是保护送达率的必要代价。
+        需要区分两个概念：\emph{唤醒}针对「已购买但沉默」的客户，目标是恢复关系；
+        \emph{winback} 针对「已流失/即将流失」的客户，通常需要更强理由（专属优惠、新品）。
+        两者应使用不同序列、不同措辞，不要混为一封「我们想你了」。
+  \item \textbf{订单与物流通知}（Transactional）：严格意义上不属于营销邮件，
+        但它是最强的\emph{关系维护}触点。把它做得清楚、可预期（含物流节点与到货预估），
+        能显著降低客服工单与「未收到货」类退款争议。
+\end{itemize}
+
+\begin{toolbox}[Flow 与 Campaign 的配比与护栏（可执行配置）]
+\textbf{收入结构参考（示范量级）}：成熟电商的邮件渠道收入中，自动化 Flow 通常贡献一半以上，
+广播 Campaign 贡献其余部分。若 Flow 占比低于三成，说明自动化建设不足；
+若 Campaign 占比高于七成，说明你在\emph{反复打扰同一批人}以换取短期收入，
+长期会导致互动度下降（进而损害送达率）。\\
+\textbf{频次上限}：对同一收件人，建议设定「每周营销邮件上限」与「全局冷却时间」，
+并把弃购、浏览放弃这类高意向序列\emph{计入}上限（很多团队忘了这一点，导致高意向用户被过度打扰）。\\
+\textbf{四条护栏指标}：(1) 投诉率；(2) 硬退信率；(3) 全局退订率；(4) 每收件人收入与发送量的边际曲线。
+前三条出现恶化趋势时，先降低发送量，而不是提高发送量来「补收入」。\\
+\textbf{验收方式}：每条 Flow 上线时保留 5\%--10\% 的\emph{不发送}对照组，
+在 $2$--$4$ 周后按增量口径评估（见 \cref{eq:abandon-incremental} 的口径要求）。
+\end{toolbox}
+
+\subsection{送达率的工程基础：SPF/DKIM/DMARC 与域名预热}
+
+\term{送达率}{Deliverability} 与\term{进箱率}{Inbox Placement} 不是同一件事，
+但工程上必须分开度量：
+
+\begin{equation}
+\begin{aligned}
+\text{送达率} &= N_{\text{送达}} / N_{\text{发送}}, \qquad
+\text{进箱率} = N_{\text{进箱}} / N_{\text{送达}}, \\[2pt]
+B_{\text{硬}} &= N_{\text{无效}} / N_{\text{发送}}, \qquad
+B_{\text{投诉}} = N_{\text{标记垃圾}} / N_{\text{送达}} .
+\end{aligned}
+\label{eq:deliverability}
+\end{equation}
+
+必须理解三件事：
+\textbf{(1)} 送达率只告诉你「对方服务器收下了」，不等于用户看得到；
+\textbf{(2)} 进箱率无法由你自己精确测量，只能通过种子邮箱监测、各邮箱服务商的
+\emph{Postmaster}（发件人信誉）工具、以及\emph{域名信誉}报告来间接观察；
+\textbf{(3)} 硬退信率与投诉率是可以精确测量的，而且它们是最直接的信誉杀手。
+行业经验的量级是（示范量级）：健康发件人的投诉率应长期维持在 $0.1\%$ 以下，
+超过 $0.3\%$ 就应当立即排查；硬退信率应在 $2\%$ 以下，超过 $5\%$ 会触发明显的投递限制。
+具体阈值与判定规则\emph{以各邮箱服务商的最新要求为准}，并且这些规则会随时间变化。
+
+技术上，三项身份认证各自解决不同的问题：
+
+\begin{table}[htbp]
+\centering
+\caption{邮件身份认证三件套的分工与常见配置错误（具体要求以各服务商最新文档为准）}
+\label{tab:email-auth}
+\small
+\begin{tabularx}{\textwidth}{L{1.3cm} L{3.2cm} L{3.3cm} Y}
+\toprule
+\tabhead{机制} & \tabhead{解决的问题} & \tabhead{失效时的表现} & \tabhead{常见配置错误} \\
+\midrule
+SPF & 声明「哪些服务器有权代表该域发信」 & 认证失败，容易被判为伪造；转发场景下容易误伤 & 记录条数超限；未包含所有第三方发信平台；结尾策略（\code{-all}、\code{\textasciitilde{}all}、\code{+all}）选择不当 \\
+\addlinespace
+DKIM & 用签名证明「邮件内容未被篡改」，与发信域解耦 & 签名校验失败；即使 SPF 通过也被降权 & 密钥长度不足；选择器（selector）轮换后未同步 DNS；正文被网关改写导致签名失效 \\
+\addlinespace
+DMARC & 声明「SPF 或 DKIM 至少一项对齐失败时怎么办」，并接收报告 & 无策略或 $p=\text{none}$ 时形同虚设；策略过严会误杀合法邮件 & 对齐（alignment）未配置；未先收集报告就直接上 $p=\text{reject}$；忽略了子域策略 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{toolbox}[新发件域预热与互动度管理清单]
+\textbf{预热（Warm-up）}：新域或新 IP 不要一开始就全量发送。按下面的节奏逐步放量，
+并每天观察退信与投诉：
+\begin{enumerate}
+  \item 第 1--3 天：每天发送给\emph{最活跃}的少量收件人（例如近 30 天打开过的用户），量级从数百开始。
+  \item 第 2 周：按天递增到数千级，优先发给高互动人群；如投诉率上升则\emph{停止加量}而不是继续加。
+  \item 第 3--4 周：逐步覆盖全部同意订阅的活跃人群，同时开始对沉默人群做再确认。
+  \item 之后：把「发送量」与「互动度」绑定——互动度下降时降低频率，而不是提高频率。
+\end{enumerate}
+\textbf{互动度管理}：
+\begin{enumerate}
+  \item 按最近打开/点击时间做分层（如 0--30 天、31--90 天、91--180 天、180 天以上），分层配置发送频率。
+  \item 对 180 天以上无互动的人群执行一次「再确认」，未响应即停发（可保留在数据库中用于站内个性化）。
+  \item 把\emph{事务性邮件}与\emph{营销邮件}分离到不同子域，避免互相污染。
+  \item 每封邮件都提供清晰、一键可用的退订；退订永远比投诉便宜。
+  \item 上线前用种子邮箱矩阵检查主流邮箱服务商的进箱位置与渲染效果。
+\end{enumerate}
+\end{toolbox}
+
+\subsection{分段、个性化与邮件收入占比}
+
+\term{分段}{Segmentation} 与\term{个性化}{Personalization} 常常被混为一谈。
+前者决定\emph{发给谁}，后者决定\emph{发什么}。工程上两者的成本差异很大：
+分段靠标签与规则，成本低、收益稳；个性化（尤其推荐型动态内容）需要数据管道与模板引擎，
+成本高、收益不确定。一个务实的顺序是：\kw{先做分段，再做个性化}；
+先做「按最近购买品类分段」，再做「每封邮件一个千人千面的推荐块」。
+
+邮件收入占比可以用一个可分解的估算式表达：
+
+\begin{equation}
+\frac{R_{\text{邮件}}}{R_{\text{总}}}
+\;\approx\;
+\frac{\displaystyle\sum_{i \in \text{Flow}} N_i^{\text{触发}} \rho_i c_i v_i
+\;+\; \sum_{j \in \text{Campaign}} N_j^{\text{发送}} \rho_j c_j v_j}{R_{\text{总}}} ,
+\label{eq:email-revenue}
+\end{equation}
+
+其中 $N_i^{\text{触发}}$ 是第 $i$ 条 Flow 在统计期内的触发人数，$N_j^{\text{发送}}$ 是第 $j$ 次广播的发送量，
+$\rho$ 是送达率，$c$ 是点击率，$v$ 是「点击到收入」的期望金额（即点击后成交的期望客单价乘成交概率）。
+这个式子的用处不是算出一个精确数字，而是让团队看清\emph{收入从哪里来}：
+如果收入全部来自 $N^{\text{发送}}$ 很大的广播，说明你在依赖\emph{规模}而不是\emph{相关性}；
+如果收入主要来自 $c_i$ 很高的 Flow，说明自动化在稳定工作。
+
+关于占比，行业公开报告的示范量级是：成熟电商品牌中，
+邮件渠道（含自动化与广播）贡献的总收入占比通常在一成到三成之间，
+私域做得好的品牌可以更高；而其中的自动化 Flow 又通常占邮件收入的一半以上。
+需要提醒两点：\textbf{(1)} 这类占比高度依赖归因口径——
+\metric{GA4} 的模型化归因、平台自带归因、优惠码归因会给出差异很大的数字，
+跨期比较时必须固定口径；\textbf{(2)} 占比是\emph{结果}不是\emph{目标}，
+把「邮件收入占比」当成 KPI 会诱发过度发送，最终伤害送达率与品牌。
+
+\begin{equation}
+\text{每收件人收入} \;=\; \ARPU_{\text{邮件}} = f \times c \times v ,
+\label{eq:email-arpu}
+\end{equation}
+
+其中 $f$ 是统计期内人均发送量，$c$ 是点击率，$v$ 是点击后期望金额。
+这个分解式揭示了一个关键的管理取舍：\emph{提高 $f$ 会降低 $c$}（发送越多，平均相关性越低，
+甚至引发退订与投诉），因此存在一个使 $f \times c$ 最大的最优频率。
+找到这个最优点的唯一可靠方法是\kw{频次实验}：随机把人群分成不同发送频率组，
+观察 $f \times c$ 与投诉率同时变化的情况，而不是凭经验拍一个「每周两封」。
+
+\section{短信、推送、WhatsApp 与社群}
+\label{sec:cro-owned}
+
+自有渠道不止邮件。它们的适用场景差异很大，选错了渠道的代价是\emph{用户永久地关闭与你的联系}。
+下面的对比按「打扰度」从低到高排列：
+
+\begin{table}[htbp]
+\centering
+\caption{自有触达渠道的适用场景与约束对比（费率与合规以各地法规和平台最新规则为准）}
+\label{tab:owned-channels}
+\small
+\begin{tabularx}{\textwidth}{L{1.7cm} L{2.4cm} L{3.0cm} L{3.0cm} Y}
+\toprule
+\tabhead{渠道} & \tabhead{优势} & \tabhead{主要约束} & \tabhead{最适合的场景} & \tabhead{关键指标} \\
+\midrule
+邮件 & 容量大、成本低、可承载长内容与图片 & 送达率受信誉约束；打开率随互动度衰减 & 全部生命周期场景，尤其是需要解释与展示的内容 & 送达率、进箱率、每收件人收入 \\
+\addlinespace
+短信 / RCS & 触达率高、时效性强 & 单条成本高；合规要求严格（需明确同意与退订）；内容必须极短 & 订单关键节点、限时促销、高价值客户召回 & 点击率、退订率、单条成本回收 \\
+\addlinespace
+App 推送 & 零边际成本、可深度链接 & 依赖 App 装机与通知权限；权限一旦关闭极难恢复 & 装机量大的品牌 App 用户的留存与唤醒 & 权限授予率、点击率、卸载率 \\
+\addlinespace
+WhatsApp Business & 在部分市场是主流沟通方式；支持模板消息与富媒体 & 模板需审核、有会话窗口与计费规则；滥用会被封号 & 拉美、欧洲、东南亚、中东等市场的订单沟通与客服 & 模板通过率、响应时长、投诉率 \\
+\addlinespace
+社群（Group / Discord） & 高粘性、可沉淀 UGC、适合口碑传播 & 需要持续投入人力运营；负面情绪传播快；平台规则变化风险 & 复购型品类、兴趣驱动品类、DTC 品牌的深度用户 & 活跃率、UGC 产出量、群内转化 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+几点实操判断：
+
+\begin{itemize}
+  \item \textbf{短信只在「强时效 + 高价值」时用。}
+        订单发货、配送异常、限时活动截止提醒是合适场景；
+        常态化促销短信会快速消耗名单（退订率上升）并且成本不低。
+  \item \textbf{推送的瓶颈是权限，不是内容。} 权限授予率取决于\emph{请求时机}：
+        在用户完成第一次有价值行为（下单、收藏、看完一篇文章）之后再请求，
+        授予率显著高于冷启动时请求。
+  \item \textbf{WhatsApp 在跨境场景中的定位是「服务」而非「广告」。}
+        它在部分市场承担了客服与订单确认的主要职能；
+        作为纯营销渠道使用时要特别小心模板审核与封号风险，
+        具体规则与计费\emph{以 WhatsApp Business 平台最新文档为准}。
+  \item \textbf{社群的价值不在「发广告」，而在「让用户互相说服」。}
+        一个健康社群的运营动作是：解决具体问题、收集产品反馈、奖励真实 UGC。
+        把社群当成免费的广告位，通常会在几周内把它变成死群。
+  \item \textbf{渠道之间必须做\emph{频次协同}。} 用户在一天内收到邮件、短信、推送三份促销信息，
+        感受是「被围猎」。工程上需要一个\emph{跨渠道频次上限}与优先级（交易 > 服务 > 高相关营销 > 泛促销）。
+\end{itemize}
+
+\section{联盟与红人：用别人的流量做交易}
+\label{sec:cro-affiliate}
+
+\subsection{联盟网络与佣金结构}
+
+\term{联盟营销}{Affiliate Marketing} 的商业本质是\kw{按结果付费的流量采购}：
+你用一部分毛利换取不需要预付的流量。它与广告投放的区别在于风险分配：
+广告是「先付钱再祈祷转化」，联盟是「先转化再付钱」。
+因此联盟最适合的两类场景是：(1) 拉新预算有限但毛利足够的阶段；
+(2) 需要大量长尾内容型流量的品类（测评、比价、攻略）。
+
+主流联盟网络的定位差异（费率与政策\emph{以各平台最新文档为准}）：
+
+\begin{table}[htbp]
+\centering
+\caption{主流联盟网络的定位差异与选型逻辑（费率为历史经验量级，以平台最新文档为准）}
+\label{tab:affiliate-network}
+\small
+\begin{tabularx}{\textwidth}{L{1.8cm} L{3.2cm} L{3.4cm} Y}
+\toprule
+\tabhead{网络} & \tabhead{生态特征} & \tabhead{适合的对象} & \tabhead{主要代价} \\
+\midrule
+ShareASale & 中小内容站与博主多，长尾丰富 & 中小品牌冷启动阶段；预算不大、想快速铺量 & 流量质量参差，需要较重的审核与剔除工作 \\
+\addlinespace
+CJ & 大型品牌与成熟媒体资源，规则严格 & 已有品牌基础、注重合规与稳定性 & 入驻门槛与运营成本高，账期与结算规则复杂 \\
+\addlinespace
+Awin & 欧洲市场渗透强，区域性媒体资源好 & 主攻欧洲市场的品牌 & 跨区域结算与税务处理成本 \\
+\addlinespace
+Impact & 强调合作方管理（Partnership）与全流程追踪 & 需要与红人、内容方做深度合作与合同管理的团队 & 平台费用与实施成本较高，依赖技术对接质量 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+佣金结构的设计决定了你会吸引到什么样的流量：
+
+\begin{equation}
+\mathrm{CPS}^{\max} \;=\; \underbrace{M_{\text{毛利}}}_{\text{毛利润率}}
+\;-\; \underbrace{\lambda}_{\text{退货与欺诈率}}
+\;-\; \underbrace{\eta}_{\text{履约与支付成本率}}
+\;-\; \underbrace{\pi}_{\text{目标净利率}} ,
+\label{eq:cps-max}
+\end{equation}
+
+其中各项都是占成交金额的比例。这个式子最有用的一点是它把「佣金率」从一个
+\emph{谈判数字}变成了\emph{毛利结构的函数}：如果毛利润率是 $60\%$、
+退货与欺诈率是 $8\%$、履约与支付成本率是 $12\%$、目标净利率是 $15\%$，
+那么可承受的 CPS 上限约为 $25\%$。任何超过这个数字的佣金，
+都意味着这一单在\emph{直接账}上是亏的——除非它能带来可验证的复购 LTV 增量。
+
+\begin{equation}
+\text{期望贡献} \;=\; \underbrace{p_{\text{成交}}\, M_{\text{毛利}}\, \AOV}_{\text{单次成交毛利}}
+\;-\; \underbrace{p_{\text{成交}}\, \mathrm{CPS}\, \AOV}_{\text{佣金}}
+\;-\; \underbrace{\mathrm{CPC}_{\text{联盟}}\, \text{（按点击计费时）}}_{\text{固定成本}}
+\;+\; \underbrace{\Delta \LTV_{\text{复购}}}_{\text{长期价值}} .
+\label{eq:affiliate-contribution}
+\end{equation}
+
+\cref{eq:affiliate-contribution} 是联盟渠道的\emph{真实盈亏判据}。
+它解释了为什么「阶梯佣金」是有效的：
+对表现好的联盟客提高佣金率（用 $M_{\text{毛利}}$ 的一部分换更大的量），
+是双方都受益的；而对所有人都给高佣金，等于把 $\pi$ 无条件让出去。
+常见的结构组合是：
+
+\begin{itemize}
+  \item \textbf{CPS}（按成交付费）：风险最低，适合长尾内容站与优惠券站，
+        但要小心「优惠券站截流」——它抢的是你本来就会成交的订单，属于\emph{零增量}佣金支出。
+  \item \textbf{CPC}（按点击付费）：适合你能承受点击不确定性的场景，
+        但会让联盟客有动机刷低质点击，必须配合反作弊与点击质量门槛。
+  \item \textbf{CPA}（按行动付费，例如注册、试用、首单）：比 CPS 更精细，
+        适合订阅制与金融类，但需要可靠的行动定义与去重。
+  \item \textbf{阶梯佣金}：按月成交额或新客数分档，鼓励联盟客向更高档冲刺。
+        设计要点是\emph{门槛要跳一跳够得着}，且高档位的增量佣金只作用于增量部分（不是全量回补）。
+  \item \textbf{混合结构}：新客固定佣金 + 老客降级佣金，避免为复购付二次获客费。
+\end{itemize}
+
+\subsection{追踪与归因冲突}
+
+联盟渠道最大的工程问题是\kw{归因冲突}：同一笔订单可能同时被联盟客、付费广告、邮件、自然搜索「认领」。
+如果处理不当，会出现两种情况，两者都很贵：
+
+\begin{itemize}
+  \item \textbf{重复付佣金}：同一个转化被两个联盟客计入，或联盟客与付费广告同时被计入。
+  \item \textbf{渠道互相蚕食}：联盟客专门做品牌词与优惠券截流，把自然流量与直接流量的订单「洗」成联盟订单，
+        表面上联盟 ROI 很高，实际上是\emph{用佣金买下了本来免费的单}。
+\end{itemize}
+
+工程上的标准做法包含四层：
+
+\begin{enumerate}
+  \item \textbf{统一订单号与去重键}。所有渠道的转化回传都必须带同一个订单标识，
+        在归因服务里做\emph{首次去重}，而不是在每个渠道后台各自计数。
+  \item \textbf{明确归属规则并写进合同}。常见规则包括：非品牌词成交才算联盟贡献；
+        品牌词成交不付佣金；已有点击的付费广告流量排除在联盟归因之外（或反之，
+        按渠道优先级裁决）。规则必须书面化，否则结算时必然争吵。
+  \item \textbf{增量实验}。定期做「关闭联盟客」的地理或时间分流实验，
+        用增量口径验证联盟的真实贡献（这与广告的增量实验是同一套方法论，
+        可对照 \cref{ch:growth} 的实验与归因讨论）。
+  \item \textbf{欺诈检测}。监控异常模式：同一 IP 段集中成交、点击到成交时间过短、
+        退款率异常高、优惠券站占比过高。对每个联盟客维护一个\emph{质量分}，
+        质量问题优先于数量问题。
+\end{enumerate}
+
+\begin{pitfall}[把「渠道后台的转化数」当增量：联盟预算被系统性浪费]
+\textbf{现象}：联盟渠道后台显示上月贡献了 800 单、ROI 达到 4，
+于是团队把联盟佣金预算翻倍。翻倍后订单数只增加了 10\%，
+同时自然搜索与直接流量的订单减少了——总收入没涨，佣金支出翻倍。\\
+\textbf{根因}：联盟客的很大一部分流量是\kw{品牌词与优惠券截流}。
+用户本来就会通过品牌词搜索或直接访问下单，联盟客只是在结账前「插了一脚」，
+把订单标记成自己的。这类订单在渠道后台看起来 ROI 极高，实际增量接近零。
+更隐蔽的是\emph{末次点击归因}（last-click）会把这种截流判定为「联盟的功劳」，
+因为联盟客恰好是最后一个触点。\\
+\textbf{排查方法}：(1) 拆分联盟客类型，单独统计\emph{品牌词截流型}与\emph{内容种草型}的转化构成；
+(2) 对高 ROI 联盟客做\emph{时间分流增量实验}（一半时间开、一半时间关），观察总订单变化；
+(3) 建立\emph{新客占比}指标——只对新客成交支付全额佣金，老客成交降级或不计佣金；
+(4) 用品牌词竞价数据交叉验证：如果联盟客贡献峰值与品牌词搜索量峰值重合，截流嫌疑很大。
+\end{pitfall}
+
+\subsection{红人分层、合作模式与 UGC 授权}
+
+红人合作的核心不是「找最大的」，而是\kw{找到单位成本效率最高的那一层}。
+四层的典型特征与用法：
+
+\begin{table}[htbp]
+\centering
+\caption{红人四层分级：特征、合作目标与量级参考（价格为示范量级，实际以市场行情为准）}
+\label{tab:influencer-tier}
+\small
+\begin{tabularx}{\textwidth}{L{1.8cm} L{1.7cm} L{2.6cm} L{2.6cm} Y}
+\toprule
+\tabhead{层级} & \tabhead{粉丝量级} & \tabhead{优势} & \tabhead{主要风险} & \tabhead{合作目标与付费方式} \\
+\midrule
+头部 & 百万级以上 & 爆发式曝光、品牌背书 & 成本高、转化不确定、档期紧 & 品牌事件、新品发布；买断 + 坑位费为主 \\
+\addlinespace
+腰部 & 十万到百万 & 垂直度高、互动质量好 & 报价差异大、需要议价与管理成本 & 稳定的内容种草；坑位费 + 佣金 \\
+\addlinespace
+尾部 & 一万到十万 & 成本低、可批量测试、内容真实 & 单条曝光有限、履约风险高 & 素材生产与测试；纯佣金或样品置换 \\
+\addlinespace
+KOC & 一千到一万 & 极低成本、真实感强、可规模化 & 需要系统化的招募与结算流程 & UGC 素材池 + 佣金；长期合作 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+四种合作模式的经济学差异：
+
+\begin{itemize}
+  \item \textbf{纯佣金}（Affiliate-only）：红人承担全部转化风险，你承担内容质量风险。
+        适合尾部与 KOC，以及你还不确定某个红人的带货能力时。
+        缺点是好红人不愿接，只能拿到「愿意赌一把」的人。
+  \item \textbf{坑位费 + 佣金}（Flat fee + commission）：最常见的组合。
+        坑位费买的是\emph{曝光确定性}，佣金买的是\emph{转化的上行}。
+        关键是坑位费要对齐「曝光成本」而不是「转化承诺」——
+        任何红人承诺的具体转化数都应当被当作营销语言而非合同条款。
+  \item \textbf{买断}（Buyout）：一次性付费买下内容的使用权（通常含时长与渠道范围）。
+        适合需要把素材投放到付费广告的场景。买断价格与授权范围直接相关，
+        必须写清：可用渠道（自然流/付费投放）、可用时长、可用地区、是否可二次剪辑。
+  \item \textbf{白名单投放}（Whitelisting / Paid Partnership Ads）：
+        用红人的账号身份投放你的广告，或把红人内容作为付费广告素材。
+        它的价值在于\kw{把「红人信任」与「投放定向」叠加}——
+        用户看到的是熟悉的创作者在推荐，而不是品牌自说自话，
+        通常比品牌自投素材有更好的点击与转化表现。
+\end{itemize}
+
+\begin{keypoint}[UGC 素材授权（whitelisting）是红人合作里被低估的产出]
+大多数团队把红人合作看成「一次曝光」，合作结束素材就沉底了。
+更有价值的做法是在合同里就谈好\kw{素材授权}：
+把红人产出的视频与原声授权用于付费投放（有时限、有渠道范围、有地区范围）。
+这样一次合作会产生三种资产：(1) 红人自有流量的一次曝光；
+(2) 一个可长期投放的素材（可做多套剪辑与 A/B 测试）；
+(3) 一份可信的社会证明（可嵌入商品页与落地页，见 \cref{sec:cro-lp}）。
+谈判顺序上，\textbf{素材授权应当在谈坑位费时\emph{一起}谈}，
+因为合作结束后再单独购买授权，价格通常显著更高。
+同时必须注意合规：广告内容需要有明确的广告标识，
+素材使用范围不能超出授权，涉及第三方音乐/肖像时还需额外权利
+（跨境电商的广告合规约束可对照 \cref{ch:cbec}）。
+\end{keypoint}
+
+\section{复购与 LTV：把一次交易变成资产}
+\label{sec:cro-ltv}
+
+\subsection{RFM 分层与运营动作}
+
+\term{RFM 分层}{RFM Segmentation} 用三个维度刻画客户价值：
+\term{最近一次购买}{Recency}、\term{购买频次}{Frequency}、\term{购买金额}{Monetary}。
+它的工程实现非常朴素——把每个维度按分位数打分，再组合——但它的运营价值极高，
+因为它把「所有用户」变成了「几个可以做不同动作的群体」。
+
+\begin{equation}
+\begin{aligned}
+s_R &= Q_R\big(\text{距上次购买天数}\big), \qquad
+s_F = Q_F\big(\text{统计期购买次数}\big), \\[2pt]
+s_M &= Q_M\big(\text{统计期购买金额}\big), \qquad
+s_R,\, s_F,\, s_M \in \{1,\,2,\,3,\,4,\,5\} ,
+\end{aligned}
+\label{eq:rfm}
+\end{equation}
+
+\begin{equation}
+S_{\text{RFM}} \;=\; w_R\,\tilde s_R + w_F\,\tilde s_F + w_M\,\tilde s_M ,
+\qquad \tilde s = \frac{s-1}{4},\qquad w_R + w_F + w_M = 1 ,
+\label{eq:rfm-score}
+\end{equation}
+
+其中 $Q(\cdot)$ 是按\kw{分位数}（通常五分位）映射的打分函数，
+$\tilde s$ 是把打分归一化到 $[0,1]$ 的结果。
+打分函数必须按\emph{品类}标定：快消品与耐用品的时间尺度完全不同，
+把同一个 R 分位数套在两类商品上会得到荒谬的分层
+（买过一次冰箱的用户一年后仍然「很近期」，而买过一次洗发水的用户一年前就已经「流失」）。
+
+\begin{table}[htbp]
+\centering
+\caption{RFM 八类典型分层的运营动作（阈值为示范量级，需按品类标定）}
+\label{tab:rfm-segments}
+\small
+\begin{tabularx}{\textwidth}{L{2.1cm} L{2.4cm} L{3.2cm} L{3.2cm} Y}
+\toprule
+\tabhead{分层} & \tabhead{RFM 特征} & \tabhead{运营目标} & \tabhead{主要动作} & \tabhead{禁止动作} \\
+\midrule
+重要价值客户 & 高 R 高 F 高 M & 维护与放大 & 会员权益、新品优先、专属客服 & 无差别大额折扣 \\
+\addlinespace
+重要发展客户 & 高 M 低 F & 提高频次 & 品类交叉推荐、订阅制引导 & 只发同品类折扣 \\
+\addlinespace
+重要保持客户 & 低 R 高 F 高 M & 挽回 & 一对一关怀、专属回归权益 & 泛促销群发 \\
+\addlinespace
+一般价值客户 & 高 R 低 F 低 M & 提升客单与频次 & 满减捆绑、搭配推荐 & 高频打扰 \\
+\addlinespace
+新客 & 高 R 极低 F & 促成第二单 & 履约体验优化 + 复购窗口推荐 & 首单后立刻硬推销 \\
+\addlinespace
+沉睡客户 & 中低 R 中 F & 唤醒 & 内容型唤醒 + 再确认 & 直接发大额折扣 \\
+\addlinespace
+流失客户 & 低 R 低 F & 低成本召回或放弃 & 一次强理由触达，未响应即停发 & 反复发送 \\
+\addlinespace
+薅羊毛型 & 高 R 高 F 低 M & 控制让利 & 取消专属折扣，转为正价品推荐 & 继续给折扣（会固化行为） \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{订阅制、会员体系与交叉销售}
+
+提高 LTV 的三条机制性路径，按「对现金流的影响」排序：
+
+\begin{itemize}
+  \item \textbf{订阅制}（Subscription）：把不确定的复购变成确定的经常性收入。
+        它的最大价值是\kw{把 CAC 摊薄到多个周期}，从而允许更高的获客出价。
+        代价是：履约必须极其稳定（漏发一次就可能失去整个生命周期价值）、
+        退订率会随周期累积、且必须持续提供「继续订阅的理由」（新品、权益、灵活性）。
+        关键指标是月度留存曲线，而不是单月退订率。
+  \item \textbf{会员体系}（Membership）：用权益换忠诚，例如免运费、专属折扣、提前购。
+        它和订阅制的区别是：订阅是「为服务持续付费」，会员是「为身份与权益付费」。
+        会员体系最容易出现的设计错误是\emph{权益被折扣化}——
+        如果会员的全部价值就是「打折」，那么你实际上是在给老客降价，
+        对 LTV 的净贡献可能为负。
+  \item \textbf{交叉销售与捆绑}（Cross-sell / Bundle）：在不增加获客成本的前提下提高客单价与复购。
+        它的前提是\emph{品类关联的真实性}：好的捆绑基于使用场景（相机 + 存储卡 + 清洁套装），
+        差的捆绑是「把滞销品塞进去」。判断标准是捆绑后的退货率是否上升——
+        如果上升，说明你在强行卖用户不需要的东西。
+\end{itemize}
+
+\subsection{LTV/CAC 与回本周期}
+
+\term{客户生命周期价值}{Customer Lifetime Value} 与\term{客户获取成本}{Customer Acquisition Cost} 的比值，
+以及\term{回本周期}{Payback Period}，是衡量增长是否可持续的两个核心数字。工程上必须固定口径：
+
+\begin{equation}
+\LTV \;=\; \AOV \;\times\; n_{\text{订单}} \;\times\; M_{\text{毛利}} ,
+\qquad
+\frac{\LTV}{\CAC} \;=\; \frac{\AOV \times n_{\text{订单}} \times M_{\text{毛利}}}{\CAC} ,
+\label{eq:ltv-cac}
+\end{equation}
+
+\begin{equation}
+T_{\text{回本}} \;=\; \frac{\CAC}{\AOV \times M_{\text{毛利}} \times \nu} \quad \text{（单位：月）},
+\qquad
+\CAC^{\max} = \AOV \times M_{\text{毛利}} \times \nu \times T^{*} ,
+\label{eq:payback}
+\end{equation}
+
+其中 $n_{\text{订单}}$ 是统计期内的人均订单数，$\nu$ 是人均月订单频率，
+$T^{*}$ 是团队愿意接受的目标回本周期（月）。
+\cref{eq:ltv-cac} 与 \cref{eq:payback} 里有一个非常容易被忽略的口径问题：
+\kw{$\LTV$ 用毛利还是用收入}。用收入算出来的 $\LTV/\CAC$ 会显著高于实际值，
+因为毛利要扣掉商品成本、履约、支付手续费、退货与客服成本。
+行业里流传的「$\LTV/\CAC$ 要达到 3」这类经验法则，往往是基于\emph{毛利口径}的；
+如果团队一边用收入口径算 $\LTV$、一边把 3 当成目标，会做出严重超额的获客投入。
+口径不统一是增长团队最常见、也最昂贵的内部沟通事故之一（可对照 \cref{ch:growth} 的指标口径讨论）。
+
+\begin{example}[口径差异如何改变结论（示范计算）]
+某品牌客单价 $\AOV = 200$ 元，人均年订单数 $n_{\text{订单}} = 2.5$，
+毛利润率 $M_{\text{毛利}} = 50\%$，$\CAC = 120$ 元，人均月订单频率 $\nu = 0.2$。
+\begin{itemize}
+  \item 收入口径：$\LTV_{\text{收入}} = 200 \times 2.5 = 500$ 元，$\LTV/\CAC = 4.17$，看起来非常健康。
+  \item 毛利口径：$\LTV_{\text{毛利}} = 500 \times 0.5 = 250$ 元，$\LTV/\CAC = 2.08$，已经低于常见的 3 倍经验门槛。
+  \item 回本周期：$T_{\text{回本}} = 120 / (200 \times 0.5 \times 0.2) = 6$ 个月。
+  \item 若团队要求 3 个月回本，则 $\CAC^{\max} = 200 \times 0.5 \times 0.2 \times 3 = 60$ 元，
+        当前 120 元的获客成本是目标上限的两倍。
+\end{itemize}
+同一个业务，在同一组数字下，可以得出「可以加大投放」和「必须立刻降低出价」两个完全相反的结论——
+差别只在于口径。这也是为什么\kw{在开投之前先锁定口径}比任何投放技巧都重要。
+\end{example}
+
+\begin{insight}[LTV 不是财务指标，而是一套运营机制]
+把所有增长工作按「作用于哪一项」分类，可以得到一张非常清晰的地图：
+提高 $\AOV$ 靠捆绑与搭配、提高 $n_{\text{订单}}$ 靠复购流程与订阅、
+提高 $M_{\text{毛利}}$ 靠供应链与定价（见 \cref{ch:supply}）、
+降低 $\CAC$ 靠落地页与 CRO（本章前半部分）、
+缩短回本周期靠支付与履约的可靠性。
+把这张地图贴在墙上，团队就不会把「LTV 太低」当成一个无法行动的问题——
+它总能被拆成具体的、本周就能推进的改动。
+反过来，如果只把 $\LTV/\CAC$ 当成一个报表数字，它就只会变成一个争吵的借口。
+\end{insight}
+
+\section{本章小结与下一步}
+
+\begin{keypoint}[本章要点回顾]
+\begin{enumerate}
+  \item 增长的乘法链是「流量 $\times$ 各层转化率 $\times$ 客单价」（\cref{eq:growth-chain-cro}）。
+        流量成本由拍卖决定、只会趋同，\textbf{转化率是唯一完全自己控制的杠杆}。
+  \item 落地页的信息层级应当按\emph{访客的决策阶段}排，而不是按公司的主观重要性排。
+        首屏只放前三层（价值主张、视觉证据、社会证明）并保证 CTA 可见，
+        五层结构的完整取舍见 \cref{fig:lp-hierarchy}。
+  \item 5 秒法则可以被拆成三个可测对象（理解时间、相关性、CTA 可见性），
+        见 \cref{eq:five-second}。首屏优化的常见反模式是\emph{加法陷阱}：
+        元素越多，主信息越弱；正确的实验方向通常是减法。
+  \item 信息一致性（message match）是\kw{乘性因子}（\cref{eq:mm}），
+        人群、利益点、价格条件、创意风格四类断裂会让页面优化彻底失效
+        （\cref{tab:msgmatch}）。正确顺序是\emph{先对齐，再优化}。
+  \item 表单字段要按摩擦分级处理（\cref{tab:formfields}）：\textbf{先删字段，再测字段}。
+        移动端决定整体转化率的天花板，输入类型、自动填充、CTA 不被遮挡是三项最低成本高收益的工程动作。
+  \item 速度优化的收益直接落在获客成本上（\cref{tab:speed-demo}），
+        不需要通过排名来兑现；速度收益是非线性的，页面已经很快时应把预算转向信息一致性。
+  \item CRO 假设必须来自定量数据、定性研究、启发式三源（\cref{eq:hypothesis-sources}），
+        并写成「因为--所以--度量--护栏」四要素。
+        ICE/PXL（\cref{eq:ice-pxl}）的分数只有在\emph{锚点明确、口径统一}时才有意义。
+  \item 样本量与 MDE 的关系是 $n \propto 1/\Delta^2$（\cref{eq:samplesize}、\cref{eq:samplesize-rule}）：
+        想检测的效应减半，样本量翻四倍。
+        「赢家被推翻」来自偷看、功效不足、星期效应、多重比较、新奇效应与受众差异
+        （\cref{tab:replication}）；实验的产出必须同时包含\emph{决策}与\emph{知识}。
+  \item 漏斗是乘法结构（\cref{eq:funnel-mult}、\cref{eq:funnel-gmv}），
+        诊断顺序必须\emph{自下而上}：支付成功率与履约取消率、结账完成率、加购率、
+        有效会话率、点击率（\cref{fig:funnel-diag}、\cref{tab:funnel-baseline}）。
+        越靠下的层越可能是「本可避免的损失」。
+  \item 弃购挽回必须用\emph{增量}口径衡量（\cref{eq:abandon-incremental}）；
+        第一封的贡献通常占整条序列的一半以上，让利越晚出现单位收入越贵
+        （\cref{tab:abandon-sequence}）。运费与税费是\emph{定价结构}问题，
+        不是信息展示问题；免运费门槛可以同时提升转化率与客单价。
+  \item 邮件是唯一不付租金的渠道，但它受送达率约束。
+        送达率、进箱率、硬退信率、投诉率必须分开度量（\cref{eq:deliverability}），
+        SPF/DKIM/DMARC 三件套分工不同（\cref{tab:email-auth}），
+        域名预热与互动度管理是长期纪律；买名单是自毁型操作。
+  \item 生命周期 Flow 有五类核心触发（\cref{fig:email-flow}）；
+        邮件收入占比可以分解为触发量、送达率、点击率与点击后期望金额
+        （\cref{eq:email-revenue}）；每收件人收入 $f \times c \times v$
+        存在最优发送频率（\cref{eq:email-arpu}），只能靠频次实验找到。
+  \item 自有渠道按打扰度排序选择（\cref{tab:owned-channels}）：
+        短信用于强时效高价值场景、推送的瓶颈是权限、WhatsApp 在跨境场景更适合做服务、
+        社群的价值在于让用户互相说服；跨渠道必须有统一频次上限。
+  \item 联盟佣金率是毛利结构的函数（\cref{eq:cps-max}），
+        真实判据是期望贡献而非渠道后台 ROI（\cref{eq:affiliate-contribution}）。
+        追踪的核心是订单级去重、书面归属规则、增量实验与欺诈监控；
+        优惠券与品牌词截流是零增量佣金支出（见陷阱盒）。
+  \item 红人分层的关键是单位成本效率（\cref{tab:influencer-tier}）；
+        坑位费对齐曝光成本而非转化承诺；\textbf{素材授权要在谈坑位费时一起谈}，
+        UGC 白名单投放的价值是把「红人信任」与「投放定向」叠加。
+  \item RFM 打分必须按品类标定分位数（\cref{eq:rfm}、\cref{eq:rfm-score}），
+        八类分层的动作与禁止动作见 \cref{tab:rfm-segments}。
+        $\LTV/\CAC$ 与回本周期（\cref{eq:ltv-cac}、\cref{eq:payback}）必须先统一
+        \emph{毛利还是收入}的口径，否则同一组数字能推出完全相反的结论。
+\end{enumerate}
+\end{keypoint}
+
+\begin{interview}[本章对应的面试题]
+\begin{enumerate}
+  \item 一个落地页的转化率是 1.2\%，同品类基准约为 3\%。请给出你的诊断顺序：
+        你会先看哪三个数据、把它们拆到多细、以及你如何区分「流量质量问题」与「页面问题」？
+  \item 广告素材说「3 天送达」，落地页没有任何时效说明，首屏还在讲品牌历史。
+        请用信息一致性框架说明这个页面的问题，并给出修改优先级与验证方式。
+  \item 业务方要求「两周内把加购率提升 20\%」。请说明你如何把它转成一个可执行的实验计划：
+        假设怎么写、样本量怎么算、如果流量不够你会怎么调整方案？
+  \item 请推导两个比例对比的样本量公式（\cref{eq:samplesize}），
+        并解释为什么「偷看数据」会提高假阳性率。你会用哪些机制约束偷看？
+  \item 一个联盟客的 ROI 是 4.5，但关闭他的投放两周后总订单几乎没有变化。请解释这个现象，
+        并给出三条防止「零增量佣金支出」的制度设计。
+  \item 你的发件域投诉率从 0.05\% 上升到 0.4\%，同时订单通知邮件进入垃圾箱的比例上升。
+        请给出排查顺序与技术处置方案（含 SPF/DKIM/DMARC 的检查点）。
+  \item 请解释 LTV/CAC 中「毛利口径」与「收入口径」的差异如何改变投放决策，
+        并写出回本周期的计算公式（\cref{eq:payback}）。如果要求 3 个月回本，你如何反推最高可接受 CAC？
+  \item RFM 分层在快消品与耐用品上的标定有什么不同？
+        如果业务方要求「对所有沉睡客户发 30\% 折扣」，你会怎么回应，并提出什么替代方案？
+\end{enumerate}
+参考答案与答题框架见 \cref{app:interview}。
+\end{interview}
+
+本章讨论的三条路径——CRO、邮件、联盟——有一个共同的假设：
+\emph{你已经有了流量，也已经有了可以卖的商品}。
+但跨境电商的真实约束往往出现在更前面：目标市场的合规与税务、
+物流与关税带来的成本结构、支付方式的本地化、以及汇率与退货政策
+（见 \cref{ch:cbec}）。一个转化率优化得很好的落地页，如果结账时发现目标市场不支持本地支付方式，
+或者关税条款没有在页面上讲清，前面所有的优化都只是在给用户制造挫败感。
+所以下一章 \cref{ch:cbec} 我们进入第 6 部分，讨论跨境电商的全景与合规：
+主要市场的规模与消费习惯、平台与独立站的路线选择、物流与关税的成本结构、
+税务与数据合规的基本要求，以及支付与汇率的工程处理。
+如果你还想复习本章反复使用的两个基础工具，可以回到 \cref{ch:growth} 看增长模型与实验设计，
+回到 \cref{ch:ad} 与 \cref{ch:google} 看付费流量侧的出价与素材机制；
+落地页的技术性能优化与 \cref{ch:seo} 的性能度量口径是同一套语言。

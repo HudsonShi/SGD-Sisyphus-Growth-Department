@@ -7,12 +7,14 @@ MAIN      := main
 LATEXMK   := latexmk
 LATEXMKFLAGS := -xelatex -interaction=nonstopmode -file-line-error -halt-on-error
 OUTDIR    := build
+FONTSET   ?= macnew
+PRETEX    := -usepretex='\def\NotesFontSet{$(FONTSET)}'
 
 .PHONY: all quick watch clean cleanall bib wordcount check
 
-## 完整编译（含参考文献）
+## 完整编译（含参考文献）；其他平台用 make FONTSET=fandol
 all:
-	$(LATEXMK) $(LATEXMKFLAGS) -outdir=$(OUTDIR) $(MAIN).tex
+	$(LATEXMK) $(LATEXMKFLAGS) $(PRETEX) -outdir=$(OUTDIR) $(MAIN).tex
 	@echo "==> 输出：$(OUTDIR)/$(MAIN).pdf"
 
 ## 仓库自检：禁忌字符 / 引用 key / 环境配对 / 字数统计
@@ -21,11 +23,11 @@ check:
 
 ## 快速编译：只跑一遍 xelatex，用于看排版
 quick:
-	xelatex -interaction=nonstopmode -file-line-error -outdir=$(OUTDIR) $(MAIN).tex
+	xelatex -interaction=nonstopmode -file-line-error $(PRETEX) -outdir=$(OUTDIR) $(MAIN).tex
 
 ## 监听改动自动重编译
 watch:
-	$(LATEXMK) $(LATEXMKFLAGS) -pvc -outdir=$(OUTDIR) $(MAIN).tex
+	$(LATEXMK) $(LATEXMKFLAGS) $(PRETEX) -pvc -outdir=$(OUTDIR) $(MAIN).tex
 
 ## 只更新参考文献
 bib:

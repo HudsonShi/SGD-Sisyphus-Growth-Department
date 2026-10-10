@@ -506,53 +506,73 @@ pacing 系数应按计划维护，但很多系统为了省事做成账户级统�
 \end{pitfall}
 
 \begin{lstlisting}[style=growth, language=Python, caption={日预算 PID pacing 模拟：对比不同增益参数的交付稳定性（示范量级）}]
-import math
+import math, random
 
-# A synthetic intraday traffic curve: low at night, peak in the evening.
+# Intraday shape: supply is low at night and peaks in the evening.
 def traffic_weight(h):
     return 0.35 + 0.65 * math.exp(-((h - 20.0) ** 2) / 18.0)
 
-def simulate(budget=50000.0, kp=0.8, ki=0.35, kd=0.0,
-             steps=96, max_widen=1.60, min_widen=0.40):
-    dt = 24.0 / steps                      # each step is 15 minutes
-    cum_goal, cum_spend = 0.0, 0.0
-    widen, integral, prev_err = 1.0, 0.0, 0.0
-    spent_curve, widen_curve = [], []
-    # Precompute the traffic mass so the goal curve follows supply.
-    total = sum(traffic_weight(i * dt) for i in range(steps))
+# Competitors are more expensive around noon and cheapest late at night.
+def price_index(h):
+    return 1.0 + 0.15 * math.sin(h / 24.0 * 2.0 * math.pi) \
+               + 0.10 * math.exp(-((h - 12.0) ** 2) / 8.0)
+
+def simulate(budget=50000.0, steps=96, kp=0.8, ki=0.35, kd=0.0,
+             kmin=0.20, kmax=3.0, seed=11, noise=0.02):
+    dt = 24.0 / steps                      # 96 slots of 15 minutes
+    rng = random.Random(seed)
+    demand, price = [], []
     for i in range(steps):
         h = i * dt
-        cum_goal += budget * traffic_weight(h) / total
-        # Spend of this slot: proportional to supply and to the bid widening.
-        potential = budget * traffic_weight(h) / total
-        spend = min(potential * widen, budget - cum_spend)
-        spend = max(spend, 0.0)
+        demand.append(traffic_weight(h))
+        price.append(price_index(h))
+    dtot, ptot = sum(demand), sum(price)
+    goal = [budget * x / dtot for x in demand]   # value-weighted delivery plan
+    ref = [budget * x / ptot for x in price]     # spend at widen = 1.0
+    cum_goal = cum_spend = 0.0
+    integral = prev_err = 0.0
+    widen = 1.0
+    spent, widens = [], []
+    for i in range(steps):
+        cum_goal += goal[i]
+        shock = rng.uniform(1.0 - noise, 1.0 + noise)
+        spend = max(0.0, min(ref[i] * widen * shock, budget - cum_spend))
         cum_spend += spend
+        spent.append(spend)
         err = (cum_goal - cum_spend) / budget
         integral += err * dt
         deriv = (err - prev_err) / dt
         prev_err = err
         widen = 1.0 + kp * err + ki * integral + kd * deriv
-        widen = max(min_widen, min(max_widen, widen))
-        spent_curve.append(cum_spend)
-        widen_curve.append(widen)
-    return cum_spend, spent_curve, widen_curve
+        widen = max(kmin, min(kmax, widen))
+        widens.append(widen)
+    underspend = max(0.0, budget - cum_spend) / budget
+    early = sum(spent[:steps // 2]) / budget
+    return cum_spend, underspend, early, min(widens), max(widens)
 
-for kp, ki, kd in [(0.8, 0.35, 0.0), (1.6, 0.60, 0.0), (0.8, 0.35, 0.25)]:
-    final, curve, widen = simulate(kp=kp, ki=ki, kd=kd)
-    under = max(0.0, 50000.0 - final) / 50000.0
-    # Overshoot is read as the share of budget delivered before hour 12.
-    early = curve[48] / 50000.0
-    print("kp=%.2f ki=%.2f kd=%.2f | final=%.0f | underspend=%.1f%% | "
-          "first-half share=%.1f%% | widen range=[%.2f, %.2f]"
-          % (kp, ki, kd, final, under * 100, early * 100, min(widen), max(widen)))
+for kp, ki, kd in [(0.3, 0.10, 0.0), (0.8, 0.35, 0.0),
+                   (1.6, 0.60, 0.0), (0.8, 0.35, 0.25)]:
+    final, under, early, lo, hi = simulate(kp=kp, ki=ki, kd=kd)
+    print("kp=%.1f ki=%.2f kd=%.2f | final=%6.0f | underspend=%4.1f%% | "
+          "first-half share=%4.1f%% | widen=[%.2f, %.2f]"
+          % (kp, ki, kd, final, under * 100, early * 100, lo, hi))
 \end{lstlisting}
 
-这段脚本的价值不在于它能预测真实系统，而在于它把三个调参直觉变成可观察的量：
+这段脚本的价值不在于它能预测真实系统，而在于它把三个调参直觉变成了可观察、可比较的量：
 \textbf{欠量率}（末尾花不出去多少）、\textbf{前半程占比}（是否抢跑）、
-\textbf{系数波动区间}（是否振荡）。判断一组增益是否可用，看的是这三个量的组合，
-而不是单看「最终花完了没有」——很多振荡的控制器最终也能花完预算，
-但过程中会在某些时段把价格推高 50\% 以上，代价体现在 \metric{CPA} 上而不是消耗率上。
+\textbf{系数波动区间}（是否振荡）。它同时暴露了一个反直觉的结论：
+在这组设定下\textbf{增益调大并没有改善交付，反而让系数波动扩大了数倍}——
+最温和的一组（$K_p = 0.3$、$K_i = 0.10$）欠量率最低、前半程占比最接近 50\%、
+系数几乎不越界；而最激进的一组（$K_p = 1.6$、$K_i = 0.60$）欠量率没有下降，
+系数区间却从 $[0.75, 1.00]$ 扩大到 $[0.42, 1.62]$。
+
+原因在于本模型里系统性的欠量来自\kw{目标曲线与市场参考曲线的形状差异}
+（一条按转化价值分配、一条按竞争价格指数），这是\kw{模型误差}而不是\kw{控制误差}。
+对模型误差，控制器再用力也修不回来；加大增益只会把误差信号放大成出价振荡，
+而振荡的代价体现在 \metric{CPA} 上而不是消耗率上——
+很多振荡的控制器最终也能把预算花完，账面消耗率很漂亮，
+但过程中某些时段把价格推高 50\% 以上，这部分损失只能从成本指标里看出来。
+\textbf{所以 pacing 调参的正确顺序是：先修目标曲线与流量预测，再调增益。}
 
 \subsection{线性出价与最优出价}
 

@@ -1,0 +1,86 @@
+name: Build PDF
+
+# 每次 push 到 main 时：先跑仓库 lint，再用 XeLaTeX 编译整本书，产出 PDF 构件。
+# 也可以在 Actions 页面手动触发（workflow_dispatch）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 仓库自检：禁忌字符、引用 key、环境配对、残留 TODO、字数统计
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run tools/check.py
+        run: python3 tools/check.py --strict
+
+      - name: Fail if any chapter is still a placeholder
+        run: |
+          if grep -rn '\\todo{' chapters/ appendix/ 2>/dev/null; then
+            echo "::error::Found leftover \\todo placeholders"
+            exit 1
+          fi
+          echo "no placeholders left"
+
+  # ---------------------------------------------------------------------------
+  # 2) 编译 PDF（使用 fandol 字体集，跨平台可用；本地 macOS 用 macnew）
+  # ---------------------------------------------------------------------------
+  build:
+    name: Compile with XeLaTeX
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile main.tex (fandol fontset)
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: main.tex
+          latexmk_use_xelatex: true
+          # ctex 的跨平台字体集；本仓库 Makefile 默认 macnew（macOS 本地）
+          args: -usepretex=\\def\\NotesFontSet{fandol}
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: growth-tech-notes-pdf
+          path: main.pdf
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 3) 运行 code/ 下的示例脚本，确保它们始终可执行（纯标准库，无外部依赖）
+  # ---------------------------------------------------------------------------
+  examples:
+    name: Run example scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Execute code/*.py
+        run: |
+          set -e
+          for f in code/*.py; do
+            echo "=== $f ==="
+            python3 "$f" > /dev/null
+          done
+          echo "all example scripts ran successfully"

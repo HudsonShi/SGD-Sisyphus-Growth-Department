@@ -40,9 +40,18 @@
 make            # 完整编译 -> build/main.pdf
 make quick      # 只跑一遍 xelatex，快速看排版
 make watch      # 监听文件变化自动重编译
+make check      # 仓库自检（禁忌字符 / 引用 / 配对 / 字数统计）
 make wordcount  # 统计各章汉字数
 make clean      # 清理中间文件
 make cleanall   # 清理全部（含 PDF）
+```
+
+**字体集**：默认 `macnew`（macOS 系统字体）。在 Linux / CI / Overleaf 上用 Fandol：
+
+```bash
+make FONTSET=fandol
+# 或手动
+latexmk -xelatex -usepretex='\def\NotesFontSet{fandol}' main.tex
 ```
 
 等价的手动命令：
@@ -54,7 +63,16 @@ latexmk -xelatex -interaction=nonstopmode -file-line-error -outdir=build main.te
 ### Overleaf
 
 上传整个目录，编译器选 **XeLaTeX**，主文档设为 `main.tex`。
-若报中文字体缺失，把 `main.tex` 第 12 行的 `fontset=macnew` 改成 `fontset=fandol`。
+若报中文字体缺失，把 `main.tex` 里的 `\providecommand{\NotesFontSet}{macnew}`
+改成 `\providecommand{\NotesFontSet}{fandol}`（Overleaf 自带 Fandol 字体）。
+
+### 持续集成
+
+`.github/workflows/build.yml` 在每次 push 时执行三件事：
+
+1. 跑 `tools/check.py --strict`（lint，有 ERROR 即失败）；
+2. 用 XeLaTeX + fandol 编译全书，并把 `main.pdf` 作为 artifact 上传；
+3. 执行 `code/` 下全部示例脚本，确保它们不会腐坏。
 
 ---
 
@@ -69,6 +87,7 @@ SGD/
  |-- OUTLINE.md                # 全书详细大纲
  |-- Makefile                  # 构建脚本
  |-- tools/check.py            # 仓库自检脚本（禁忌字符、引用、配对、统计）
+ |-- .github/workflows/        # CI：lint + 编译 PDF + 跑示例脚本
  |-- frontmatter/              # 前言、使用说明
  |-- chapters/                 # 正文 21 章
  |-- appendix/                 # 附录 A-E

@@ -948,22 +948,21 @@ Modular RAG & 可插拔检索模块、路由、记忆、
 \centering
 \begin{tikzpicture}[
   every node/.style={font=\sffamily\scriptsize, align=center},
-  band/.style={draw=#1, fill=BoxBG, rounded corners=3pt, minimum width=15.0cm,
-               minimum height=9mm, inner sep=5pt, text width=14.6cm},
+  band/.style={draw=#1, fill=BoxBG, rounded corners=3pt, minimum width=13.6cm,
+               minimum height=9mm, inner sep=5pt, text width=13.2cm},
   bit/.style={draw=#1, fill=BoxBGAlt, rounded corners=2pt, minimum height=7mm,
-              inner sep=3pt, text width=4.2cm},
+              inner sep=3pt, text width=4.0cm},
   arr/.style={-{Stealth[length=4pt]}, thick, SlateGray}
 ]
 \node[band=NavyMid] (off) at (0,0) {\textbf{离线索引}：文档采集 $\to$ 解析与清洗 $\to$ 分块与元数据抽取 $\to$ 双塔编码 $\to$ 建向量索引与倒排索引};
 \node[band=TealDeep] (pre) at (0,-1.2) {\textbf{检索前}：query 改写与 HyDE $\to$ 多查询扩展 $\to$ 意图路由 $\to$ 过滤条件构造};
 \node[band=AmberDeep] (ret) at (0,-2.4) {\textbf{检索中}：稀疏与稠密双路召回 $\to$ RRF 融合 $\to$ 交叉编码器重排 $\to$ 上下文压缩};
 \node[band=VioletDeep] (gen) at (0,-3.6) {\textbf{生成}：上下文组装与排序 $\to$ 引用标记 $\to$ LLM 生成 $\to$ 忠实性校验与降级回退};
-\node[bit=CrimsonDeep, anchor=west] (fb) at (-9.9,-5.2) {反馈闭环：点击、采纳率、人工标注 $\to$ 回归测试集与调参};
+\node[bit=CrimsonDeep, anchor=north west] (fb) at (-6.8,-4.9) {反馈闭环：点击、采纳率、人工标注 $\to$ 回归测试集与调参};
 \draw[arr] (off) -- (pre);
 \draw[arr] (pre) -- (ret);
 \draw[arr] (ret) -- (gen);
-\draw[arr] (gen.south) -- (fb.north);
-\draw[arr, dashed] (fb.west) to[out=180, in=180, looseness=0.7] (off.west);
+\draw[arr, dashed] (fb.west) -- (-6.8,-6.2) -- (-6.6,-6.2) -- (-6.6,0) -- (off.west);
 \end{tikzpicture}
 \caption{RAG 系统数据流：离线索引链路与在线检索生成链路，以及反馈闭环}
 \label{fig:rag-dataflow}

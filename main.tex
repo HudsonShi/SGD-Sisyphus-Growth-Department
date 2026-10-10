@@ -3,9 +3,18 @@
 %%  推荐算法 · 搜索引擎 · 计算广告 · NLP · SEO · GEO · 广告投流买量 · 跨境电商供应链
 %%
 %%  编译： make        （等价于 latexmk -xelatex main.tex）
-%%  依赖： TeX Live 2023+ / xelatex + biber + ctexbook
+%%  依赖： TeX Live 2023+ / xelatex + bibtex + ctexbook
+%%
+%%  字体集（fontset）：
+%%    macnew —— macOS 本地默认（宋体/黑体系统字体）
+%%    fandol —— 跨平台/CI/Overleaf 默认，命令： make FONTSET=fandol
+%%    windows / ubuntu —— 对应平台
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\documentclass[UTF8, fontset=macnew, 11pt, oneside, openany]{ctexbook}
+
+% 允许通过 `latexmk -usepretex='\def\NotesFontSet{fandol}'` 覆盖字体集
+\providecommand{\NotesFontSet}{macnew}
+
+\documentclass[UTF8, fontset=\NotesFontSet, 11pt, oneside, openany]{ctexbook}
 
 \usepackage{notesstyle}
 
